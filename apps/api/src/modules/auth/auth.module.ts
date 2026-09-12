@@ -1,13 +1,15 @@
-import { Module } from "@nestjs/common";
+import { Module, Global } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import {
   DevMockAuthProvider,
   ProductionFailClosedAuthProvider,
 } from "@nexus/auth";
+import { AUTH_SERVICE } from "./auth.constants";
 import { AuthGuard } from "./auth.guard";
 
-export const AUTH_SERVICE = "AUTH_SERVICE";
+export * from "./auth.constants";
 
+@Global()
 @Module({
   imports: [ConfigModule],
   providers: [

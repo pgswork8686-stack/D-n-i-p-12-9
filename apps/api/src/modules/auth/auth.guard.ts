@@ -8,7 +8,7 @@ import {
 import { Request } from "express";
 import { IAuthService } from "@nexus/auth";
 import { AuthUser } from "@nexus/contracts";
-import { AUTH_SERVICE } from "./auth.module";
+import { AUTH_SERVICE } from "./auth.constants";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
