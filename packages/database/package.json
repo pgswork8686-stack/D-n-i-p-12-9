@@ -11,6 +11,7 @@
     "prisma:generate": "node scripts/prisma-cli.js generate",
     "prisma:migrate": "node scripts/prisma-cli.js migrate deploy",
     "prisma:push": "node scripts/prisma-cli.js db push",
+    "seed": "ts-node src/seed.ts",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "@typescript-eslint/eslint-plugin": "^8.26.0",
     "@typescript-eslint/parser": "^8.26.0",
     "prisma": "^6.4.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5.8.2"
   }
 }

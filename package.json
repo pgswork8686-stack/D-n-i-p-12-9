@@ -12,6 +12,7 @@
     "db:generate": "pnpm --filter @nexus/database prisma:generate",
     "db:migrate": "pnpm --filter @nexus/database prisma:migrate",
     "db:push": "pnpm --filter @nexus/database prisma:push",
+    "db:seed": "pnpm --filter @nexus/database seed",
     "worker:smoke": "pnpm --filter @nexus/worker test:smoke",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo clean && rm -rf node_modules"

@@ -11,7 +11,8 @@
     "test": "jest"
   },
   "dependencies": {
-    "@nexus/contracts": "workspace:*"
+    "@nexus/contracts": "workspace:*",
+    "@supabase/supabase-js": "^2.49.1"
   },
   "devDependencies": {
     "@nexus/config": "workspace:*",

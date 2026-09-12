@@ -1,46 +1,75 @@
-import { AuthUser } from "@nexus/contracts";
+import { AuthIdentity } from "@nexus/contracts";
 import { IAuthService } from "./interface";
 
 /**
  * Development & Test Mock Auth Provider.
- * strictly for local development and testing before Supabase keys are configured.
+ * Strictly for local development and testing before Supabase keys are configured.
+ * FAILS CLOSED in production.
  */
 export class DevMockAuthProvider implements IAuthService {
-  private users: Map<string, AuthUser> = new Map();
+  private identities: Map<string, AuthIdentity> = new Map();
 
   constructor() {
-    // Default seeded local dev users
-    this.users.set("dev-admin-id", {
-      id: "dev-admin-id",
+    this.identities.set("dev-admin-token", {
+      subject: "sub_dev_admin_001",
       email: "admin@nexustheme.dev",
-      role: "ADMIN",
-      name: "Admin Developer",
+      metadata: { name: "Admin Developer" },
     });
 
-    this.users.set("dev-user-id", {
-      id: "dev-user-id",
-      email: "user@nexustheme.dev",
-      role: "USER",
-      name: "Test Customer",
+    this.identities.set("dev-customer-token", {
+      subject: "sub_dev_customer_001",
+      email: "customer@nexustheme.dev",
+      metadata: { name: "Test Customer" },
+    });
+
+    // Alias for backwards compatibility with phase 1
+    this.identities.set("dev-user-token", {
+      subject: "sub_dev_customer_001",
+      email: "customer@nexustheme.dev",
+      metadata: { name: "Test Customer" },
+    });
+
+    this.identities.set("dev-superadmin-token", {
+      subject: "sub_dev_superadmin_001",
+      email: "superadmin@nexustheme.dev",
+      metadata: { name: "Super Administrator" },
     });
   }
 
-  async verifyToken(token: string): Promise<AuthUser | null> {
+  async verifyToken(token: string): Promise<AuthIdentity | null> {
     if (!token) return null;
+
     // Fail-closed in production
     if (process.env.NODE_ENV === "production") {
       return null;
     }
-    if (token === "dev-admin-token") {
-      return this.users.get("dev-admin-id") || null;
+
+    if (this.identities.has(token)) {
+      return this.identities.get(token) || null;
     }
-    if (token === "dev-user-token") {
-      return this.users.get("dev-user-id") || null;
+
+    // Dynamic mock token support for tests: dev-custom:<subject>:<email>
+    if (token.startsWith("dev-custom:")) {
+      const parts = token.split(":");
+      const subject = parts[1] || "sub_custom";
+      const email = parts[2] || `${subject}@test.dev`;
+      return {
+        subject,
+        email,
+        metadata: { name: `Custom ${subject}` },
+      };
     }
+
     return null;
   }
 
-  async getUserById(userId: string): Promise<AuthUser | null> {
-    return this.users.get(userId) || null;
+  async getUserById(subject: string): Promise<AuthIdentity | null> {
+    for (const identity of this.identities.values()) {
+      if (identity.subject === subject) {
+        return identity;
+      }
+    }
+    return null;
   }
 }
+
