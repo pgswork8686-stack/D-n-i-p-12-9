@@ -10,7 +10,7 @@ export interface UserProfile {
 
 export interface AuthUser {
   id: string;
-  email: string;
+  email?: string | null;
   supabaseId?: string | null;
   roles: string[];
   permissions: string[];
@@ -19,7 +19,8 @@ export interface AuthUser {
 
 export interface AuthIdentity {
   subject: string;
-  email: string;
+  email?: string | null;
+  emailVerified?: boolean;
   phone?: string | null;
   metadata?: Record<string, any>;
 }
@@ -32,7 +33,7 @@ export interface AuthSession {
 
 export interface AuthMeResponse {
   id: string;
-  email: string;
+  email?: string | null;
   profile: {
     displayName?: string | null;
     firstName?: string | null;
@@ -63,7 +64,7 @@ export interface PermissionDetail {
 
 export interface AdminUserListItem {
   id: string;
-  email: string;
+  email: string | null;
   supabaseId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -78,4 +79,3 @@ export interface AdminUserListItem {
 export interface AssignRoleDto {
   role: string;
 }
-

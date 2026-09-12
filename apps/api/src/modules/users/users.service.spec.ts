@@ -2,6 +2,7 @@ import {
   ForbiddenException,
   BadRequestException,
   ConflictException,
+  InternalServerErrorException,
 } from "@nestjs/common";
 import { UsersService } from "./users.service";
 import { AuditService } from "../audit/audit.service";
@@ -38,9 +39,7 @@ describe("UsersService", () => {
           {
             role: {
               name: "customer",
-              rolePermissions: [
-                { permission: { name: "profile.read" } },
-              ],
+              rolePermissions: [{ permission: { name: "profile.read" } }],
             },
           },
         ],
@@ -61,7 +60,6 @@ describe("UsersService", () => {
 
     it("provisions a new user with profile, customer role, and transactional audit log (H02)", async () => {
       jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
-      jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_cust_id", name: "customer" } as any);
 
       const createdUser = {
         id: "usr_new_999",
@@ -83,6 +81,9 @@ describe("UsersService", () => {
 
       jest.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => {
         const tx = {
+          role: {
+            findUnique: jest.fn().mockResolvedValue({ id: "role_cust_id", name: "customer" }),
+          },
           user: {
             create: jest.fn().mockResolvedValue({ id: "usr_new_999", email: "newuser@nexustheme.dev", supabaseId: "sub_new_999" }),
             findUniqueOrThrow: jest.fn().mockResolvedValue(createdUser),
@@ -100,6 +101,7 @@ describe("UsersService", () => {
       const result = await service.getOrProvisionUser({
         subject: "sub_new_999",
         email: "newuser@nexustheme.dev",
+        emailVerified: true,
         metadata: { name: "New User" },
       });
 
@@ -116,122 +118,247 @@ describe("UsersService", () => {
       );
     });
 
-    // REGRESSION TEST: B02 Account Takeover Prevention via email overwrite
-    describe("Account Takeover Prevention (B02)", () => {
-      it("blocks account takeover when incoming subject tries to claim an email already bound to another subject", async () => {
-        // Step 1: not found by subject "sub_attacker_999"
-        jest.spyOn(prisma.user, "findUnique")
-          .mockImplementation(((async (args: any) => {
-            if (args.where?.supabaseId === "sub_attacker_999") {
-              return null;
-            }
-            if (args.where?.email === "admin@nexustheme.dev") {
-              // Target victim has an existing account already bound to a legitimate external subject
-              return {
-                id: "usr_victim_admin",
-                email: "admin@nexustheme.dev",
-                supabaseId: "sub_legit_admin_001", // ALREADY BOUND!
-                profile: { displayName: "Admin" },
-                userRoles: [{ role: { name: "admin", rolePermissions: [] } }],
-              } as any;
-            }
-            return null;
-          }) as any));
+    // 1. Same subject + concurrent requests -> 1 user, all requests resolve to same user
+    it("handles concurrent requests for the same subject via P2002 catch and returns existing user (Regression 1)", async () => {
+      let firstCheck = true;
+      jest.spyOn(prisma.user, "findUnique").mockImplementation(((args: any) => {
+        if (args?.where?.supabaseId === "sub_concurrent_123") {
+          if (firstCheck) {
+            firstCheck = false;
+            return Promise.resolve(null); // Before race
+          }
+          // After race won by competing request
+          return Promise.resolve({
+            id: "usr_first_won",
+            email: "concurrent@nexustheme.dev",
+            supabaseId: "sub_concurrent_123",
+            profile: { displayName: "Concurrent User" },
+            userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
+          });
+        }
+        return Promise.resolve(null);
+      }) as any);
 
-        await expect(
-          service.getOrProvisionUser({
-            subject: "sub_attacker_999",
-            email: "admin@nexustheme.dev", // Attacker supplies admin email with arbitrary subject
-          }),
-        ).rejects.toThrow(ConflictException);
+      const p2002Error: any = new Error("Unique constraint failed");
+      p2002Error.code = "P2002";
+      jest.spyOn(prisma, "$transaction").mockRejectedValue(p2002Error);
 
-        // Verify prisma.user.update was NEVER called to overwrite supabaseId
-        const updateSpy = jest.spyOn(prisma.user, "update");
-        expect(updateSpy).not.toHaveBeenCalled();
+      const result = await service.getOrProvisionUser({
+        subject: "sub_concurrent_123",
+        email: "concurrent@nexustheme.dev",
       });
 
-      it("allows linking legacy account when existing user has supabaseId == null", async () => {
-        const legacyUser = {
-          id: "usr_legacy_1",
-          email: "legacy@nexustheme.dev",
-          supabaseId: null, // Legacy unlinked
-          profile: { displayName: "Legacy" },
-          userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
-        };
-
-        jest.spyOn(prisma.user, "findUnique")
-          .mockImplementation(((async (args: any) => {
-            if (args.where?.supabaseId === "sub_legacy_bind") return null;
-            if (args.where?.email === "legacy@nexustheme.dev") return legacyUser as any;
-            return null;
-          }) as any));
-
-        jest.spyOn(prisma.user, "update").mockResolvedValue({
-          ...legacyUser,
-          supabaseId: "sub_legacy_bind",
-        } as any);
-
-        const result = await service.getOrProvisionUser({
-          subject: "sub_legacy_bind",
-          email: "legacy@nexustheme.dev",
-        });
-
-        expect(result.id).toBe("usr_legacy_1");
-        expect(prisma.user.update).toHaveBeenCalledWith({
-          where: { id: "usr_legacy_1" },
-          data: { supabaseId: "sub_legacy_bind" },
-          include: expect.anything(),
-        });
-        expect(mockAuditService.logAction).toHaveBeenCalledWith(
-          expect.objectContaining({
-            action: "ACCOUNT_LINKED",
-            entityId: "usr_legacy_1",
-          }),
-        );
+      expect(result.id).toBe("usr_first_won");
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { supabaseId: "sub_concurrent_123" },
+        include: expect.anything(),
       });
     });
 
-    // REGRESSION TEST: H01 Concurrency-safe Provisioning
-    describe("Concurrency-safe Provisioning (H01)", () => {
-      it("gracefully catches P2002 duplicate key race condition and returns existing provisioned user", async () => {
-        jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
-        jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_cust", name: "customer" } as any);
+    // 2. Different subject + same verified email concurrent -> no account crossover, one side conflicts (BLOCKER 1 & Regression 2)
+    it("prevents account crossover on P2002 when different subject attempts to use same email (Regression 2)", async () => {
+      // Incoming is Subject B
+      jest.spyOn(prisma.user, "findUnique")
+        .mockResolvedValueOnce(null) // Step 1: not found by subject B
+        .mockResolvedValueOnce(null) // Step 2: not found by email initially in race
+        .mockResolvedValueOnce(null) // Step 3 P2002 fallback 1: not found by subject B
+        .mockResolvedValueOnce({
+          id: "usr_subject_A",
+          email: "shared@nexustheme.dev",
+          supabaseId: "sub_subject_A", // Belongs to Subject A!
+        } as any); // Step 3 P2002 fallback 2: email belongs to subject A
 
-        // Simulate competing transaction winning the race, causing Prisma P2002 error
-        const p2002Error: any = new Error("Unique constraint failed");
-        p2002Error.code = "P2002";
-        jest.spyOn(prisma, "$transaction").mockRejectedValue(p2002Error);
+      const p2002Error: any = new Error("Unique constraint failed on email");
+      p2002Error.code = "P2002";
+      jest.spyOn(prisma, "$transaction").mockRejectedValue(p2002Error);
 
-        const existingWinningUser = {
-          id: "usr_winner",
-          email: "concurrent@nexustheme.dev",
-          supabaseId: "sub_concurrent_123",
-          profile: { displayName: "Concurrent User" },
-          userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
-        };
+      // Subject B calls getOrProvisionUser with the same email
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_subject_B",
+          email: "shared@nexustheme.dev",
+          emailVerified: true,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
 
-        jest.spyOn(prisma.user, "findFirst").mockResolvedValue(existingWinningUser as any);
+    // 3. Legacy account + two subjects concurrent -> atomic conditional update ensures only one binds, other conflicts (BLOCKER 2 & Regression 3)
+    it("handles legacy account concurrent linking atomically with conditional update (Regression 3)", async () => {
+      const legacyUser = {
+        id: "usr_legacy_target",
+        email: "legacy@nexustheme.dev",
+        supabaseId: null,
+      };
 
-        const result = await service.getOrProvisionUser({
-          subject: "sub_concurrent_123",
-          email: "concurrent@nexustheme.dev",
-        });
+      jest.spyOn(prisma.user, "findUnique")
+        .mockResolvedValueOnce(null) // not found by subject B
+        .mockResolvedValueOnce(legacyUser as any); // found by email (legacy)
 
-        expect(result.id).toBe("usr_winner");
-        expect(prisma.user.findFirst).toHaveBeenCalledWith({
-          where: {
-            OR: [
-              { supabaseId: "sub_concurrent_123" },
-              { email: "concurrent@nexustheme.dev" },
-            ],
+      // Subject B's updateMany returns count: 0 because Subject A bound it right before
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          user: {
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            findUniqueOrThrow: jest.fn().mockResolvedValue({
+              id: "usr_legacy_target",
+              supabaseId: "sub_subject_A", // Already claimed by A
+              profile: { displayName: "Legacy" },
+              userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
+            }),
           },
-          include: expect.anything(),
-        });
+        };
+        return cb(tx);
       });
+
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_subject_B",
+          email: "legacy@nexustheme.dev",
+          emailVerified: true,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    // 4. Legacy account + unverified email -> does not auto-link, fails closed (BLOCKER 3 & Regression 4)
+    it("rejects auto-linking legacy account if email is unverified (Regression 4)", async () => {
+      jest.spyOn(prisma.user, "findUnique")
+        .mockResolvedValueOnce(null) // not found by subject
+        .mockResolvedValueOnce({
+          id: "usr_legacy_1",
+          email: "unverified@nexustheme.dev",
+          supabaseId: null,
+        } as any);
+
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_unverified_claimant",
+          email: "unverified@nexustheme.dev",
+          emailVerified: false, // NOT VERIFIED!
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockAuditService.logActionWithClient).not.toHaveBeenCalled();
+    });
+
+    // 5. Existing bound email + different subject -> 409 Conflict (Regression 5)
+    it("blocks request when email is already bound to a different subject (Regression 5)", async () => {
+      jest.spyOn(prisma.user, "findUnique")
+        .mockResolvedValueOnce(null) // not found by attacker subject
+        .mockResolvedValueOnce({
+          id: "usr_victim_admin",
+          email: "admin@nexustheme.dev",
+          supabaseId: "sub_legit_admin_001", // Already bound!
+          profile: { displayName: "Admin" },
+          userRoles: [{ role: { name: "admin", rolePermissions: [] } }],
+        } as any);
+
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_attacker_evil",
+          email: "admin@nexustheme.dev",
+          emailVerified: true,
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    // 6. Identity without email -> provisioning succeeds without fake email (HIGH & Regression 6)
+    it("provisions user without email cleanly when identity has no email (Regression 6)", async () => {
+      jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
+
+      const createdUserWithoutEmail = {
+        id: "usr_no_email_1",
+        email: null, // Nullable email
+        supabaseId: "sub_no_email_1",
+        profile: { id: "p1", userId: "usr_no_email_1", displayName: "User sub_no_e" },
+        userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
+      };
+
+      let capturedUserData: any = null;
+
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          role: { findUnique: jest.fn().mockResolvedValue({ id: "r_cust", name: "customer" }) },
+          user: {
+            create: jest.fn().mockImplementation((args: any) => {
+              capturedUserData = args.data;
+              return Promise.resolve({ id: "usr_no_email_1", ...args.data });
+            }),
+            findUniqueOrThrow: jest.fn().mockResolvedValue(createdUserWithoutEmail),
+          },
+          profile: { create: jest.fn().mockResolvedValue({}) },
+          userRole: { create: jest.fn().mockResolvedValue({}) },
+        };
+        return cb(tx);
+      });
+
+      const result = await service.getOrProvisionUser({
+        subject: "sub_no_email_1",
+        email: null, // No email provided
+        emailVerified: false,
+      });
+
+      expect(result.id).toBe("usr_no_email_1");
+      expect(result.email).toBeNull();
+      expect(capturedUserData.email).toBeNull();
+    });
+
+    // 7. Customer role missing -> transaction rollback (HIGH & Regression 7)
+    it("fails closed and rolls back transaction if customer role is missing from DB (Regression 7)", async () => {
+      jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
+
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          role: { findUnique: jest.fn().mockResolvedValue(null) }, // Customer role NOT found!
+          user: { create: jest.fn() },
+          profile: { create: jest.fn() },
+          userRole: { create: jest.fn() },
+        };
+        return cb(tx);
+      });
+
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_new_orphan",
+          email: "orphan@nexus.dev",
+          emailVerified: true,
+        }),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+
+    // 8. Audit failure during ACCOUNT_LINKED -> identity binding rollback (Regression 8)
+    it("rolls back account linking transaction if audit logging fails (Regression 8)", async () => {
+      jest.spyOn(prisma.user, "findUnique")
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: "usr_legacy_target",
+          email: "legacy@nexustheme.dev",
+          supabaseId: null,
+        } as any);
+
+      mockAuditService.logActionWithClient.mockRejectedValueOnce(
+        new Error("Audit write failed during link"),
+      );
+
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          user: {
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+        };
+        return cb(tx);
+      });
+
+      await expect(
+        service.getOrProvisionUser({
+          subject: "sub_binder_1",
+          email: "legacy@nexustheme.dev",
+          emailVerified: true,
+        }),
+      ).rejects.toThrow("Audit write failed during link");
     });
   });
 
-  describe("Privilege Escalation & Symmetrical Role Removal (H03)", () => {
+  describe("Privilege Escalation & Symmetrical Role Removal (H03 & Regression 10)", () => {
     const superAdminUser = {
       id: "usr_super_1",
       email: "super@nexus.dev",
@@ -334,8 +461,8 @@ describe("UsersService", () => {
     });
   });
 
-  describe("Transactional Audit Integrity (H02)", () => {
-    it("rolls back role assignment if audit log fails in the transaction", async () => {
+  describe("Transactional Audit Integrity (H02 & Regression 9)", () => {
+    it("rolls back role assignment if audit log fails in the transaction (Regression 9)", async () => {
       const superAdminUser = {
         id: "usr_super_1",
         email: "super@nexus.dev",
@@ -348,7 +475,7 @@ describe("UsersService", () => {
 
       // Simulate audit log throwing error inside transaction
       mockAuditService.logActionWithClient.mockRejectedValueOnce(
-        new Error("Audit database failure"),
+        new Error("Audit database failure during role assignment"),
       );
 
       jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
@@ -360,7 +487,7 @@ describe("UsersService", () => {
 
       await expect(
         service.assignRole(superAdminUser, "usr_target", "support_agent"),
-      ).rejects.toThrow("Audit database failure");
+      ).rejects.toThrow("Audit database failure during role assignment");
     });
   });
 });

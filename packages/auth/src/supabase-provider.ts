@@ -33,9 +33,17 @@ export class SupabaseAuthProvider implements IAuthService {
       }
 
       const user = data.user;
+      const emailVerified = Boolean(
+        user.email_confirmed_at ||
+        (user as any).confirmed_at ||
+        user.user_metadata?.email_verified ||
+        user.app_metadata?.email_verified,
+      );
+
       return {
         subject: user.id,
-        email: user.email || "",
+        email: user.email || null,
+        emailVerified,
         phone: user.phone || null,
         metadata: user.user_metadata || {},
       };
@@ -50,9 +58,19 @@ export class SupabaseAuthProvider implements IAuthService {
       if (error || !data?.user) {
         return null;
       }
+
+      const user = data.user;
+      const emailVerified = Boolean(
+        user.email_confirmed_at ||
+        (user as any).confirmed_at ||
+        user.user_metadata?.email_verified ||
+        user.app_metadata?.email_verified,
+      );
+
       return {
         subject: data.user.id,
-        email: data.user.email || "",
+        email: data.user.email || null,
+        emailVerified,
         phone: data.user.phone || null,
         metadata: data.user.user_metadata || {},
       };

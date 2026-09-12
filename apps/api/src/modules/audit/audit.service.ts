@@ -11,6 +11,30 @@ export interface LogActionParams {
   userAgent?: string | null;
 }
 
+/**
+ * Helper to sanitize database error messages by redacting connection strings,
+ * credentials, and secret parameters.
+ */
+export function sanitizeAuditErrorMessage(error: unknown): string {
+  if (!error) return "Unknown error";
+
+  // If Prisma error with error code, return safe generic code without raw query details
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: string }).code;
+    return `Database operation failed [code: ${code || "UNKNOWN"}]`;
+  }
+
+  const rawMessage = error instanceof Error ? error.message : String(error);
+
+  return rawMessage
+    .replace(/postgres(?:ql)?:\/\/[^\s"'`]+/gi, "postgresql://[REDACTED_URI]")
+    .replace(/(password\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/(token\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/(secret\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/(authorization\s*[:=]\s*)[^\s,;&]+/gi, "$1[REDACTED]")
+    .replace(/(bearer\s+)[^\s,;&]+/gi, "$1[REDACTED]");
+}
+
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
@@ -62,7 +86,7 @@ export class AuditService {
     } catch (error) {
       // M03: Sanitize error logging - do not dump raw error object or stack traces
       // that could contain sensitive connection strings or credentials
-      const safeMessage = error instanceof Error ? error.message : "Unknown error";
+      const safeMessage = sanitizeAuditErrorMessage(error);
       this.logger.error(`Failed to record audit log: ${safeMessage}`);
     }
   }

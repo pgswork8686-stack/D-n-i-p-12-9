@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   BadRequestException,
   ConflictException,
+  InternalServerErrorException,
 } from "@nestjs/common";
 import { prisma } from "@nexus/database";
 import {
@@ -40,8 +41,8 @@ export class UsersService {
 
   /**
    * Idempotently provision or retrieve an authenticated user from an external identity.
-   * Concurrency-safe against race conditions (H01).
-   * Prevents account-linking takeover through email overwrite (B02).
+   * Concurrency-safe against race conditions without account crossover (H01, BLOCKER 1).
+   * Prevents account-linking takeover through atomic conditional update and email verification (BLOCKER 2, BLOCKER 3).
    */
   async getOrProvisionUser(
     identity: AuthIdentity,
@@ -51,72 +52,122 @@ export class UsersService {
       throw new BadRequestException("Identity subject is required");
     }
 
-    // 1. Check if user already exists by external Supabase ID
+    const email =
+      identity.email && identity.email.trim() !== ""
+        ? identity.email.trim()
+        : null;
+
+    // 1. External subject is primary identity authority
     let user = await prisma.user.findUnique({
       where: { supabaseId: identity.subject },
       include: USER_INCLUDE,
     });
 
-    // 2. If not found by supabaseId, check if email exists to link account
-    if (!user && identity.email) {
+    // 2. If not found by supabaseId and email is present, evaluate legacy account linking
+    if (!user && email) {
       const existingByEmail = await prisma.user.findUnique({
-        where: { email: identity.email },
+        where: { email },
         include: USER_INCLUDE,
       });
 
       if (existingByEmail) {
-        // SECURITY CHECK (B02):
-        // If existing user already has a bound supabaseId and it is different from identity.subject,
-        // this is an account takeover attempt or identity conflict. FAIL CLOSED.
-        if (existingByEmail.supabaseId && existingByEmail.supabaseId !== identity.subject) {
+        // SECURITY CHECK 1 (B02): Existing user is already bound to another external subject
+        if (
+          existingByEmail.supabaseId &&
+          existingByEmail.supabaseId !== identity.subject
+        ) {
           throw new ConflictException(
-            `Account identity conflict: Email '${identity.email}' is already bound to another external identity`,
+            `Account identity conflict: Email '${email}' is already bound to another external identity`,
           );
         }
 
-        // Only auto-link if existing account has NO bound supabaseId (legacy unlinked account)
+        // SECURITY CHECK 2 (BLOCKER 3): Unverified email CANNOT auto-link legacy account
         if (!existingByEmail.supabaseId) {
-          user = await prisma.user.update({
-            where: { id: existingByEmail.id },
-            data: { supabaseId: identity.subject },
-            include: USER_INCLUDE,
-          });
+          if (!identity.emailVerified) {
+            throw new ConflictException(
+              `Account identity conflict: Email '${email}' verification is required by identity provider to link existing account`,
+            );
+          }
 
-          await this.auditService.logAction({
-            action: "ACCOUNT_LINKED",
-            entity: "User",
-            entityId: user.id,
-            actorId: user.id,
-            details: {
-              email: user.email,
-              supabaseId: identity.subject,
-            },
-            ipAddress: reqContext?.ipAddress,
-            userAgent: reqContext?.userAgent,
+          // ATOMIC CONDITIONAL UPDATE & TRANSACTIONAL AUDIT (BLOCKER 2, H02)
+          user = await prisma.$transaction(async (tx) => {
+            const updateResult = await tx.user.updateMany({
+              where: {
+                id: existingByEmail.id,
+                supabaseId: null, // Atomic condition
+              },
+              data: {
+                supabaseId: identity.subject,
+              },
+            });
+
+            if (updateResult.count === 1) {
+              // Successfully claimed legacy account: record audit in SAME transaction
+              await this.auditService.logActionWithClient(tx, {
+                action: "ACCOUNT_LINKED",
+                entity: "User",
+                entityId: existingByEmail.id,
+                actorId: existingByEmail.id,
+                details: {
+                  email: existingByEmail.email,
+                  supabaseId: identity.subject,
+                },
+                ipAddress: reqContext?.ipAddress,
+                userAgent: reqContext?.userAgent,
+              });
+
+              return tx.user.findUniqueOrThrow({
+                where: { id: existingByEmail.id },
+                include: USER_INCLUDE,
+              });
+            }
+
+            // count === 0: reload user to inspect race condition outcome
+            const reloaded = await tx.user.findUniqueOrThrow({
+              where: { id: existingByEmail.id },
+              include: USER_INCLUDE,
+            });
+
+            if (reloaded.supabaseId === identity.subject) {
+              return reloaded; // Idempotent retry from same subject
+            }
+
+            // Bound by another concurrent subject in the race
+            throw new ConflictException(
+              `Account identity conflict: Email '${email}' was already linked to another external identity`,
+            );
           });
         }
       }
     }
 
-    // 3. If still not found, provision new user, profile, and assign default "customer" role
+    // 3. Provision new user if still not found
     if (!user) {
-      const customerRole = await prisma.role.findUnique({
-        where: { name: "customer" },
-      });
-
       try {
         user = await prisma.$transaction(async (tx) => {
+          // HIGH: Customer role MUST exist; fail closed if missing
+          const customerRole = await tx.role.findUnique({
+            where: { name: "customer" },
+          });
+          if (!customerRole) {
+            throw new InternalServerErrorException(
+              "Required system role 'customer' is not configured in the database",
+            );
+          }
+
           const newUser = await tx.user.create({
             data: {
               supabaseId: identity.subject,
-              email: identity.email || `${identity.subject}@auth.nexus`,
+              email, // Stable nullable email, NO fake email strings
             },
           });
 
           const displayName =
             identity.metadata?.name ||
             identity.metadata?.full_name ||
-            (identity.email ? identity.email.split("@")[0] : "Customer");
+            (email
+              ? email.split("@")[0]
+              : `User ${identity.subject.slice(0, 8)}`);
 
           await tx.profile.create({
             data: {
@@ -125,15 +176,13 @@ export class UsersService {
             },
           });
 
-          if (customerRole) {
-            await tx.userRole.create({
-              data: {
-                userId: newUser.id,
-                roleId: customerRole.id,
-                assignedBy: "system_provision",
-              },
-            });
-          }
+          await tx.userRole.create({
+            data: {
+              userId: newUser.id,
+              roleId: customerRole.id,
+              assignedBy: "system_provision",
+            },
+          });
 
           // Atomic audit log inside same transaction (H02)
           await this.auditService.logActionWithClient(tx, {
@@ -156,26 +205,36 @@ export class UsersService {
           });
         });
       } catch (error: any) {
-        // Concurrency handling (H01):
-        // If competing concurrent request created the user first, Prisma raises P2002.
-        // Catch P2002 and safely resolve the provisioned user.
+        // BLOCKER 1: P2002 Race condition handling WITHOUT account crossover
         if (error?.code === "P2002") {
-          user = await prisma.user.findFirst({
-            where: {
-              OR: [
-                { supabaseId: identity.subject },
-                identity.email ? { email: identity.email } : {},
-              ],
-            },
+          // 1. Strictly re-query by external subject only
+          user = await prisma.user.findUnique({
+            where: { supabaseId: identity.subject },
             include: USER_INCLUDE,
           });
 
-          if (!user) {
-            throw error;
+          if (user) {
+            return this.buildAuthUser(user);
           }
-        } else {
-          throw error;
+
+          // 2. Not found by subject -> conflict was caused by email unique constraint
+          if (email) {
+            const conflictUser = await prisma.user.findUnique({
+              where: { email },
+            });
+            if (conflictUser && conflictUser.supabaseId !== identity.subject) {
+              throw new ConflictException(
+                `Account identity conflict: Email '${email}' is already associated with another identity`,
+              );
+            }
+          }
+
+          throw new ConflictException(
+            "Account identity conflict occurred during provisioning",
+          );
         }
+
+        throw error;
       }
     }
 
@@ -184,7 +243,9 @@ export class UsersService {
       const displayName =
         identity.metadata?.name ||
         identity.metadata?.full_name ||
-        (identity.email ? identity.email.split("@")[0] : "Customer");
+        (email
+          ? email.split("@")[0]
+          : `User ${identity.subject.slice(0, 8)}`);
       await prisma.profile.upsert({
         where: { userId: user.id },
         update: {},

@@ -13,12 +13,14 @@ export class DevMockAuthProvider implements IAuthService {
     this.identities.set("dev-admin-token", {
       subject: "sub_dev_admin_001",
       email: "admin@nexustheme.dev",
+      emailVerified: true,
       metadata: { name: "Admin Developer" },
     });
 
     this.identities.set("dev-customer-token", {
       subject: "sub_dev_customer_001",
       email: "customer@nexustheme.dev",
+      emailVerified: true,
       metadata: { name: "Test Customer" },
     });
 
@@ -26,12 +28,14 @@ export class DevMockAuthProvider implements IAuthService {
     this.identities.set("dev-user-token", {
       subject: "sub_dev_customer_001",
       email: "customer@nexustheme.dev",
+      emailVerified: true,
       metadata: { name: "Test Customer" },
     });
 
     this.identities.set("dev-superadmin-token", {
       subject: "sub_dev_superadmin_001",
       email: "superadmin@nexustheme.dev",
+      emailVerified: true,
       metadata: { name: "Super Administrator" },
     });
   }
@@ -48,14 +52,31 @@ export class DevMockAuthProvider implements IAuthService {
       return this.identities.get(token) || null;
     }
 
-    // Dynamic mock token support for tests: dev-custom:<subject>:<email>
+    // Explicit test token for identity without email: dev-no-email:<subject>
+    if (token.startsWith("dev-no-email:")) {
+      const parts = token.split(":");
+      const subject = parts[1] || "sub_no_email";
+      return {
+        subject,
+        email: null,
+        emailVerified: false,
+        metadata: { name: `No-Email ${subject}` },
+      };
+    }
+
+    // Dynamic mock token support for tests: dev-custom:<subject>:<email>[:unverified|verified]
     if (token.startsWith("dev-custom:")) {
       const parts = token.split(":");
       const subject = parts[1] || "sub_custom";
-      const email = parts[2] || `${subject}@test.dev`;
+      const rawEmail = parts[2];
+      const email = rawEmail === "none" || rawEmail === "" ? null : (rawEmail || `${subject}@test.dev`);
+      const verificationFlag = parts[3];
+      const emailVerified = verificationFlag === "unverified" ? false : true;
+
       return {
         subject,
         email,
+        emailVerified: email ? emailVerified : false,
         metadata: { name: `Custom ${subject}` },
       };
     }
@@ -72,4 +93,3 @@ export class DevMockAuthProvider implements IAuthService {
     return null;
   }
 }
-
