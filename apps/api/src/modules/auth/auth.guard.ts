@@ -3,10 +3,12 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  Inject,
 } from "@nestjs/common";
 import { Request } from "express";
-import { IAuthService, DevMockAuthProvider } from "@nexus/auth";
+import { IAuthService } from "@nexus/auth";
 import { AuthUser } from "@nexus/contracts";
+import { AUTH_SERVICE } from "./auth.module";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -19,13 +21,9 @@ declare global {
 
 @Injectable()
 export class AuthGuard implements CanActivate {
-  private authService: IAuthService;
-
-  constructor() {
-    // In Phase 1: uses dev mock auth provider
-    // In Phase 2: can be swapped via DI with SupabaseAuthProvider
-    this.authService = new DevMockAuthProvider();
-  }
+  constructor(
+    @Inject(AUTH_SERVICE) private readonly authService: IAuthService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();

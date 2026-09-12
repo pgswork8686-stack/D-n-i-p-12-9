@@ -3,12 +3,18 @@
 import React, { useEffect, useState } from "react";
 import { Badge, Button, Card } from "@nexus/ui";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const PORTAL_URL =
+  process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+const ADMIN_URL =
+  process.env.NEXT_PUBLIC_ADMIN_URL || "http://localhost:3002";
+
 export default function WebHomePage() {
   const [apiHealth, setApiHealth] = useState<string>("Checking...");
   const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/health")
+    fetch(`${API_URL}/health`)
       .then((res) => res.json())
       .then((data) => {
         setIsHealthy(data.status === "ok");
@@ -31,8 +37,16 @@ export default function WebHomePage() {
             Public Web & SEO Engine (apps/web — Port 3000)
           </p>
         </div>
-        <Badge variant={isHealthy ? "success" : isHealthy === false ? "error" : "warning"}>
-          {isHealthy ? "API Connected" : isHealthy === false ? "API Disconnected" : "Checking API..."}
+        <Badge
+          variant={
+            isHealthy ? "success" : isHealthy === false ? "error" : "warning"
+          }
+        >
+          {isHealthy
+            ? "API Connected"
+            : isHealthy === false
+              ? "API Disconnected"
+              : "Checking API..."}
         </Badge>
       </div>
 
@@ -46,7 +60,10 @@ export default function WebHomePage() {
           </ul>
         </Card>
 
-        <Card title="Backend Connectivity" subtitle="Live probe to http://localhost:4000/health">
+        <Card
+          title="Backend Connectivity"
+          subtitle={`Live probe to ${API_URL}/health`}
+        >
           <pre className="bg-gray-900 text-emerald-400 p-4 rounded-xl text-xs overflow-x-auto">
             {apiHealth}
           </pre>
@@ -54,11 +71,15 @@ export default function WebHomePage() {
       </div>
 
       <div className="flex items-center gap-4">
-        <a href="http://localhost:3001" target="_blank" rel="noreferrer">
-          <Button variant="secondary" size="sm">Go to Customer Portal (3001) →</Button>
+        <a href={PORTAL_URL} target="_blank" rel="noreferrer">
+          <Button variant="secondary" size="sm">
+            Go to Customer Portal →
+          </Button>
         </a>
-        <a href="http://localhost:3002" target="_blank" rel="noreferrer">
-          <Button variant="outline" size="sm">Go to Admin Dashboard (3002) →</Button>
+        <a href={ADMIN_URL} target="_blank" rel="noreferrer">
+          <Button variant="outline" size="sm">
+            Go to Admin Dashboard →
+          </Button>
         </a>
       </div>
     </main>

@@ -1,4 +1,11 @@
 import { PrismaClient } from "@prisma/client";
+import * as dotenv from "dotenv";
+import * as path from "path";
+
+if (!process.env.DATABASE_URL) {
+  dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+  dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+}
 
 declare global {
   // eslint-disable-next-line no-var

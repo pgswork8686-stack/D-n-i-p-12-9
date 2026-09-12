@@ -3,12 +3,17 @@
 import React, { useEffect, useState } from "react";
 import { Badge, Button, Card } from "@nexus/ui";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
+const PORTAL_URL =
+  process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+
 export default function AdminHomePage() {
   const [apiHealth, setApiHealth] = useState<string>("Checking...");
   const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:4000/health")
+    fetch(`${API_URL}/health`)
       .then((res) => res.json())
       .then((data) => {
         setIsHealthy(data.status === "ok");
@@ -31,13 +36,24 @@ export default function AdminHomePage() {
             Central Operations & Control Center (apps/admin — Port 3002)
           </p>
         </div>
-        <Badge variant={isHealthy ? "success" : isHealthy === false ? "error" : "warning"}>
-          {isHealthy ? "API Connected" : isHealthy === false ? "API Disconnected" : "Checking API..."}
+        <Badge
+          variant={
+            isHealthy ? "success" : isHealthy === false ? "error" : "warning"
+          }
+        >
+          {isHealthy
+            ? "API Connected"
+            : isHealthy === false
+              ? "API Disconnected"
+              : "Checking API..."}
         </Badge>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <Card title="Super Admin Architecture" subtitle="Central Operations Hub">
+        <Card
+          title="Super Admin Architecture"
+          subtitle="Central Operations Hub"
+        >
           <ul className="text-sm text-gray-600 space-y-2">
             <li>✓ Catalog & License allocation controls</li>
             <li>✓ Upstream provider management (Elementor manual mode)</li>
@@ -46,7 +62,10 @@ export default function AdminHomePage() {
           </ul>
         </Card>
 
-        <Card title="Backend API Health" subtitle="Live probe to http://localhost:4000/health">
+        <Card
+          title="Backend API Health"
+          subtitle={`Live probe to ${API_URL}/health`}
+        >
           <pre className="bg-gray-900 text-emerald-400 p-4 rounded-xl text-xs overflow-x-auto">
             {apiHealth}
           </pre>
@@ -54,11 +73,15 @@ export default function AdminHomePage() {
       </div>
 
       <div className="flex items-center gap-4">
-        <a href="http://localhost:3000" target="_blank" rel="noreferrer">
-          <Button variant="secondary" size="sm">← Return to Marketplace (3000)</Button>
+        <a href={WEB_URL} target="_blank" rel="noreferrer">
+          <Button variant="secondary" size="sm">
+            ← Return to Marketplace
+          </Button>
         </a>
-        <a href="http://localhost:3001" target="_blank" rel="noreferrer">
-          <Button variant="outline" size="sm">Go to Customer Portal (3001) →</Button>
+        <a href={PORTAL_URL} target="_blank" rel="noreferrer">
+          <Button variant="outline" size="sm">
+            Go to Customer Portal →
+          </Button>
         </a>
       </div>
     </main>

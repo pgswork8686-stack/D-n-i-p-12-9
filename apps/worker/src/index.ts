@@ -1,8 +1,11 @@
 import { Worker } from "bullmq";
 import * as dotenv from "dotenv";
+import * as path from "path";
 import { processSystemJob } from "./processor";
 
-dotenv.config();
+// Load root .env file
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const url = new URL(redisUrl);

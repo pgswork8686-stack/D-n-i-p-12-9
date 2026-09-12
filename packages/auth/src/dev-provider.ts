@@ -27,6 +27,10 @@ export class DevMockAuthProvider implements IAuthService {
 
   async verifyToken(token: string): Promise<AuthUser | null> {
     if (!token) return null;
+    // Fail-closed in production
+    if (process.env.NODE_ENV === "production") {
+      return null;
+    }
     if (token === "dev-admin-token") {
       return this.users.get("dev-admin-id") || null;
     }
