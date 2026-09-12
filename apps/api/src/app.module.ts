@@ -7,6 +7,7 @@ import { AuditModule } from "./modules/audit/audit.module";
 import { UsersModule } from "./modules/users/users.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { QueueModule } from "./modules/queue/queue.module";
+import { CatalogModule } from "./modules/catalog/catalog.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -20,6 +21,7 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     }),
     AuditModule,
     UsersModule,
+    CatalogModule,
     HealthModule,
     StorageModule,
     AuthModule,

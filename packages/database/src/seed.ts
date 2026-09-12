@@ -321,13 +321,268 @@ export async function seedDevUsers(
 }
 
 /**
+ * Development-only catalog seed:
+ * Seeds demo products, variants, and prices:
+ * 1. Elementor Pro (EXTERNAL_MANAGED_LICENSE, EXTERNAL_MANAGED)
+ * 2. Nexus Plugin Pro (LICENSED_SOFTWARE, INTERNAL_LICENSE)
+ * 3. Figma SaaS UI Kit (DOWNLOADABLE_ASSET, DIGITAL_DOWNLOAD)
+ *
+ * STRICTLY GATED: Never runs in production.
+ */
+export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
+  const isProduction = process.env.NODE_ENV === "production";
+  if (isProduction) {
+    console.warn("[seed] Refusing to seed development catalog in production environment.");
+    return;
+  }
+
+  console.log("[seed] Seeding development categories...");
+  const catWordPress = await db.category.upsert({
+    where: { slug: "wordpress" },
+    update: { name: "WordPress", description: "WordPress themes, plugins, and ecosystem tools" },
+    create: { name: "WordPress", slug: "wordpress", description: "WordPress themes, plugins, and ecosystem tools" },
+  });
+
+  const catDesign = await db.category.upsert({
+    where: { slug: "design" },
+    update: { name: "Design Assets", description: "Figma UI kits, graphic design assets, and templates" },
+    create: { name: "Design Assets", slug: "design", description: "Figma UI kits, graphic design assets, and templates" },
+  });
+
+  const catDevTools = await db.category.upsert({
+    where: { slug: "developer-tools" },
+    update: { name: "Developer Tools", description: "Developer software, SDKs, and developer utilities" },
+    create: { name: "Developer Tools", slug: "developer-tools", description: "Developer software, SDKs, and developer utilities" },
+  });
+
+  console.log("[seed] Seeding development products...");
+
+  // 1. Elementor Pro (EXTERNAL_MANAGED_LICENSE, EXTERNAL_MANAGED)
+  const pElementor = await db.product.upsert({
+    where: { slug: "elementor-pro" },
+    update: {
+      name: "Elementor Pro",
+      shortDescription: "The leading website builder platform for WordPress professionals.",
+      description: "Professional website builder with drag-and-drop theme editor, WooCommerce builder, and external managed activation support.",
+      productType: "EXTERNAL_MANAGED_LICENSE",
+      fulfillmentType: "EXTERNAL_MANAGED",
+      status: "ACTIVE",
+      brand: "Elementor",
+      metadata: { fulfillmentMode: "MANUAL_EXTERNAL", supportNote: "Domain allocation managed via platform entitlement" },
+    },
+    create: {
+      slug: "elementor-pro",
+      name: "Elementor Pro",
+      shortDescription: "The leading website builder platform for WordPress professionals.",
+      description: "Professional website builder with drag-and-drop theme editor, WooCommerce builder, and external managed activation support.",
+      productType: "EXTERNAL_MANAGED_LICENSE",
+      fulfillmentType: "EXTERNAL_MANAGED",
+      status: "ACTIVE",
+      brand: "Elementor",
+      metadata: { fulfillmentMode: "MANUAL_EXTERNAL", supportNote: "Domain allocation managed via platform entitlement" },
+    },
+  });
+
+  await db.productCategory.upsert({
+    where: { productId_categoryId: { productId: pElementor.id, categoryId: catWordPress.id } },
+    update: {},
+    create: { productId: pElementor.id, categoryId: catWordPress.id },
+  });
+
+  const planEle1 = await db.licensePlan.upsert({
+    where: { id: "plan-ele-1site" },
+    update: { name: "Elementor 1 Site Plan", maxActivations: 1, durationMonths: 12 },
+    create: { id: "plan-ele-1site", name: "Elementor 1 Site Plan", maxActivations: 1, durationMonths: 12 },
+  });
+  const planEle3 = await db.licensePlan.upsert({
+    where: { id: "plan-ele-3sites" },
+    update: { name: "Elementor 3 Sites Plan", maxActivations: 3, durationMonths: 12 },
+    create: { id: "plan-ele-3sites", name: "Elementor 3 Sites Plan", maxActivations: 3, durationMonths: 12 },
+  });
+  const planEle10 = await db.licensePlan.upsert({
+    where: { id: "plan-ele-10sites" },
+    update: { name: "Elementor 10 Sites Plan", maxActivations: 10, durationMonths: 12 },
+    create: { id: "plan-ele-10sites", name: "Elementor 10 Sites Plan", maxActivations: 10, durationMonths: 12 },
+  });
+
+  const vEle1 = await db.productVariant.upsert({
+    where: { sku: "ELE-PRO-1SITE" },
+    update: { name: "1 Website", status: "ACTIVE", sortOrder: 1, licensePlanId: planEle1.id },
+    create: { productId: pElementor.id, sku: "ELE-PRO-1SITE", name: "1 Website", status: "ACTIVE", sortOrder: 1, licensePlanId: planEle1.id },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vEle1.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vEle1.id, currency: "VND", amount: 299000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle1.id, currency: "USD", amount: 12, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  const vEle3 = await db.productVariant.upsert({
+    where: { sku: "ELE-PRO-3SITES" },
+    update: { name: "3 Websites", status: "ACTIVE", sortOrder: 2, licensePlanId: planEle3.id },
+    create: { productId: pElementor.id, sku: "ELE-PRO-3SITES", name: "3 Websites", status: "ACTIVE", sortOrder: 2, licensePlanId: planEle3.id },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vEle3.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vEle3.id, currency: "VND", amount: 599000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle3.id, currency: "USD", amount: 24, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  const vEle10 = await db.productVariant.upsert({
+    where: { sku: "ELE-PRO-10SITES" },
+    update: { name: "10 Websites", status: "ACTIVE", sortOrder: 3, licensePlanId: planEle10.id },
+    create: { productId: pElementor.id, sku: "ELE-PRO-10SITES", name: "10 Websites", status: "ACTIVE", sortOrder: 3, licensePlanId: planEle10.id },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vEle10.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vEle10.id, currency: "VND", amount: 999000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle10.id, currency: "USD", amount: 39, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  // 2. Nexus Plugin Pro (LICENSED_SOFTWARE, INTERNAL_LICENSE)
+  const pNexus = await db.product.upsert({
+    where: { slug: "nexus-plugin-pro" },
+    update: {
+      name: "Nexus Plugin Pro",
+      shortDescription: "High-performance digital commerce accelerator plugin.",
+      description: "Official platform plugin featuring instant caching, order syncing, and internal license verification.",
+      productType: "LICENSED_SOFTWARE",
+      fulfillmentType: "INTERNAL_LICENSE",
+      status: "ACTIVE",
+      brand: "NexusTheme",
+    },
+    create: {
+      slug: "nexus-plugin-pro",
+      name: "Nexus Plugin Pro",
+      shortDescription: "High-performance digital commerce accelerator plugin.",
+      description: "Official platform plugin featuring instant caching, order syncing, and internal license verification.",
+      productType: "LICENSED_SOFTWARE",
+      fulfillmentType: "INTERNAL_LICENSE",
+      status: "ACTIVE",
+      brand: "NexusTheme",
+    },
+  });
+
+  await db.productCategory.upsert({
+    where: { productId_categoryId: { productId: pNexus.id, categoryId: catWordPress.id } },
+    update: {},
+    create: { productId: pNexus.id, categoryId: catWordPress.id },
+  });
+  await db.productCategory.upsert({
+    where: { productId_categoryId: { productId: pNexus.id, categoryId: catDevTools.id } },
+    update: {},
+    create: { productId: pNexus.id, categoryId: catDevTools.id },
+  });
+
+  const planNex1 = await db.licensePlan.upsert({
+    where: { id: "plan-nex-1site" },
+    update: { name: "Nexus 1 Site Plan", maxActivations: 1, isLifetime: true },
+    create: { id: "plan-nex-1site", name: "Nexus 1 Site Plan", maxActivations: 1, isLifetime: true },
+  });
+
+  const vNex1 = await db.productVariant.upsert({
+    where: { sku: "NEX-PRO-1SITE" },
+    update: { name: "1 Site License", status: "ACTIVE", sortOrder: 1, licensePlanId: planNex1.id },
+    create: { productId: pNexus.id, sku: "NEX-PRO-1SITE", name: "1 Site License", status: "ACTIVE", sortOrder: 1, licensePlanId: planNex1.id },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vNex1.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vNex1.id, currency: "VND", amount: 499000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vNex1.id, currency: "USD", amount: 20, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  const vNexUnl = await db.productVariant.upsert({
+    where: { sku: "NEX-PRO-UNLIMITED" },
+    update: { name: "Unlimited Sites", status: "ACTIVE", sortOrder: 2 },
+    create: { productId: pNexus.id, sku: "NEX-PRO-UNLIMITED", name: "Unlimited Sites", status: "ACTIVE", sortOrder: 2 },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vNexUnl.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vNexUnl.id, currency: "VND", amount: 1499000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vNexUnl.id, currency: "USD", amount: 60, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  // 3. Figma SaaS UI Kit (DOWNLOADABLE_ASSET, DIGITAL_DOWNLOAD)
+  const pFigma = await db.product.upsert({
+    where: { slug: "figma-saas-ui-kit" },
+    update: {
+      name: "Figma SaaS UI Kit",
+      shortDescription: "Complete enterprise dashboard design system with 200+ components.",
+      description: "Comprehensive Figma design system crafted for SaaS applications, admin consoles, and analytics dashboards.",
+      productType: "DOWNLOADABLE_ASSET",
+      fulfillmentType: "DIGITAL_DOWNLOAD",
+      status: "ACTIVE",
+      brand: "Nexus Design Studio",
+    },
+    create: {
+      slug: "figma-saas-ui-kit",
+      name: "Figma SaaS UI Kit",
+      shortDescription: "Complete enterprise dashboard design system with 200+ components.",
+      description: "Comprehensive Figma design system crafted for SaaS applications, admin consoles, and analytics dashboards.",
+      productType: "DOWNLOADABLE_ASSET",
+      fulfillmentType: "DIGITAL_DOWNLOAD",
+      status: "ACTIVE",
+      brand: "Nexus Design Studio",
+    },
+  });
+
+  await db.productCategory.upsert({
+    where: { productId_categoryId: { productId: pFigma.id, categoryId: catDesign.id } },
+    update: {},
+    create: { productId: pFigma.id, categoryId: catDesign.id },
+  });
+
+  const vFigPersonal = await db.productVariant.upsert({
+    where: { sku: "FIG-SAAS-PERSONAL" },
+    update: { name: "Standard Personal License", status: "ACTIVE", sortOrder: 1 },
+    create: { productId: pFigma.id, sku: "FIG-SAAS-PERSONAL", name: "Standard Personal License", status: "ACTIVE", sortOrder: 1 },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vFigPersonal.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vFigPersonal.id, currency: "VND", amount: 199000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vFigPersonal.id, currency: "USD", amount: 8, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  const vFigTeam = await db.productVariant.upsert({
+    where: { sku: "FIG-SAAS-TEAM" },
+    update: { name: "Team Commercial License", status: "ACTIVE", sortOrder: 2 },
+    create: { productId: pFigma.id, sku: "FIG-SAAS-TEAM", name: "Team Commercial License", status: "ACTIVE", sortOrder: 2 },
+  });
+  await db.productPrice.deleteMany({ where: { variantId: vFigTeam.id } });
+  await db.productPrice.createMany({
+    data: [
+      { variantId: vFigTeam.id, currency: "VND", amount: 799000, billingType: "ONE_TIME", isActive: true },
+      { variantId: vFigTeam.id, currency: "USD", amount: 32, billingType: "ONE_TIME", isActive: true },
+    ],
+  });
+
+  console.log("[seed] Development catalog seeded successfully.");
+}
+
+/**
  * Main seed function:
- * Runs system RBAC seed first. Then conditionally seeds dev users if gated conditions are met.
+ * Runs system RBAC seed first. Then conditionally seeds dev users/catalog if gated conditions are met.
  */
 export async function seed(db: PrismaClient = prisma) {
   const { rolesMap } = await seedSystemRbac(db);
-  if (!process.argv.includes("--system-only")) {
+  if (process.argv.includes("--catalog")) {
+    await seedDevCatalog(db);
+  } else if (!process.argv.includes("--system-only")) {
     await seedDevUsers(db, rolesMap);
+    if (process.argv.includes("--with-catalog") || process.env.SEED_CATALOG === "true") {
+      await seedDevCatalog(db);
+    }
   }
 }
 

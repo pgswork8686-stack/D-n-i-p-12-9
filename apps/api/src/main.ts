@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { Logger } from "@nestjs/common";
+import { Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppModule } from "./app.module";
 import { AllExceptionsFilter } from "./common/filters/http-exception.filter";
@@ -34,6 +34,14 @@ async function bootstrap() {
     origin: allowedOrigins,
     credentials: true,
   });
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false,
+    }),
+  );
 
   app.useGlobalFilters(new AllExceptionsFilter());
 

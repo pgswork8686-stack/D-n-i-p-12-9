@@ -123,3 +123,200 @@ model SystemHealthTest {
 
   @@map("system_health_tests")
 }
+
+// --------------------------------------------------------
+// Phase 3 — Catalog & Product Models
+// --------------------------------------------------------
+
+enum ProductType {
+  DOWNLOADABLE_ASSET
+  LICENSED_SOFTWARE
+  EXTERNAL_MANAGED_LICENSE
+  MEMBERSHIP
+  SUBSCRIPTION
+  SERVICE
+}
+
+enum FulfillmentType {
+  DIGITAL_DOWNLOAD
+  INTERNAL_LICENSE
+  EXTERNAL_MANAGED
+  MEMBERSHIP_ACCESS
+  MANUAL_SERVICE
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum VariantStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CategoryStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum Currency {
+  VND
+  USD
+}
+
+enum BillingType {
+  ONE_TIME
+  RECURRING
+}
+
+enum BillingInterval {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum MediaType {
+  IMAGE
+  GALLERY
+  PREVIEW
+  ICON
+  THUMBNAIL
+}
+
+model Product {
+  id               String            @id @default(uuid())
+  slug             String            @unique
+  name             String
+  shortDescription String?           @map("short_description")
+  description      String?
+  productType      ProductType       @map("product_type")
+  fulfillmentType  FulfillmentType   @map("fulfillment_type")
+  status           ProductStatus     @default(DRAFT)
+  brand            String?
+  metadata         Json?
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  variants         ProductVariant[]
+  categories       ProductCategory[]
+  media            ProductMedia[]
+
+  @@index([status])
+  @@index([productType])
+  @@index([fulfillmentType])
+  @@map("products")
+}
+
+model ProductVariant {
+  id            String         @id @default(uuid())
+  productId     String         @map("product_id")
+  sku           String         @unique
+  name          String
+  status        VariantStatus  @default(ACTIVE)
+  sortOrder     Int            @default(0) @map("sort_order")
+  metadata      Json?
+  licensePlanId String?        @map("license_plan_id")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  licensePlan   LicensePlan?   @relation(fields: [licensePlanId], references: [id], onDelete: SetNull)
+  prices        ProductPrice[]
+
+  @@index([productId])
+  @@index([sku])
+  @@index([licensePlanId])
+  @@map("product_variants")
+}
+
+model ProductPrice {
+  id              String           @id @default(uuid())
+  variantId       String           @map("variant_id")
+  currency        Currency
+  amount          Int
+  compareAtAmount Int?             @map("compare_at_amount")
+  billingType     BillingType      @default(ONE_TIME) @map("billing_type")
+  billingInterval BillingInterval? @map("billing_interval")
+  isActive        Boolean          @default(true) @map("is_active")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  variant         ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([variantId])
+  @@index([isActive])
+  @@map("product_prices")
+}
+
+model Category {
+  id          String            @id @default(uuid())
+  name        String
+  slug        String            @unique
+  description String?
+  parentId    String?           @map("parent_id")
+  sortOrder   Int               @default(0) @map("sort_order")
+  status      CategoryStatus    @default(ACTIVE)
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  parent      Category?         @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[]        @relation("CategoryHierarchy")
+  products    ProductCategory[]
+
+  @@index([slug])
+  @@index([parentId])
+  @@map("categories")
+}
+
+model ProductCategory {
+  productId  String   @map("product_id")
+  categoryId String   @map("category_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([productId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
+
+model ProductMedia {
+  id         String       @id @default(uuid())
+  productId  String       @map("product_id")
+  type       MediaType    @default(IMAGE)
+  url        String
+  storageKey String?      @map("storage_key")
+  altText    String?      @map("alt_text")
+  sortOrder  Int          @default(0) @map("sort_order")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("product_media")
+}
+
+model LicensePlan {
+  id             String           @id @default(uuid())
+  name           String
+  maxActivations Int              @default(1) @map("max_activations")
+  durationDays   Int?             @map("duration_days")
+  durationMonths Int?             @map("duration_months")
+  updatesDays    Int?             @map("updates_days")
+  supportDays    Int?             @map("support_days")
+  isLifetime     Boolean          @default(false) @map("is_lifetime")
+  metadata       Json?
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  variants       ProductVariant[]
+
+  @@map("license_plans")
+}
