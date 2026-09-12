@@ -7,21 +7,94 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// NOTE: Phase 1 Foundation User model.
-// In Phase 2, the simple role string will be migrated to the full RBAC tables:
-// users, profiles, roles, permissions, user_roles, role_permissions
-// as specified in PROJECT_CONTEXT.md.
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  role      String   @default("USER") // Phase 1 foundation field (e.g. "USER", "ADMIN")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          String     @id @default(uuid())
+  supabaseId  String?    @unique @map("supabase_id")
+  email       String?    @unique
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
 
-  auditLogs AuditLog[]
+  profile     Profile?
+  userRoles   UserRole[]
+  auditLogs   AuditLog[]
 
   @@map("users")
+}
+
+model Profile {
+  id          String    @id @default(uuid())
+  userId      String    @unique @map("user_id")
+  displayName String?   @map("display_name")
+  firstName   String?   @map("first_name")
+  lastName    String?   @map("last_name")
+  avatarUrl   String?   @map("avatar_url")
+  bio         String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Role {
+  id              String           @id @default(uuid())
+  name            String           @unique
+  displayName     String?          @map("display_name")
+  description     String?
+  isSystem        Boolean          @default(true) @map("is_system")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id              String           @id @default(uuid())
+  name            String           @unique
+  displayName     String?          @map("display_name")
+  module          String?
+  description     String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  roleId      String   @map("role_id")
+  assignedBy  String?  @map("assigned_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String     @map("role_id")
+  permissionId String     @map("permission_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
 }
 
 model AuditLog {
@@ -32,12 +105,14 @@ model AuditLog {
   actorId     String?  @map("actor_id")
   details     Json?
   ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent")
   createdAt   DateTime @default(now()) @map("created_at")
 
   actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([entity, entityId])
   @@index([actorId])
+  @@index([action])
   @@map("audit_logs")
 }
 

@@ -3,6 +3,7 @@ import { QueueController } from "./queue.controller";
 import { QueueService } from "./queue.service";
 import { AUTH_SERVICE } from "../auth/auth.constants";
 import { DevMockAuthProvider } from "@nexus/auth";
+import { UsersService } from "../users/users.service";
 import { Request } from "express";
 
 describe("QueueController", () => {
@@ -26,6 +27,17 @@ describe("QueueController", () => {
         {
           provide: AUTH_SERVICE,
           useValue: new DevMockAuthProvider(),
+        },
+        {
+          provide: UsersService,
+          useValue: {
+            getOrProvisionUser: jest.fn().mockResolvedValue({
+              id: "dev-admin-id",
+              email: "admin@nexustheme.dev",
+              roles: ["admin"],
+              permissions: ["user.manage"],
+            }),
+          },
         },
       ],
     }).compile();
