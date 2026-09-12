@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from "@nestjs/common";
 import { prisma } from "@nexus/database";
 import {
@@ -14,12 +15,33 @@ import {
 } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
 
+const USER_INCLUDE = {
+  profile: true,
+  userRoles: {
+    include: {
+      role: {
+        include: {
+          rolePermissions: {
+            include: {
+              permission: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+const ELEVATED_ROLES = ["admin", "super_admin"];
+
 @Injectable()
 export class UsersService {
   constructor(private readonly auditService: AuditService) {}
 
   /**
    * Idempotently provision or retrieve an authenticated user from an external identity.
+   * Concurrency-safe against race conditions (H01).
+   * Prevents account-linking takeover through email overwrite (B02).
    */
   async getOrProvisionUser(
     identity: AuthIdentity,
@@ -32,67 +54,47 @@ export class UsersService {
     // 1. Check if user already exists by external Supabase ID
     let user = await prisma.user.findUnique({
       where: { supabaseId: identity.subject },
-      include: {
-        profile: true,
-        userRoles: {
-          include: {
-            role: {
-              include: {
-                rolePermissions: {
-                  include: {
-                    permission: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+      include: USER_INCLUDE,
     });
 
     // 2. If not found by supabaseId, check if email exists to link account
     if (!user && identity.email) {
       const existingByEmail = await prisma.user.findUnique({
         where: { email: identity.email },
-        include: {
-          profile: true,
-          userRoles: {
-            include: {
-              role: {
-                include: {
-                  rolePermissions: {
-                    include: {
-                      permission: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
+        include: USER_INCLUDE,
       });
 
       if (existingByEmail) {
-        user = await prisma.user.update({
-          where: { id: existingByEmail.id },
-          data: { supabaseId: identity.subject },
-          include: {
-            profile: true,
-            userRoles: {
-              include: {
-                role: {
-                  include: {
-                    rolePermissions: {
-                      include: {
-                        permission: true,
-                      },
-                    },
-                  },
-                },
-              },
+        // SECURITY CHECK (B02):
+        // If existing user already has a bound supabaseId and it is different from identity.subject,
+        // this is an account takeover attempt or identity conflict. FAIL CLOSED.
+        if (existingByEmail.supabaseId && existingByEmail.supabaseId !== identity.subject) {
+          throw new ConflictException(
+            `Account identity conflict: Email '${identity.email}' is already bound to another external identity`,
+          );
+        }
+
+        // Only auto-link if existing account has NO bound supabaseId (legacy unlinked account)
+        if (!existingByEmail.supabaseId) {
+          user = await prisma.user.update({
+            where: { id: existingByEmail.id },
+            data: { supabaseId: identity.subject },
+            include: USER_INCLUDE,
+          });
+
+          await this.auditService.logAction({
+            action: "ACCOUNT_LINKED",
+            entity: "User",
+            entityId: user.id,
+            actorId: user.id,
+            details: {
+              email: user.email,
+              supabaseId: identity.subject,
             },
-          },
-        });
+            ipAddress: reqContext?.ipAddress,
+            userAgent: reqContext?.userAgent,
+          });
+        }
       }
     }
 
@@ -102,70 +104,95 @@ export class UsersService {
         where: { name: "customer" },
       });
 
-      user = await prisma.$transaction(async (tx) => {
-        const newUser = await tx.user.create({
-          data: {
-            supabaseId: identity.subject,
-            email: identity.email || `${identity.subject}@auth.nexus`,
-          },
-        });
-
-        const displayName =
-          identity.metadata?.name ||
-          identity.metadata?.full_name ||
-          (identity.email ? identity.email.split("@")[0] : "Customer");
-
-        await tx.profile.create({
-          data: {
-            userId: newUser.id,
-            displayName,
-          },
-        });
-
-        if (customerRole) {
-          await tx.userRole.create({
+      try {
+        user = await prisma.$transaction(async (tx) => {
+          const newUser = await tx.user.create({
             data: {
-              userId: newUser.id,
-              roleId: customerRole.id,
-              assignedBy: "system_provision",
+              supabaseId: identity.subject,
+              email: identity.email || `${identity.subject}@auth.nexus`,
             },
           });
-        }
 
-        return tx.user.findUniqueOrThrow({
-          where: { id: newUser.id },
-          include: {
-            profile: true,
-            userRoles: {
-              include: {
-                role: {
-                  include: {
-                    rolePermissions: {
-                      include: {
-                        permission: true,
-                      },
-                    },
-                  },
-                },
-              },
+          const displayName =
+            identity.metadata?.name ||
+            identity.metadata?.full_name ||
+            (identity.email ? identity.email.split("@")[0] : "Customer");
+
+          await tx.profile.create({
+            data: {
+              userId: newUser.id,
+              displayName,
             },
-          },
-        });
-      });
+          });
 
-      // Audit log event
-      await this.auditService.logAction({
-        action: "USER_PROVISIONED",
-        entity: "User",
-        entityId: user.id,
-        actorId: user.id,
-        details: {
-          email: user.email,
-          supabaseId: user.supabaseId,
-          assignedRole: "customer",
-        },
-        ipAddress: reqContext?.ipAddress,
-        userAgent: reqContext?.userAgent,
+          if (customerRole) {
+            await tx.userRole.create({
+              data: {
+                userId: newUser.id,
+                roleId: customerRole.id,
+                assignedBy: "system_provision",
+              },
+            });
+          }
+
+          // Atomic audit log inside same transaction (H02)
+          await this.auditService.logActionWithClient(tx, {
+            action: "USER_PROVISIONED",
+            entity: "User",
+            entityId: newUser.id,
+            actorId: newUser.id,
+            details: {
+              email: newUser.email,
+              supabaseId: newUser.supabaseId,
+              assignedRole: "customer",
+            },
+            ipAddress: reqContext?.ipAddress,
+            userAgent: reqContext?.userAgent,
+          });
+
+          return tx.user.findUniqueOrThrow({
+            where: { id: newUser.id },
+            include: USER_INCLUDE,
+          });
+        });
+      } catch (error: any) {
+        // Concurrency handling (H01):
+        // If competing concurrent request created the user first, Prisma raises P2002.
+        // Catch P2002 and safely resolve the provisioned user.
+        if (error?.code === "P2002") {
+          user = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { supabaseId: identity.subject },
+                identity.email ? { email: identity.email } : {},
+              ],
+            },
+            include: USER_INCLUDE,
+          });
+
+          if (!user) {
+            throw error;
+          }
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    // Ensure Profile exists idempotently (e.g. legacy user edge case)
+    if (!user.profile) {
+      const displayName =
+        identity.metadata?.name ||
+        identity.metadata?.full_name ||
+        (identity.email ? identity.email.split("@")[0] : "Customer");
+      await prisma.profile.upsert({
+        where: { userId: user.id },
+        update: {},
+        create: { userId: user.id, displayName },
+      });
+      user = await prisma.user.findUniqueOrThrow({
+        where: { id: user.id },
+        include: USER_INCLUDE,
       });
     }
 
@@ -252,22 +279,7 @@ export class UsersService {
   async getUserById(id: string): Promise<AuthUser> {
     const user = await prisma.user.findUnique({
       where: { id },
-      include: {
-        profile: true,
-        userRoles: {
-          include: {
-            role: {
-              include: {
-                rolePermissions: {
-                  include: {
-                    permission: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+      include: USER_INCLUDE,
     });
 
     if (!user) {
@@ -320,7 +332,7 @@ export class UsersService {
   }
 
   /**
-   * Assign a role to a user with privilege escalation prevention & transaction
+   * Assign a role to a user with privilege escalation prevention & atomic transaction (H02, H03)
    */
   async assignRole(
     actor: AuthUser,
@@ -349,20 +361,15 @@ export class UsersService {
       throw new BadRequestException(`Role '${roleName}' does not exist`);
     }
 
-    // 4. Privilege escalation checks
+    // 4. Privilege escalation checks (H03: Symmetrical elevated role policy)
     const actorIsSuperAdmin = actor.roles.includes("super_admin");
-    if (roleName === "super_admin" && !actorIsSuperAdmin) {
+    if (ELEVATED_ROLES.includes(roleName) && !actorIsSuperAdmin) {
       throw new ForbiddenException(
-        "Only super administrators can assign the super_admin role",
-      );
-    }
-    if (roleName === "admin" && !actorIsSuperAdmin) {
-      throw new ForbiddenException(
-        "Only super administrators can assign the admin role",
+        `Only super administrators can assign elevated roles (${ELEVATED_ROLES.join(", ")})`,
       );
     }
 
-    // 5. Transaction: upsert UserRole + audit log
+    // 5. Atomic Transaction: upsert UserRole + audit log (H02)
     await prisma.$transaction(async (tx) => {
       await tx.userRole.upsert({
         where: {
@@ -378,26 +385,27 @@ export class UsersService {
           assignedBy: actor.id,
         },
       });
-    });
 
-    await this.auditService.logAction({
-      action: "ROLE_ASSIGNED",
-      entity: "User",
-      entityId: targetUserId,
-      actorId: actor.id,
-      details: {
-        role: roleName,
-        assignedBy: actor.id,
-      },
-      ipAddress: reqContext?.ipAddress,
-      userAgent: reqContext?.userAgent,
+      // Atomic audit logging inside same transaction
+      await this.auditService.logActionWithClient(tx, {
+        action: "ROLE_ASSIGNED",
+        entity: "User",
+        entityId: targetUserId,
+        actorId: actor.id,
+        details: {
+          role: roleName,
+          assignedBy: actor.id,
+        },
+        ipAddress: reqContext?.ipAddress,
+        userAgent: reqContext?.userAgent,
+      });
     });
 
     return this.getUserById(targetUserId);
   }
 
   /**
-   * Remove a role from a user with privilege escalation prevention & transaction
+   * Remove a role from a user with privilege escalation prevention & atomic transaction (H02, H03)
    */
   async removeRole(
     actor: AuthUser,
@@ -426,15 +434,15 @@ export class UsersService {
       throw new BadRequestException(`Role '${roleName}' does not exist`);
     }
 
-    // 4. Privilege escalation checks
+    // 4. Privilege escalation checks (H03: Symmetrical elevated role removal policy)
     const actorIsSuperAdmin = actor.roles.includes("super_admin");
-    if (roleName === "super_admin" && !actorIsSuperAdmin) {
+    if (ELEVATED_ROLES.includes(roleName) && !actorIsSuperAdmin) {
       throw new ForbiddenException(
-        "Only super administrators can remove the super_admin role",
+        `Only super administrators can remove elevated roles (${ELEVATED_ROLES.join(", ")})`,
       );
     }
 
-    // 5. Transaction: delete UserRole + audit log
+    // 5. Atomic Transaction: delete UserRole + audit log (H02)
     await prisma.$transaction(async (tx) => {
       await tx.userRole.deleteMany({
         where: {
@@ -442,19 +450,20 @@ export class UsersService {
           roleId: role.id,
         },
       });
-    });
 
-    await this.auditService.logAction({
-      action: "ROLE_REMOVED",
-      entity: "User",
-      entityId: targetUserId,
-      actorId: actor.id,
-      details: {
-        role: roleName,
-        removedBy: actor.id,
-      },
-      ipAddress: reqContext?.ipAddress,
-      userAgent: reqContext?.userAgent,
+      // Atomic audit logging inside same transaction
+      await this.auditService.logActionWithClient(tx, {
+        action: "ROLE_REMOVED",
+        entity: "User",
+        entityId: targetUserId,
+        actorId: actor.id,
+        details: {
+          role: roleName,
+          removedBy: actor.id,
+        },
+        ipAddress: reqContext?.ipAddress,
+        userAgent: reqContext?.userAgent,
+      });
     });
 
     return this.getUserById(targetUserId);

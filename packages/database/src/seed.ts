@@ -1,3 +1,4 @@
+import { PrismaClient } from "@prisma/client";
 import { prisma } from "./client";
 
 export const SEED_ROLES = [
@@ -157,11 +158,19 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
   ],
 };
 
-export async function seed() {
-  // 1. Seed Roles
+/**
+ * Production-safe system RBAC seed:
+ * Seeds core roles, permissions, and role-permission mappings.
+ * Does NOT create any user accounts.
+ */
+export async function seedSystemRbac(db: PrismaClient = prisma): Promise<{
+  rolesMap: Map<string, string>;
+  permissionsMap: Map<string, string>;
+}> {
+  console.log("[seed] Seeding system roles...");
   const rolesMap = new Map<string, string>();
   for (const role of SEED_ROLES) {
-    const record = await prisma.role.upsert({
+    const record = await db.role.upsert({
       where: { name: role.name },
       update: { displayName: role.displayName, description: role.description },
       create: { name: role.name, displayName: role.displayName, description: role.description, isSystem: true },
@@ -169,10 +178,10 @@ export async function seed() {
     rolesMap.set(record.name, record.id);
   }
 
-  // 2. Seed Permissions
+  console.log("[seed] Seeding system permissions...");
   const permissionsMap = new Map<string, string>();
   for (const perm of SEED_PERMISSIONS) {
-    const record = await prisma.permission.upsert({
+    const record = await db.permission.upsert({
       where: { name: perm.name },
       update: { displayName: perm.displayName, module: perm.module, description: perm.description },
       create: { name: perm.name, displayName: perm.displayName, module: perm.module, description: perm.description },
@@ -180,7 +189,7 @@ export async function seed() {
     permissionsMap.set(record.name, record.id);
   }
 
-  // 3. Link Role Permissions
+  console.log("[seed] Linking role permissions...");
   for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
     const roleId = rolesMap.get(roleName);
     if (!roleId) continue;
@@ -189,7 +198,7 @@ export async function seed() {
       const permissionId = permissionsMap.get(permName);
       if (!permissionId) continue;
 
-      await prisma.rolePermission.upsert({
+      await db.rolePermission.upsert({
         where: {
           roleId_permissionId: {
             roleId,
@@ -205,7 +214,34 @@ export async function seed() {
     }
   }
 
-  // 4. Seed Development Users
+  return { rolesMap, permissionsMap };
+}
+
+/**
+ * Development-only user seed:
+ * Seeds mock admin, customer, and superadmin users.
+ * STRICTLY GATED: Never runs in production. Requires explicit SEED_DEV_USERS=true or --dev-users.
+ */
+export async function seedDevUsers(
+  db: PrismaClient = prisma,
+  rolesMap: Map<string, string>,
+): Promise<void> {
+  const isProduction = process.env.NODE_ENV === "production";
+  const explicitDevFlag =
+    process.env.SEED_DEV_USERS === "true" ||
+    process.argv.includes("--dev-users");
+
+  if (isProduction) {
+    console.warn("[seed] Refusing to seed development users in production environment (NODE_ENV=production).");
+    return;
+  }
+
+  if (!explicitDevFlag) {
+    console.log("[seed] Skipping development users seed (SEED_DEV_USERS=true or --dev-users flag required).");
+    return;
+  }
+
+  console.log("[seed] Seeding development users...");
   const devUsers = [
     {
       email: "admin@nexustheme.dev",
@@ -228,13 +264,13 @@ export async function seed() {
   ];
 
   for (const u of devUsers) {
-    const user = await prisma.user.upsert({
+    const user = await db.user.upsert({
       where: { email: u.email },
       update: { supabaseId: u.supabaseId },
       create: { email: u.email, supabaseId: u.supabaseId },
     });
 
-    await prisma.profile.upsert({
+    await db.profile.upsert({
       where: { userId: user.id },
       update: { displayName: u.displayName },
       create: { userId: user.id, displayName: u.displayName },
@@ -242,7 +278,7 @@ export async function seed() {
 
     const roleId = rolesMap.get(u.role);
     if (roleId) {
-      await prisma.userRole.upsert({
+      await db.userRole.upsert({
         where: {
           userId_roleId: {
             userId: user.id,
@@ -258,12 +294,24 @@ export async function seed() {
       });
     }
   }
+  console.log("[seed] Development users seeded successfully.");
+}
+
+/**
+ * Main seed function:
+ * Runs system RBAC seed first. Then conditionally seeds dev users if gated conditions are met.
+ */
+export async function seed(db: PrismaClient = prisma) {
+  const { rolesMap } = await seedSystemRbac(db);
+  if (!process.argv.includes("--system-only")) {
+    await seedDevUsers(db, rolesMap);
+  }
 }
 
 if (require.main === module) {
   seed()
     .then(async () => {
-      console.log("Seeding completed successfully.");
+      console.log("Seeding process completed.");
       await prisma.$disconnect();
     })
     .catch(async (e) => {

@@ -12,6 +12,8 @@
     "prisma:migrate": "node scripts/prisma-cli.js migrate deploy",
     "prisma:push": "node scripts/prisma-cli.js db push",
     "seed": "ts-node src/seed.ts",
+    "seed:system": "ts-node src/seed.ts --system-only",
+    "seed:dev": "ts-node src/seed.ts --dev-users",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {

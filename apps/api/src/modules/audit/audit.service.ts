@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { prisma } from "@nexus/database";
+import { prisma, Prisma } from "@nexus/database";
 
 export interface LogActionParams {
   action: string;
@@ -15,37 +15,55 @@ export interface LogActionParams {
 export class AuditService {
   private readonly logger = new Logger(AuditService.name);
 
+  /**
+   * Record audit log atomically using a provided Prisma transaction client.
+   * Throws on error so the surrounding transaction will roll back if audit fails.
+   */
+  async logActionWithClient(
+    tx: Prisma.TransactionClient,
+    params: LogActionParams,
+  ): Promise<void> {
+    const sanitizedDetails = params.details
+      ? this.sanitizeDetails(params.details)
+      : undefined;
+
+    await tx.auditLog.create({
+      data: {
+        action: params.action,
+        entity: params.entity,
+        entityId: params.entityId || null,
+        actorId: params.actorId || null,
+        details: sanitizedDetails,
+        ipAddress: params.ipAddress || null,
+        userAgent: params.userAgent || null,
+      },
+    });
+
+    this.logger.log(
+      JSON.stringify({
+        level: "info",
+        service: "api-audit",
+        action: params.action,
+        entity: params.entity,
+        entityId: params.entityId,
+        actorId: params.actorId,
+        timestamp: new Date().toISOString(),
+      }),
+    );
+  }
+
+  /**
+   * Standalone audit logging (uses default prisma client).
+   * Catches errors and logs only sanitized messages (does not dump raw error objects / stacks).
+   */
   async logAction(params: LogActionParams): Promise<void> {
     try {
-      const sanitizedDetails = params.details
-        ? this.sanitizeDetails(params.details)
-        : undefined;
-
-      await prisma.auditLog.create({
-        data: {
-          action: params.action,
-          entity: params.entity,
-          entityId: params.entityId || null,
-          actorId: params.actorId || null,
-          details: sanitizedDetails,
-          ipAddress: params.ipAddress || null,
-          userAgent: params.userAgent || null,
-        },
-      });
-
-      this.logger.log(
-        JSON.stringify({
-          level: "info",
-          service: "api-audit",
-          action: params.action,
-          entity: params.entity,
-          entityId: params.entityId,
-          actorId: params.actorId,
-          timestamp: new Date().toISOString(),
-        }),
-      );
+      await this.logActionWithClient(prisma, params);
     } catch (error) {
-      this.logger.error("Failed to record audit log", error);
+      // M03: Sanitize error logging - do not dump raw error object or stack traces
+      // that could contain sensitive connection strings or credentials
+      const safeMessage = error instanceof Error ? error.message : "Unknown error";
+      this.logger.error(`Failed to record audit log: ${safeMessage}`);
     }
   }
 

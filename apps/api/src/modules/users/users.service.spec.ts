@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException, BadRequestException } from "@nestjs/common";
+import {
+  ForbiddenException,
+  BadRequestException,
+  ConflictException,
+} from "@nestjs/common";
 import { UsersService } from "./users.service";
 import { AuditService } from "../audit/audit.service";
 import { prisma } from "@nexus/database";
@@ -10,9 +14,11 @@ describe("UsersService", () => {
   beforeEach(() => {
     mockAuditService = {
       logAction: jest.fn().mockResolvedValue(undefined),
+      logActionWithClient: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     service = new UsersService(mockAuditService);
+    jest.clearAllMocks();
   });
 
   describe("getOrProvisionUser", () => {
@@ -53,7 +59,7 @@ describe("UsersService", () => {
       expect(mockAuditService.logAction).not.toHaveBeenCalled();
     });
 
-    it("provisions a new user with profile, customer role, and audit log", async () => {
+    it("provisions a new user with profile, customer role, and transactional audit log (H02)", async () => {
       jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
       jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_cust_id", name: "customer" } as any);
 
@@ -78,7 +84,7 @@ describe("UsersService", () => {
       jest.spyOn(prisma, "$transaction").mockImplementation(async (callback: any) => {
         const tx = {
           user: {
-            create: jest.fn().mockResolvedValue({ id: "usr_new_999" }),
+            create: jest.fn().mockResolvedValue({ id: "usr_new_999", email: "newuser@nexustheme.dev", supabaseId: "sub_new_999" }),
             findUniqueOrThrow: jest.fn().mockResolvedValue(createdUser),
           },
           profile: {
@@ -100,7 +106,8 @@ describe("UsersService", () => {
       expect(result.id).toBe("usr_new_999");
       expect(result.roles).toContain("customer");
       expect(result.permissions).toContain("profile.read");
-      expect(mockAuditService.logAction).toHaveBeenCalledWith(
+      expect(mockAuditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "USER_PROVISIONED",
           entity: "User",
@@ -108,9 +115,130 @@ describe("UsersService", () => {
         }),
       );
     });
+
+    // REGRESSION TEST: B02 Account Takeover Prevention via email overwrite
+    describe("Account Takeover Prevention (B02)", () => {
+      it("blocks account takeover when incoming subject tries to claim an email already bound to another subject", async () => {
+        // Step 1: not found by subject "sub_attacker_999"
+        jest.spyOn(prisma.user, "findUnique")
+          .mockImplementation(((async (args: any) => {
+            if (args.where?.supabaseId === "sub_attacker_999") {
+              return null;
+            }
+            if (args.where?.email === "admin@nexustheme.dev") {
+              // Target victim has an existing account already bound to a legitimate external subject
+              return {
+                id: "usr_victim_admin",
+                email: "admin@nexustheme.dev",
+                supabaseId: "sub_legit_admin_001", // ALREADY BOUND!
+                profile: { displayName: "Admin" },
+                userRoles: [{ role: { name: "admin", rolePermissions: [] } }],
+              } as any;
+            }
+            return null;
+          }) as any));
+
+        await expect(
+          service.getOrProvisionUser({
+            subject: "sub_attacker_999",
+            email: "admin@nexustheme.dev", // Attacker supplies admin email with arbitrary subject
+          }),
+        ).rejects.toThrow(ConflictException);
+
+        // Verify prisma.user.update was NEVER called to overwrite supabaseId
+        const updateSpy = jest.spyOn(prisma.user, "update");
+        expect(updateSpy).not.toHaveBeenCalled();
+      });
+
+      it("allows linking legacy account when existing user has supabaseId == null", async () => {
+        const legacyUser = {
+          id: "usr_legacy_1",
+          email: "legacy@nexustheme.dev",
+          supabaseId: null, // Legacy unlinked
+          profile: { displayName: "Legacy" },
+          userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
+        };
+
+        jest.spyOn(prisma.user, "findUnique")
+          .mockImplementation(((async (args: any) => {
+            if (args.where?.supabaseId === "sub_legacy_bind") return null;
+            if (args.where?.email === "legacy@nexustheme.dev") return legacyUser as any;
+            return null;
+          }) as any));
+
+        jest.spyOn(prisma.user, "update").mockResolvedValue({
+          ...legacyUser,
+          supabaseId: "sub_legacy_bind",
+        } as any);
+
+        const result = await service.getOrProvisionUser({
+          subject: "sub_legacy_bind",
+          email: "legacy@nexustheme.dev",
+        });
+
+        expect(result.id).toBe("usr_legacy_1");
+        expect(prisma.user.update).toHaveBeenCalledWith({
+          where: { id: "usr_legacy_1" },
+          data: { supabaseId: "sub_legacy_bind" },
+          include: expect.anything(),
+        });
+        expect(mockAuditService.logAction).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "ACCOUNT_LINKED",
+            entityId: "usr_legacy_1",
+          }),
+        );
+      });
+    });
+
+    // REGRESSION TEST: H01 Concurrency-safe Provisioning
+    describe("Concurrency-safe Provisioning (H01)", () => {
+      it("gracefully catches P2002 duplicate key race condition and returns existing provisioned user", async () => {
+        jest.spyOn(prisma.user, "findUnique").mockResolvedValue(null);
+        jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_cust", name: "customer" } as any);
+
+        // Simulate competing transaction winning the race, causing Prisma P2002 error
+        const p2002Error: any = new Error("Unique constraint failed");
+        p2002Error.code = "P2002";
+        jest.spyOn(prisma, "$transaction").mockRejectedValue(p2002Error);
+
+        const existingWinningUser = {
+          id: "usr_winner",
+          email: "concurrent@nexustheme.dev",
+          supabaseId: "sub_concurrent_123",
+          profile: { displayName: "Concurrent User" },
+          userRoles: [{ role: { name: "customer", rolePermissions: [] } }],
+        };
+
+        jest.spyOn(prisma.user, "findFirst").mockResolvedValue(existingWinningUser as any);
+
+        const result = await service.getOrProvisionUser({
+          subject: "sub_concurrent_123",
+          email: "concurrent@nexustheme.dev",
+        });
+
+        expect(result.id).toBe("usr_winner");
+        expect(prisma.user.findFirst).toHaveBeenCalledWith({
+          where: {
+            OR: [
+              { supabaseId: "sub_concurrent_123" },
+              { email: "concurrent@nexustheme.dev" },
+            ],
+          },
+          include: expect.anything(),
+        });
+      });
+    });
   });
 
-  describe("Privilege Escalation Prevention", () => {
+  describe("Privilege Escalation & Symmetrical Role Removal (H03)", () => {
+    const superAdminUser = {
+      id: "usr_super_1",
+      email: "super@nexus.dev",
+      roles: ["super_admin"],
+      permissions: ["user.manage"],
+    };
+
     const regularAdminUser = {
       id: "usr_admin_1",
       email: "admin@nexus.dev",
@@ -118,48 +246,121 @@ describe("UsersService", () => {
       permissions: ["user.manage"],
     };
 
-    const customerUser = {
-      id: "usr_cust_1",
-      email: "cust@nexus.dev",
-      roles: ["customer"],
-      permissions: ["profile.read"],
+    const targetUser = {
+      id: "usr_target_1",
+      email: "target@nexus.dev",
+      roles: ["admin"],
+      permissions: ["user.manage"],
     };
 
-    it("prevents self-privilege modification", async () => {
+    beforeEach(() => {
+      jest.spyOn(prisma.user, "findUnique").mockImplementation(((async (args: any) => {
+        if (args.where?.id === targetUser.id) {
+          return {
+            id: targetUser.id,
+            email: targetUser.email,
+            supabaseId: "sub_target",
+            profile: { displayName: "Target User" },
+            userRoles: [{ role: { name: "admin", rolePermissions: [] } }],
+          } as any;
+        }
+        return null;
+      }) as any));
+
+      jest.spyOn(prisma.role, "findUnique").mockImplementation(((async (args: any) => {
+        const name = args.where?.name;
+        return { id: `role_${name}`, name } as any;
+      }) as any));
+
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          userRole: {
+            upsert: jest.fn().mockResolvedValue({}),
+            deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+        };
+        return cb(tx);
+      });
+    });
+
+    it("prevents self-privilege modification on assign and remove", async () => {
       await expect(
-        service.assignRole(regularAdminUser, "usr_admin_1", "super_admin"),
+        service.assignRole(superAdminUser, superAdminUser.id, "customer"),
       ).rejects.toThrow(new ForbiddenException("Self privilege modification is not allowed"));
 
       await expect(
-        service.removeRole(regularAdminUser, "usr_admin_1", "admin"),
+        service.removeRole(superAdminUser, superAdminUser.id, "super_admin"),
       ).rejects.toThrow(new ForbiddenException("Self privilege modification is not allowed"));
     });
 
     it("prevents non-super_admin from assigning super_admin role", async () => {
-      jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "usr_target" } as any);
-      jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_super", name: "super_admin" } as any);
-
       await expect(
-        service.assignRole(regularAdminUser, "usr_target", "super_admin"),
-      ).rejects.toThrow(new ForbiddenException("Only super administrators can assign the super_admin role"));
+        service.assignRole(regularAdminUser, targetUser.id, "super_admin"),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it("prevents non-super_admin from assigning admin role", async () => {
-      jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "usr_target" } as any);
-      jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_admin", name: "admin" } as any);
-
       await expect(
-        service.assignRole(customerUser, "usr_target", "admin"),
-      ).rejects.toThrow(new ForbiddenException("Only super administrators can assign the admin role"));
+        service.assignRole(regularAdminUser, targetUser.id, "admin"),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it("prevents non-super_admin from removing super_admin role", async () => {
+      await expect(
+        service.removeRole(regularAdminUser, targetUser.id, "super_admin"),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it("prevents non-super_admin from removing admin role (H03 Symmetry)", async () => {
+      await expect(
+        service.removeRole(regularAdminUser, targetUser.id, "admin"),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it("allows super_admin to assign and remove admin role", async () => {
+      const assignResult = await service.assignRole(superAdminUser, targetUser.id, "admin");
+      expect(assignResult.id).toBe(targetUser.id);
+
+      const removeResult = await service.removeRole(superAdminUser, targetUser.id, "admin");
+      expect(removeResult.id).toBe(targetUser.id);
+    });
+
+    it("allows regular admin to assign and remove non-elevated roles (e.g. support_agent)", async () => {
+      const assignResult = await service.assignRole(regularAdminUser, targetUser.id, "support_agent");
+      expect(assignResult.id).toBe(targetUser.id);
+
+      const removeResult = await service.removeRole(regularAdminUser, targetUser.id, "support_agent");
+      expect(removeResult.id).toBe(targetUser.id);
+    });
+  });
+
+  describe("Transactional Audit Integrity (H02)", () => {
+    it("rolls back role assignment if audit log fails in the transaction", async () => {
+      const superAdminUser = {
+        id: "usr_super_1",
+        email: "super@nexus.dev",
+        roles: ["super_admin"],
+        permissions: ["user.manage"],
+      };
+
       jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "usr_target" } as any);
-      jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_super", name: "super_admin" } as any);
+      jest.spyOn(prisma.role, "findUnique").mockResolvedValue({ id: "role_supp", name: "support_agent" } as any);
+
+      // Simulate audit log throwing error inside transaction
+      mockAuditService.logActionWithClient.mockRejectedValueOnce(
+        new Error("Audit database failure"),
+      );
+
+      jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => {
+        const tx = {
+          userRole: { upsert: jest.fn().mockResolvedValue({}) },
+        };
+        return cb(tx);
+      });
 
       await expect(
-        service.removeRole(regularAdminUser, "usr_target", "super_admin"),
-      ).rejects.toThrow(new ForbiddenException("Only super administrators can remove the super_admin role"));
+        service.assignRole(superAdminUser, "usr_target", "support_agent"),
+      ).rejects.toThrow("Audit database failure");
     });
   });
 });

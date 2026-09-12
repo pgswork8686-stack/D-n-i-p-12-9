@@ -8,10 +8,17 @@ const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
 const PORTAL_URL =
   process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
 
+// Gate dev auth tools in UI (M01)
+const isDevAuthToolsEnabled =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+
 export default function AdminHomePage() {
   const [apiHealth, setApiHealth] = useState<string>("Checking...");
   const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
-  const [authToken, setAuthToken] = useState<string>("dev-admin-token");
+  const [authToken, setAuthToken] = useState<string>(
+    isDevAuthToolsEnabled ? "dev-admin-token" : "",
+  );
   const [adminAccess, setAdminAccess] = useState<{
     allowed: boolean;
     statusText: string;
@@ -101,48 +108,50 @@ export default function AdminHomePage() {
         </div>
       </div>
 
-      <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 flex items-center justify-between">
-        <div>
-          <span className="text-sm font-semibold text-gray-800">
-            Simulate Client Identity Token:
-          </span>
-          <p className="text-xs text-gray-500">
-            Test how Admin UI reacts to different user authorization levels
-          </p>
+      {isDevAuthToolsEnabled && (
+        <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 flex items-center justify-between">
+          <div>
+            <span className="text-sm font-semibold text-gray-800">
+              Simulate Client Identity Token (Dev Only):
+            </span>
+            <p className="text-xs text-gray-500">
+              Test how Admin UI reacts to different user authorization levels
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAuthToken("dev-admin-token")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                authToken === "dev-admin-token"
+                  ? "bg-[#0037b0] text-white border-[#0037b0]"
+                  : "bg-white text-gray-700 border-gray-300"
+              }`}
+            >
+              Admin Token (Pass)
+            </button>
+            <button
+              onClick={() => setAuthToken("dev-customer-token")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                authToken === "dev-customer-token"
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-white text-gray-700 border-gray-300"
+              }`}
+            >
+              Customer Token (403)
+            </button>
+            <button
+              onClick={() => setAuthToken("")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                !authToken
+                  ? "bg-red-600 text-white border-red-600"
+                  : "bg-white text-gray-700 border-gray-300"
+              }`}
+            >
+              No Token (401)
+            </button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setAuthToken("dev-admin-token")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-              authToken === "dev-admin-token"
-                ? "bg-[#0037b0] text-white border-[#0037b0]"
-                : "bg-white text-gray-700 border-gray-300"
-            }`}
-          >
-            Admin Token (Pass)
-          </button>
-          <button
-            onClick={() => setAuthToken("dev-customer-token")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-              authToken === "dev-customer-token"
-                ? "bg-amber-600 text-white border-amber-600"
-                : "bg-white text-gray-700 border-gray-300"
-            }`}
-          >
-            Customer Token (403)
-          </button>
-          <button
-            onClick={() => setAuthToken("")}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-              !authToken
-                ? "bg-red-600 text-white border-red-600"
-                : "bg-white text-gray-700 border-gray-300"
-            }`}
-          >
-            No Token (401)
-          </button>
-        </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         <Card

@@ -8,10 +8,17 @@ const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
 const ADMIN_URL =
   process.env.NEXT_PUBLIC_ADMIN_URL || "http://localhost:3002";
 
+// Gate dev auth tools in UI (M01)
+const isDevAuthToolsEnabled =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+
 export default function PortalHomePage() {
   const [apiHealth, setApiHealth] = useState<string>("Checking...");
   const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
-  const [authToken, setAuthToken] = useState<string>("dev-customer-token");
+  const [authToken, setAuthToken] = useState<string>(
+    isDevAuthToolsEnabled ? "dev-customer-token" : "",
+  );
   const [userData, setUserData] = useState<any>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -91,38 +98,40 @@ export default function PortalHomePage() {
           subtitle="Server-verified authentication state (/auth/me)"
         >
           <div className="space-y-4">
-            <div className="flex gap-2">
-              <button
-                onClick={() => setAuthToken("dev-customer-token")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                  authToken === "dev-customer-token"
-                    ? "bg-[#0037b0] text-white border-[#0037b0]"
-                    : "bg-white text-gray-700 border-gray-300"
-                }`}
-              >
-                Customer Token
-              </button>
-              <button
-                onClick={() => setAuthToken("dev-admin-token")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                  authToken === "dev-admin-token"
-                    ? "bg-[#0037b0] text-white border-[#0037b0]"
-                    : "bg-white text-gray-700 border-gray-300"
-                }`}
-              >
-                Admin Token
-              </button>
-              <button
-                onClick={() => setAuthToken("")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                  !authToken
-                    ? "bg-red-600 text-white border-red-600"
-                    : "bg-white text-gray-700 border-gray-300"
-                }`}
-              >
-                No Token
-              </button>
-            </div>
+            {isDevAuthToolsEnabled && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setAuthToken("dev-customer-token")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                    authToken === "dev-customer-token"
+                      ? "bg-[#0037b0] text-white border-[#0037b0]"
+                      : "bg-white text-gray-700 border-gray-300"
+                  }`}
+                >
+                  Customer Token
+                </button>
+                <button
+                  onClick={() => setAuthToken("dev-admin-token")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                    authToken === "dev-admin-token"
+                      ? "bg-[#0037b0] text-white border-[#0037b0]"
+                      : "bg-white text-gray-700 border-gray-300"
+                  }`}
+                >
+                  Admin Token
+                </button>
+                <button
+                  onClick={() => setAuthToken("")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
+                    !authToken
+                      ? "bg-red-600 text-white border-red-600"
+                      : "bg-white text-gray-700 border-gray-300"
+                  }`}
+                >
+                  No Token
+                </button>
+              </div>
+            )}
 
             {userData ? (
               <div className="bg-gray-50 p-4 rounded-xl space-y-2 text-sm border border-gray-200">
