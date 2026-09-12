@@ -120,6 +120,7 @@ export interface PublicProductListItemDto {
     currency: Currency;
     amount: number;
   } | null;
+  minPricesByCurrency?: Partial<Record<Currency, number>>;
   thumbnailUrl?: string | null;
   categories: { id: string; name: string; slug: string }[];
 }
@@ -207,7 +208,7 @@ export interface CreatePriceRequest {
   amount: number;
   compareAtAmount?: number;
   billingType?: BillingType;
-  billingInterval?: BillingInterval;
+  billingInterval?: BillingInterval | null;
   isActive?: boolean;
 }
 
@@ -216,7 +217,7 @@ export interface UpdatePriceRequest {
   amount?: number;
   compareAtAmount?: number;
   billingType?: BillingType;
-  billingInterval?: BillingInterval;
+  billingInterval?: BillingInterval | null;
   isActive?: boolean;
 }
 
@@ -254,8 +255,17 @@ export interface CatalogFilterQuery {
   limit?: number;
   category?: string;
   productType?: ProductType;
+  currency?: Currency;
   search?: string;
   sort?: 'newest' | 'price_asc' | 'price_desc' | 'name_asc';
+}
+
+export interface AdminProductFilterQuery {
+  page?: number;
+  limit?: number;
+  status?: ProductStatus;
+  productType?: ProductType;
+  search?: string;
 }
 
 export interface PaginatedResponse<T> {

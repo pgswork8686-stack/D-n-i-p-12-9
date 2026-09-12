@@ -90,4 +90,10 @@ describe("AdminProductsController", () => {
     expect(result.id).toBe("pr1");
     expect(productsService.createPrice).toHaveBeenCalledWith("v1", dto, "admin_1");
   });
+
+  it("delegates listProducts with AdminProductFilterQueryDto", async () => {
+    const query = { page: 1, limit: 20, status: ProductStatus.ACTIVE };
+    await controller.listProducts(query);
+    expect(productsService.listAdminProducts).toHaveBeenCalledWith(query);
+  });
 });

@@ -199,7 +199,7 @@ export class CreatePriceDto {
 
   @IsOptional()
   @IsEnum(BillingInterval)
-  billingInterval?: BillingInterval;
+  billingInterval?: BillingInterval | null;
 
   @IsOptional()
   @IsBoolean()
@@ -227,7 +227,7 @@ export class UpdatePriceDto {
 
   @IsOptional()
   @IsEnum(BillingInterval)
-  billingInterval?: BillingInterval;
+  billingInterval?: BillingInterval | null;
 
   @IsOptional()
   @IsBoolean()
@@ -317,6 +317,12 @@ export class CatalogFilterQueryDto {
   productType?: ProductType;
 
   @IsOptional()
+  @IsEnum(Currency, {
+    message: `currency must be one of: ${Object.values(Currency).join(", ")}`,
+  })
+  currency?: Currency;
+
+  @IsOptional()
   @IsString()
   search?: string;
 
@@ -324,3 +330,35 @@ export class CatalogFilterQueryDto {
   @IsIn(["newest", "price_asc", "price_desc", "name_asc"])
   sort?: "newest" | "price_asc" | "price_desc" | "name_asc" = "newest";
 }
+
+export class AdminProductFilterQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 20;
+
+  @IsOptional()
+  @IsEnum(ProductStatus, {
+    message: `status must be one of: ${Object.values(ProductStatus).join(", ")}`,
+  })
+  status?: ProductStatus;
+
+  @IsOptional()
+  @IsEnum(ProductType, {
+    message: `productType must be one of: ${Object.values(ProductType).join(", ")}`,
+  })
+  productType?: ProductType;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+}
+

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge, Card, Button } from "@nexus/ui";
+import { formatMoney } from "@nexus/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -136,7 +137,7 @@ export default function PublicProductDetailPage() {
                         {v.name}
                       </span>
                       <span className="text-sm font-bold text-gray-900">
-                        {defaultPrice ? `${defaultPrice.amount.toLocaleString()} ${defaultPrice.currency}` : "N/A"}
+                        {defaultPrice ? formatMoney(defaultPrice.amount, defaultPrice.currency) : "N/A"}
                       </span>
                     </div>
 
@@ -160,7 +161,7 @@ export default function PublicProductDetailPage() {
                     <div key={pr.id} className="flex justify-between items-center">
                       <span className="text-xs font-mono text-gray-400">{pr.currency}:</span>
                       <span className="text-lg font-extrabold text-[#0037b0]">
-                        {pr.amount.toLocaleString()} {pr.currency}
+                        {formatMoney(pr.amount, pr.currency)}
                       </span>
                     </div>
                   ))}

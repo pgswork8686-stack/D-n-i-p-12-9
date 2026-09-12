@@ -7,6 +7,10 @@ import { Badge, Button, Card } from "@nexus/ui";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+const isDevAuthToolsEnabled =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+
 export default function ProductDetailPage() {
   const params = useParams();
   const id = params.id as string;
@@ -15,7 +19,9 @@ export default function ProductDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [authToken] = useState("dev-admin-token");
+  const [authToken, setAuthToken] = useState<string>(
+    isDevAuthToolsEnabled ? "dev-admin-token" : "",
+  );
 
   // Variant modal / subform state
   const [newSku, setNewSku] = useState("");
@@ -29,6 +35,12 @@ export default function ProductDetailPage() {
   const [addingPrice, setAddingPrice] = useState(false);
 
   const fetchProduct = () => {
+    if (!authToken) {
+      setError("Access Denied (401 Unauthorized): Please provide an authenticated admin token or login via Supabase session.");
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     fetch(`${API_URL}/admin/products/${id}`, {
       headers: {
@@ -54,7 +66,7 @@ export default function ProductDetailPage() {
 
   useEffect(() => {
     if (id) fetchProduct();
-  }, [id]);
+  }, [id, authToken]);
 
   const handleStatusChange = async (newStatus: string) => {
     setError(null);
@@ -139,28 +151,51 @@ export default function ProductDetailPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <main className="max-w-5xl mx-auto py-12 px-6 font-sans">
-        <p className="text-gray-500">Loading product details...</p>
-      </main>
-    );
-  }
-
-  if (!product) {
-    return (
-      <main className="max-w-5xl mx-auto py-12 px-6 font-sans">
-        <p className="text-red-500">Product not found.</p>
-        <Link href="/admin/products" className="text-blue-600 underline mt-4 block">
-          ← Back to Catalog
-        </Link>
-      </main>
-    );
-  }
-
   return (
     <main className="max-w-5xl mx-auto py-10 px-6 font-sans">
-      <div className="flex items-center justify-between pb-6 border-b border-gray-200 mb-8">
+      {isDevAuthToolsEnabled && (
+        <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
+          <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAuthToken("dev-admin-token")}
+              className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"}`}
+            >
+              Admin Token
+            </button>
+            <button
+              onClick={() => setAuthToken("dev-customer-token")}
+              className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"}`}
+            >
+              Customer Token (403)
+            </button>
+            <button
+              onClick={() => setAuthToken("")}
+              className={`px-2.5 py-1 rounded border font-medium ${!authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"}`}
+            >
+              No Token (401)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-gray-500 py-12">Loading product details...</p>
+      ) : !product ? (
+        <div>
+          {error && (
+            <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-6 border border-red-200 text-sm">
+              <strong>Error:</strong> {error}
+            </div>
+          )}
+          <p className="text-red-500">Product not found or access denied.</p>
+          <Link href="/admin/products" className="text-blue-600 underline mt-4 block">
+            ← Back to Catalog
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between pb-6 border-b border-gray-200 mb-8">
         <div>
           <Link href="/admin/products" className="text-sm text-gray-500 hover:text-gray-700">
             ← Back to Products
@@ -361,6 +396,8 @@ export default function ProductDetailPage() {
           </form>
         </Card>
       </div>
+        </>
+      )}
     </main>
   );
 }

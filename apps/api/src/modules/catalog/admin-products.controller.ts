@@ -21,6 +21,7 @@ import {
   UpdateVariantDto,
   CreatePriceDto,
   UpdatePriceDto,
+  AdminProductFilterQueryDto,
 } from "./dto/catalog.dto";
 
 @Controller("admin")
@@ -42,14 +43,8 @@ export class AdminProductsController {
 
   @Get("products")
   @RequirePermissions("product.read")
-  async listProducts(@Query() query: any): Promise<any> {
-    return this.productsService.listAdminProducts({
-      page: query.page ? Number(query.page) : 1,
-      limit: query.limit ? Number(query.limit) : 20,
-      status: query.status,
-      productType: query.productType,
-      search: query.search,
-    });
+  async listProducts(@Query() query: AdminProductFilterQueryDto): Promise<any> {
+    return this.productsService.listAdminProducts(query);
   }
 
   @Get("products/:id")

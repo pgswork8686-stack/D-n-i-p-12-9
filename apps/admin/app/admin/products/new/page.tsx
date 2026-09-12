@@ -24,9 +24,15 @@ const FULFILLMENT_TYPES = [
   "MANUAL_SERVICE",
 ];
 
+const isDevAuthToolsEnabled =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+
 export default function NewProductPage() {
   const router = useRouter();
-  const [authToken] = useState("dev-admin-token");
+  const [authToken, setAuthToken] = useState<string>(
+    isDevAuthToolsEnabled ? "dev-admin-token" : "",
+  );
   const [formData, setFormData] = useState({
     name: "",
     slug: "",
@@ -56,6 +62,10 @@ export default function NewProductPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!authToken) {
+      setError("Access Denied (401 Unauthorized): Please provide an authenticated admin token or login via Supabase session.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
 
@@ -85,6 +95,31 @@ export default function NewProductPage() {
 
   return (
     <main className="max-w-3xl mx-auto py-10 px-6 font-sans">
+      {isDevAuthToolsEnabled && (
+        <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
+          <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAuthToken("dev-admin-token")}
+              className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"}`}
+            >
+              Admin Token
+            </button>
+            <button
+              onClick={() => setAuthToken("dev-customer-token")}
+              className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"}`}
+            >
+              Customer Token (403)
+            </button>
+            <button
+              onClick={() => setAuthToken("")}
+              className={`px-2.5 py-1 rounded border font-medium ${!authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"}`}
+            >
+              No Token (401)
+            </button>
+          </div>
+        </div>
+      )}
       <div className="pb-6 border-b border-gray-200 mb-8">
         <Link href="/admin/products" className="text-sm text-gray-500 hover:text-gray-700">
           ← Back to Products

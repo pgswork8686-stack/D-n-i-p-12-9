@@ -147,6 +147,7 @@ export class NexusApiClient {
     if (params?.category) searchParams.set("category", params.category);
     if (params?.productType) searchParams.set("productType", params.productType);
     if (params?.search) searchParams.set("search", params.search);
+    if (params?.currency) searchParams.set("currency", params.currency);
     if (params?.sort) searchParams.set("sort", params.sort);
 
     const queryStr = searchParams.toString();

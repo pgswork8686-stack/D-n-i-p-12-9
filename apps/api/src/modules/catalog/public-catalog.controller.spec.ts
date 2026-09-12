@@ -58,9 +58,9 @@ describe("PublicCatalogControllers", () => {
       expect(categoriesService.listCategories).toHaveBeenCalledWith(false);
     });
 
-    it("getCategoryProducts checks category exists and filters products", async () => {
+    it("getCategoryProducts checks category exists and is active, and filters products", async () => {
       await categoriesController.getCategoryProducts("wordpress", { page: 1 });
-      expect(categoriesService.getCategoryBySlug).toHaveBeenCalledWith("wordpress");
+      expect(categoriesService.getCategoryBySlug).toHaveBeenCalledWith("wordpress", true);
       expect(productsService.listPublicProducts).toHaveBeenCalledWith(
         expect.objectContaining({ category: "wordpress" }),
       );

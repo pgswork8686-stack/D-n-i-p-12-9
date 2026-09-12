@@ -414,7 +414,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vEle1.id, currency: "VND", amount: 299000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vEle1.id, currency: "USD", amount: 12, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle1.id, currency: "USD", amount: 1200, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -427,7 +427,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vEle3.id, currency: "VND", amount: 599000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vEle3.id, currency: "USD", amount: 24, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle3.id, currency: "USD", amount: 2400, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -440,7 +440,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vEle10.id, currency: "VND", amount: 999000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vEle10.id, currency: "USD", amount: 39, billingType: "ONE_TIME", isActive: true },
+      { variantId: vEle10.id, currency: "USD", amount: 3900, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -494,7 +494,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vNex1.id, currency: "VND", amount: 499000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vNex1.id, currency: "USD", amount: 20, billingType: "ONE_TIME", isActive: true },
+      { variantId: vNex1.id, currency: "USD", amount: 2000, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -507,7 +507,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vNexUnl.id, currency: "VND", amount: 1499000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vNexUnl.id, currency: "USD", amount: 60, billingType: "ONE_TIME", isActive: true },
+      { variantId: vNexUnl.id, currency: "USD", amount: 6000, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -550,7 +550,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vFigPersonal.id, currency: "VND", amount: 199000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vFigPersonal.id, currency: "USD", amount: 8, billingType: "ONE_TIME", isActive: true },
+      { variantId: vFigPersonal.id, currency: "USD", amount: 800, billingType: "ONE_TIME", isActive: true },
     ],
   });
 
@@ -563,7 +563,7 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
   await db.productPrice.createMany({
     data: [
       { variantId: vFigTeam.id, currency: "VND", amount: 799000, billingType: "ONE_TIME", isActive: true },
-      { variantId: vFigTeam.id, currency: "USD", amount: 32, billingType: "ONE_TIME", isActive: true },
+      { variantId: vFigTeam.id, currency: "USD", amount: 3200, billingType: "ONE_TIME", isActive: true },
     ],
   });
 

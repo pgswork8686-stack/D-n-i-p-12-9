@@ -35,8 +35,8 @@ export class PublicCategoriesController {
     @Param("slug") slug: string,
     @Query() query: CatalogFilterQueryDto,
   ) {
-    // Verify category exists and is active
-    await this.categoriesService.getCategoryBySlug(slug);
+    // Verify category exists and is active (throws 404 if not found or archived)
+    await this.categoriesService.getCategoryBySlug(slug, true);
     return this.productsService.listPublicProducts({
       ...query,
       category: slug,

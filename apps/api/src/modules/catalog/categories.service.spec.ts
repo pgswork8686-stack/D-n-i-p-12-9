@@ -9,6 +9,7 @@ jest.mock("@nexus/database", () => {
   return {
     ...actual,
     prisma: {
+      $transaction: jest.fn((cb) => cb(prisma)),
       category: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -28,6 +29,7 @@ describe("CategoriesService", () => {
 
     const mockAuditService = {
       logAction: jest.fn().mockResolvedValue({}),
+      logActionWithClient: jest.fn().mockResolvedValue({}),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -42,7 +44,7 @@ describe("CategoriesService", () => {
   });
 
   describe("createCategory", () => {
-    it("creates category and logs CATEGORY_CREATED audit", async () => {
+    it("creates category atomically and logs CATEGORY_CREATED audit via tx client", async () => {
       (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce(null);
       (prisma.category.create as jest.Mock).mockResolvedValueOnce({
         id: "cat_1",
@@ -57,7 +59,8 @@ describe("CategoriesService", () => {
       );
 
       expect(result.id).toBe("cat_1");
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "CATEGORY_CREATED",
           entity: "Category",
@@ -90,6 +93,22 @@ describe("CategoriesService", () => {
         ),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it("rolls back transaction if audit logging fails", async () => {
+      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce(null);
+      (prisma.category.create as jest.Mock).mockResolvedValueOnce({
+        id: "cat_fail",
+        name: "Fail Cat",
+        slug: "fail-cat",
+      });
+      (auditService.logActionWithClient as jest.Mock).mockRejectedValueOnce(
+        new Error("Audit DB error"),
+      );
+
+      await expect(
+        service.createCategory({ name: "Fail Cat", slug: "fail-cat" }, "admin_user_id"),
+      ).rejects.toThrow("Audit DB error");
+    });
   });
 
   describe("updateCategory", () => {
@@ -104,7 +123,7 @@ describe("CategoriesService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it("updates category and logs CATEGORY_UPDATED audit", async () => {
+    it("updates category atomically and logs CATEGORY_UPDATED audit via tx client", async () => {
       (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce({
         id: "cat_1",
         slug: "plugins",
@@ -122,7 +141,8 @@ describe("CategoriesService", () => {
       );
 
       expect(result.name).toBe("WordPress Plugins");
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "CATEGORY_UPDATED",
           entity: "Category",
@@ -133,11 +153,39 @@ describe("CategoriesService", () => {
     });
   });
 
-  describe("getCategoryById", () => {
-    it("throws NotFoundException if category does not exist", async () => {
-      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce(null);
+  describe("getCategoryBySlug and visibility", () => {
+    it("returns category if found without active check", async () => {
+      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce({
+        id: "cat_archived",
+        slug: "archived-cat",
+        status: CategoryStatus.ARCHIVED,
+      });
 
-      await expect(service.getCategoryById("unknown")).rejects.toThrow(NotFoundException);
+      const cat = await service.getCategoryBySlug("archived-cat", false);
+      expect(cat.id).toBe("cat_archived");
+    });
+
+    it("throws NotFoundException when onlyActive=true and category is ARCHIVED", async () => {
+      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce({
+        id: "cat_archived",
+        slug: "archived-cat",
+        status: CategoryStatus.ARCHIVED,
+      });
+
+      await expect(service.getCategoryBySlug("archived-cat", true)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it("returns category when onlyActive=true and category is ACTIVE", async () => {
+      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce({
+        id: "cat_active",
+        slug: "active-cat",
+        status: CategoryStatus.ACTIVE,
+      });
+
+      const cat = await service.getCategoryBySlug("active-cat", true);
+      expect(cat.id).toBe("cat_active");
     });
   });
 });
