@@ -163,7 +163,10 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
  * Seeds core roles, permissions, and role-permission mappings.
  * Does NOT create any user accounts.
  */
-export async function seedSystemRbac(db: PrismaClient = prisma): Promise<{
+export async function seedSystemRbac(
+  db: PrismaClient = prisma,
+  rolePermissionMap: Record<string, string[]> = ROLE_PERMISSION_MAP,
+): Promise<{
   rolesMap: Map<string, string>;
   permissionsMap: Map<string, string>;
 }> {
@@ -189,15 +192,35 @@ export async function seedSystemRbac(db: PrismaClient = prisma): Promise<{
     permissionsMap.set(record.name, record.id);
   }
 
-  console.log("[seed] Linking role permissions...");
-  for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
+  console.log("[seed] Synchronizing role permissions deterministically (upsert desired, revoke stale)...");
+  for (const [roleName, permNames] of Object.entries(rolePermissionMap)) {
     const roleId = rolesMap.get(roleName);
     if (!roleId) continue;
 
+    const desiredPermissionIds: string[] = [];
     for (const permName of permNames) {
       const permissionId = permissionsMap.get(permName);
-      if (!permissionId) continue;
+      if (permissionId) {
+        desiredPermissionIds.push(permissionId);
+      }
+    }
 
+    // 1. Revoke stale permissions no longer in desired set for this system role
+    if (desiredPermissionIds.length === 0) {
+      await db.rolePermission.deleteMany({
+        where: { roleId },
+      });
+    } else {
+      await db.rolePermission.deleteMany({
+        where: {
+          roleId,
+          permissionId: { notIn: desiredPermissionIds },
+        },
+      });
+    }
+
+    // 2. Ensure all desired permissions are present for this role
+    for (const permissionId of desiredPermissionIds) {
       await db.rolePermission.upsert({
         where: {
           roleId_permissionId: {

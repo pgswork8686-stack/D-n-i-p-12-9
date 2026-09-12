@@ -46,11 +46,16 @@ docker compose up -d
 pnpm install
 ```
 
-### Bước 4: Khởi tạo Database Schema (Prisma)
+### Bước 4: Khởi tạo Database Schema & Seed RBAC
 ```bash
-pnpm --filter @nexus/database prisma:generate
-# Chạy migration khi Postgres đã sẵn sàng:
-pnpm --filter @nexus/database prisma:migrate
+# 1. Chạy migrations (PostgreSQL):
+pnpm db:migrate
+
+# 2. Seed System RBAC (Production-safe: 8 system roles, 22 permissions, 0 users):
+pnpm db:seed:system
+
+# 3. (Tùy chọn môi trường Dev) Seed 3 tài khoản phát triển mẫu (admin, customer, superadmin):
+SEED_DEV_USERS=true pnpm db:seed:dev
 ```
 
 ### Bước 5: Chạy toàn bộ ứng dụng ở chế độ dev

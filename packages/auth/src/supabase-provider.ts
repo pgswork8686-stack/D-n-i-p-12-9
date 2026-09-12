@@ -33,12 +33,7 @@ export class SupabaseAuthProvider implements IAuthService {
       }
 
       const user = data.user;
-      const emailVerified = Boolean(
-        user.email_confirmed_at ||
-        (user as any).confirmed_at ||
-        user.user_metadata?.email_verified ||
-        user.app_metadata?.email_verified,
-      );
+      const emailVerified = Boolean(user.email && user.email_confirmed_at);
 
       return {
         subject: user.id,
@@ -60,12 +55,7 @@ export class SupabaseAuthProvider implements IAuthService {
       }
 
       const user = data.user;
-      const emailVerified = Boolean(
-        user.email_confirmed_at ||
-        (user as any).confirmed_at ||
-        user.user_metadata?.email_verified ||
-        user.app_metadata?.email_verified,
-      );
+      const emailVerified = Boolean(user.email && user.email_confirmed_at);
 
       return {
         subject: data.user.id,

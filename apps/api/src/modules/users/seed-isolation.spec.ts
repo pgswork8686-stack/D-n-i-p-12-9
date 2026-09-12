@@ -1,4 +1,4 @@
-import { seedDevUsers } from "@nexus/database";
+import { seedDevUsers, seedSystemRbac } from "@nexus/database";
 
 describe("Database Seed Isolation (B01)", () => {
   const originalEnv = process.env;
@@ -68,3 +68,89 @@ describe("Database Seed Isolation (B01)", () => {
     expect(mockPrisma.userRole.upsert).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("Deterministic System RBAC Seed Revoke (H01)", () => {
+  it("deletes stale rolePermission records when a permission is removed from role map", async () => {
+    const mockPrisma: any = {
+      role: {
+        upsert: jest.fn().mockImplementation(({ where }) =>
+          Promise.resolve({ id: `id_${where.name}`, name: where.name }),
+        ),
+      },
+      permission: {
+        upsert: jest.fn().mockImplementation(({ where }) =>
+          Promise.resolve({ id: `id_${where.name}`, name: where.name }),
+        ),
+      },
+      rolePermission: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+    };
+
+    // Simulate role map with only 'profile.read' for customer (revoking previously assigned perms)
+    const customMap: Record<string, string[]> = {
+      customer: ["profile.read"],
+    };
+
+    await seedSystemRbac(mockPrisma, customMap);
+
+    // Verify deleteMany was called to revoke any permissions not in ['id_profile.read']
+    expect(mockPrisma.rolePermission.deleteMany).toHaveBeenCalledWith({
+      where: {
+        roleId: "id_customer",
+        permissionId: {
+          notIn: ["id_profile.read"],
+        },
+      },
+    });
+
+    // Verify upsert was called for the desired permission
+    expect(mockPrisma.rolePermission.upsert).toHaveBeenCalledWith({
+      where: {
+        roleId_permissionId: {
+          roleId: "id_customer",
+          permissionId: "id_profile.read",
+        },
+      },
+      update: {},
+      create: {
+        roleId: "id_customer",
+        permissionId: "id_profile.read",
+      },
+    });
+  });
+
+  it("deletes all role permissions when desired permission list is empty", async () => {
+    const mockPrisma: any = {
+      role: {
+        upsert: jest.fn().mockImplementation(({ where }) =>
+          Promise.resolve({ id: `id_${where.name}`, name: where.name }),
+        ),
+      },
+      permission: {
+        upsert: jest.fn().mockImplementation(({ where }) =>
+          Promise.resolve({ id: `id_${where.name}`, name: where.name }),
+        ),
+      },
+      rolePermission: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 5 }),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
+    };
+
+    const emptyMap: Record<string, string[]> = {
+      customer: [],
+    };
+
+    await seedSystemRbac(mockPrisma, emptyMap);
+
+    expect(mockPrisma.rolePermission.deleteMany).toHaveBeenCalledWith({
+      where: {
+        roleId: "id_customer",
+      },
+    });
+    expect(mockPrisma.rolePermission.upsert).not.toHaveBeenCalled();
+  });
+});
+
