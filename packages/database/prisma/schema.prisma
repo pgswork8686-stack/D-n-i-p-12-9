@@ -1,0 +1,50 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// NOTE: Phase 1 Foundation User model.
+// In Phase 2, the simple role string will be migrated to the full RBAC tables:
+// users, profiles, roles, permissions, user_roles, role_permissions
+// as specified in PROJECT_CONTEXT.md.
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  role      String   @default("USER") // Phase 1 foundation field (e.g. "USER", "ADMIN")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String
+  entity      String
+  entityId    String?  @map("entity_id")
+  actorId     String?  @map("actor_id")
+  details     Json?
+  ipAddress   String?  @map("ip_address")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model SystemHealthTest {
+  id        String   @id @default(uuid())
+  pingAt    DateTime @default(now()) @map("ping_at")
+  service   String   @default("api")
+
+  @@map("system_health_tests")
+}

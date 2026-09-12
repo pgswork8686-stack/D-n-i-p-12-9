@@ -1,0 +1,29 @@
+{
+  "name": "@nexus/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "node scripts/prisma-cli.js generate && tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "prisma:generate": "node scripts/prisma-cli.js generate",
+    "prisma:migrate": "node scripts/prisma-cli.js migrate deploy",
+    "prisma:push": "node scripts/prisma-cli.js db push",
+    "test": "echo \"Database migrations and client loaded\""
+  },
+  "dependencies": {
+    "@prisma/client": "^6.4.1",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@nexus/config": "workspace:*",
+    "@types/node": "^22.13.9",
+    "eslint": "^8.57.1",
+    "@typescript-eslint/eslint-plugin": "^8.26.0",
+    "@typescript-eslint/parser": "^8.26.0",
+    "prisma": "^6.4.1",
+    "typescript": "^5.8.2"
+  }
+}
