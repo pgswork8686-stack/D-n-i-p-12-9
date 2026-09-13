@@ -9,6 +9,10 @@ import { prisma, Category, CategoryStatus } from "@nexus/database";
 import { AuditService } from "../audit/audit.service";
 import { CreateCategoryDto, UpdateCategoryDto } from "./dto/catalog.dto";
 
+export interface CategoryTreeNode extends Category {
+  children: CategoryTreeNode[];
+}
+
 @Injectable()
 export class CategoriesService {
   private readonly logger = new Logger(CategoriesService.name);
@@ -56,76 +60,109 @@ export class CategoriesService {
     });
   }
 
-  async listCategories(includeArchived = false): Promise<Category[]> {
+  private buildTree(
+    categories: Category[],
+    includeArchived: boolean,
+  ): {
+    roots: CategoryTreeNode[];
+    idMap: Map<string, CategoryTreeNode>;
+  } {
+    const idMap = new Map<string, CategoryTreeNode>();
+
+    for (const cat of categories) {
+      idMap.set(cat.id, {
+        ...cat,
+        children: [],
+      });
+    }
+
+    const roots: CategoryTreeNode[] = [];
+
+    for (const node of idMap.values()) {
+      if (!node.parentId) {
+        roots.push(node);
+      } else {
+        const parent = idMap.get(node.parentId);
+        if (parent) {
+          parent.children.push(node);
+        } else if (includeArchived) {
+          // If in admin mode and parent category does not exist in DB, treat as root so it is visible
+          roots.push(node);
+        }
+        // In public mode (!includeArchived):
+        // If parent is not in idMap, parent is ARCHIVED (or missing).
+        // The node is an orphan of an inactive ancestor and is NOT attached to roots.
+      }
+    }
+
+    return { roots, idMap };
+  }
+
+  async listCategories(includeArchived = false): Promise<CategoryTreeNode[]> {
     const categories = await prisma.category.findMany({
       where: includeArchived ? {} : { status: CategoryStatus.ACTIVE },
-      include: {
-        children: includeArchived
-          ? { orderBy: { sortOrder: "asc" } }
-          : {
-              where: { status: CategoryStatus.ACTIVE },
-              orderBy: { sortOrder: "asc" },
-            },
-      },
       orderBy: { sortOrder: "asc" },
     });
 
-    if (includeArchived) {
-      return categories;
-    }
-
-    // Recursive tree sanitizer ensuring only ACTIVE categories exist at any depth
-    const sanitizeActiveTree = (items: any[]): any[] => {
-      return items
-        .filter((cat) => cat.status === CategoryStatus.ACTIVE)
-        .map((cat) => {
-          if (cat.children && Array.isArray(cat.children)) {
-            return {
-              ...cat,
-              children: sanitizeActiveTree(cat.children),
-            };
-          }
-          return cat;
-        });
-    };
-
-    return sanitizeActiveTree(categories);
+    const { roots } = this.buildTree(categories, includeArchived);
+    return roots;
   }
 
-  async getCategoryById(id: string): Promise<Category> {
-    const category = await prisma.category.findUnique({
-      where: { id },
-      include: {
-        children: true,
-      },
+  async getCategoryById(id: string): Promise<CategoryTreeNode> {
+    const categories = await prisma.category.findMany({
+      orderBy: { sortOrder: "asc" },
     });
+    const { idMap } = this.buildTree(categories, true);
+    const category = idMap.get(id);
     if (!category) {
       throw new NotFoundException(`Category with ID '${id}' not found`);
     }
     return category;
   }
 
-  async getCategoryBySlug(slug: string, onlyActive = false): Promise<Category> {
-    const category = await prisma.category.findUnique({
-      where: { slug },
-      include: {
-        children: onlyActive
-          ? {
-              where: { status: CategoryStatus.ACTIVE },
-              orderBy: { sortOrder: "asc" },
-            }
-          : { orderBy: { sortOrder: "asc" } },
-      },
+  async getCategoryBySlug(slug: string, onlyActive = false): Promise<CategoryTreeNode> {
+    if (onlyActive) {
+      const activeCategories = await prisma.category.findMany({
+        where: { status: CategoryStatus.ACTIVE },
+        orderBy: { sortOrder: "asc" },
+      });
+
+      const { idMap } = this.buildTree(activeCategories, false);
+      const target = Array.from(idMap.values()).find((cat) => cat.slug === slug);
+      if (!target) {
+        throw new NotFoundException(`Category with slug '${slug}' not found`);
+      }
+
+      // Check transitive reachability to an active root:
+      // Every ancestor in the chain must exist in idMap and terminate at a root (parentId === null).
+      const visited = new Set<string>([target.id]);
+      let current: CategoryTreeNode | undefined = target;
+      while (current.parentId) {
+        if (visited.has(current.parentId)) {
+          throw new BadRequestException("Cycle detected in category hierarchy");
+        }
+        visited.add(current.parentId);
+        const parent = idMap.get(current.parentId);
+        if (!parent) {
+          // An ancestor is archived or missing!
+          throw new NotFoundException(`Category with slug '${slug}' not found`);
+        }
+        current = parent;
+      }
+
+      return target;
+    }
+
+    // Admin / full lookup
+    const allCategories = await prisma.category.findMany({
+      orderBy: { sortOrder: "asc" },
     });
-    if (!category || (onlyActive && category.status !== CategoryStatus.ACTIVE)) {
+    const { idMap } = this.buildTree(allCategories, true);
+    const target = Array.from(idMap.values()).find((cat) => cat.slug === slug);
+    if (!target) {
       throw new NotFoundException(`Category with slug '${slug}' not found`);
     }
-    if (onlyActive && (category as any).children && Array.isArray((category as any).children)) {
-      (category as any).children = (category as any).children.filter(
-        (child: any) => child.status === CategoryStatus.ACTIVE,
-      );
-    }
-    return category;
+    return target;
   }
 
   async updateCategory(
@@ -160,6 +197,22 @@ export class CategoriesService {
         });
         if (!parent) {
           throw new BadRequestException(`Parent category with ID '${dto.parentId}' not found`);
+        }
+
+        // Prevent cyclic hierarchy: check that id is not an ancestor of dto.parentId
+        let checkId: string | null = parent.parentId;
+        const seen = new Set<string>([id, dto.parentId]);
+        while (checkId) {
+          if (checkId === id) {
+            throw new BadRequestException("Cannot set category parent to one of its descendants");
+          }
+          if (seen.has(checkId)) break;
+          seen.add(checkId);
+          const ancestor = await tx.category.findUnique({
+            where: { id: checkId },
+            select: { parentId: true },
+          });
+          checkId = ancestor?.parentId || null;
         }
       }
 
