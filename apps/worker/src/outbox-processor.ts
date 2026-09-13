@@ -122,20 +122,24 @@ export async function processOutboxEvents(
       // NO license allocation (Phase 6)
       // NO license key generation (Phase 7)
       if (event.eventType === "ORDER_PAID") {
-        const orderId =
-          (event.payload as any)?.orderId || event.aggregateId;
-        if (orderId) {
-          const orderExists = prisma.order?.findUnique
-            ? await prisma.order.findUnique({
-                where: { id: orderId },
-                select: { id: true },
-              })
-            : { id: orderId };
-
-          if (orderExists) {
-            await issueEntitlementsForOrder(orderId);
-          }
+        if (event.aggregateType !== "Order") {
+          throw new Error(
+            `Invalid aggregateType '${event.aggregateType}' for eventType 'ORDER_PAID', expected 'Order'`,
+          );
         }
+
+        const authoritativeOrderId = event.aggregateId;
+        const payloadOrderId = (event.payload as any)?.orderId;
+
+        if (payloadOrderId && payloadOrderId !== authoritativeOrderId) {
+          throw new Error(
+            `Payload orderId '${payloadOrderId}' does not match aggregateId '${authoritativeOrderId}'`,
+          );
+        }
+
+        await issueEntitlementsForOrder(authoritativeOrderId);
+      } else {
+        throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }
 
       const finalizeResult = await prisma.outboxEvent.updateMany({

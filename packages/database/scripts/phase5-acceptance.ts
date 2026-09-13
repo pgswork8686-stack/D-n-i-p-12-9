@@ -94,7 +94,7 @@ function startWorker(workerId: string, pollIntervalMs = "500"): ChildProcess {
 
 async function runAcceptance() {
   console.log("==================================================");
-  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 2)");
+  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 3 — 26 GATES)");
   console.log("==================================================\n");
 
   const customerToken = "dev-customer-token";
@@ -251,13 +251,13 @@ async function runAcceptance() {
     const item2 = dbOrderItems.find((i) => i.variantId === expiringVariant.id);
     if (!item1 || !item2) throw new Error("Order items do not match expected variants");
 
-    if (item1.isLifetime !== true || item1.durationDays !== null) {
-      throw new Error(`Item 1 snapshot invalid: isLifetime=${item1.isLifetime}, durationDays=${item1.durationDays}`);
+    if (item1.snapshotVersion !== 1 || item1.isLifetime !== true || item1.durationDays !== null) {
+      throw new Error(`Item 1 snapshot invalid: snapshotVersion=${item1.snapshotVersion}, isLifetime=${item1.isLifetime}, durationDays=${item1.durationDays}`);
     }
-    if (item2.isLifetime !== false || item2.durationDays !== 30 || item2.maxActivations !== expiringPlan.maxActivations) {
-      throw new Error(`Item 2 snapshot invalid: isLifetime=${item2.isLifetime}, durationDays=${item2.durationDays}, maxActivations=${item2.maxActivations}`);
+    if (item2.snapshotVersion !== 1 || item2.isLifetime !== false || item2.durationDays !== 30 || item2.maxActivations !== expiringPlan.maxActivations) {
+      throw new Error(`Item 2 snapshot invalid: snapshotVersion=${item2.snapshotVersion}, isLifetime=${item2.isLifetime}, durationDays=${item2.durationDays}, maxActivations=${item2.maxActivations}`);
     }
-    console.log("✓ Gate 2 passed: Policy snapshot captured directly in OrderItems\n");
+    console.log("✓ Gate 2 passed: Policy snapshot captured directly in OrderItems (snapshotVersion=1)\n");
 
     // ----------------------------------------------------
     // Gate 3: Zero Entitlements for PENDING_PAYMENT Order
@@ -422,51 +422,55 @@ async function runAcceptance() {
     const payment3 = chk3Data.payment;
 
     // Mutate the catalog plan to NOT be lifetime anymore!
-    if (lifetimeVariant.licensePlanId) {
-      await prisma.licensePlan.update({
-        where: { id: lifetimeVariant.licensePlanId },
-        data: { isLifetime: false, durationDays: 14 },
-      });
-    }
+    try {
+      if (lifetimeVariant.licensePlanId) {
+        await prisma.licensePlan.update({
+          where: { id: lifetimeVariant.licensePlanId },
+          data: { isLifetime: false, durationDays: 14 },
+        });
+      }
 
-    // Now pay order 3
-    const sig3 = getTestWebhookSignature({
-      externalEventId: `wh_evt_gate8_${Date.now()}`,
-      paymentId: payment3.id,
-      eventType: "payment.succeeded",
-    });
-    await fetch(`${API_BASE}/payments/test-callback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-test-signature": sig3 },
-      body: JSON.stringify({
-        externalEventId: `wh_evt_gate8_${Date.now()}`,
+      // Now pay order 3
+      const extEvtId3 = `wh_evt_gate8_${Date.now()}`;
+      const sig3 = getTestWebhookSignature({
+        externalEventId: extEvtId3,
         paymentId: payment3.id,
         eventType: "payment.succeeded",
-        amount: payment3.amount,
-        currency: "USD",
-      }),
-    });
-
-    // Wait for worker to issue entitlement
-    let ent3 = null;
-    const poll3Start = Date.now();
-    while (Date.now() - poll3Start < 10000) {
-      await sleep(300);
-      ent3 = await prisma.entitlement.findFirst({ where: { orderId: order3.id } });
-      if (ent3) break;
-    }
-
-    if (!ent3) throw new Error("Worker failed to issue entitlement for order 3");
-    if (ent3.expiresAt !== null) {
-      throw new Error(`Gate 8 failed: Entitlement has expiresAt=${ent3.expiresAt}, expected null (lifetime snapshot)`);
-    }
-
-    // Restore lifetime plan
-    if (lifetimeVariant.licensePlanId) {
-      await prisma.licensePlan.update({
-        where: { id: lifetimeVariant.licensePlanId },
-        data: { isLifetime: true, durationDays: null },
       });
+      const pay3Res = await fetch(`${API_BASE}/payments/test-callback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-test-signature": sig3 },
+        body: JSON.stringify({
+          externalEventId: extEvtId3,
+          paymentId: payment3.id,
+          eventType: "payment.succeeded",
+          amount: payment3.amount,
+          currency: "USD",
+        }),
+      });
+      if (!pay3Res.ok) throw new Error(`Gate 8 payment webhook failed: ${await pay3Res.text()}`);
+
+      // Wait for worker to issue entitlement
+      let ent3 = null;
+      const poll3Start = Date.now();
+      while (Date.now() - poll3Start < 10000) {
+        await sleep(300);
+        ent3 = await prisma.entitlement.findFirst({ where: { orderId: order3.id } });
+        if (ent3) break;
+      }
+
+      if (!ent3) throw new Error("Worker failed to issue entitlement for order 3");
+      if (ent3.expiresAt !== null) {
+        throw new Error(`Gate 8 failed: Entitlement has expiresAt=${ent3.expiresAt}, expected null (lifetime snapshot)`);
+      }
+    } finally {
+      // Restore lifetime plan
+      if (lifetimeVariant.licensePlanId) {
+        await prisma.licensePlan.update({
+          where: { id: lifetimeVariant.licensePlanId },
+          data: { isLifetime: true, durationDays: null },
+        });
+      }
     }
     console.log("✓ Gate 8 passed: Order strictly honoured lifetime snapshot despite catalog modification\n");
 
@@ -526,6 +530,7 @@ async function runAcceptance() {
         lineTotalAmount: 1500,
         currency: Currency.USD,
         isLifetime: true,
+        snapshotVersion: 1,
       },
     });
 
@@ -578,22 +583,24 @@ async function runAcceptance() {
     const order5 = chk5Data.order;
     const payment5 = chk5Data.payment;
 
+    const extEvtId5 = `wh_evt_gate11_${Date.now()}`;
     const sig5 = getTestWebhookSignature({
-      externalEventId: `wh_evt_gate11_${Date.now()}`,
+      externalEventId: extEvtId5,
       paymentId: payment5.id,
       eventType: "payment.succeeded",
     });
-    await fetch(`${API_BASE}/payments/test-callback`, {
+    const pay5Res = await fetch(`${API_BASE}/payments/test-callback`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-test-signature": sig5 },
       body: JSON.stringify({
-        externalEventId: `wh_evt_gate11_${Date.now()}`,
+        externalEventId: extEvtId5,
         paymentId: payment5.id,
         eventType: "payment.succeeded",
         amount: payment5.amount,
         currency: "USD",
       }),
     });
+    if (!pay5Res.ok) throw new Error(`Gate 11 payment webhook failed: ${await pay5Res.text()}`);
 
     // Wait for either worker to process
     let ent5 = null;
@@ -792,6 +799,7 @@ async function runAcceptance() {
         currency: Currency.USD,
         isLifetime: false,
         durationDays: 1,
+        snapshotVersion: 1,
       },
     });
 
@@ -811,6 +819,7 @@ async function runAcceptance() {
         currency: Currency.USD,
         isLifetime: false,
         durationDays: 1,
+        snapshotVersion: 1,
       },
     });
 
@@ -893,6 +902,7 @@ async function runAcceptance() {
         lineTotalAmount: 1000,
         currency: Currency.USD,
         isLifetime: true,
+        snapshotVersion: 1,
       },
     });
 
@@ -967,8 +977,293 @@ async function runAcceptance() {
     }
     console.log("✓ Gate 20 passed: Deterministic UTC calendar month clamping and policy precedence verified\n");
 
+    // ----------------------------------------------------
+    // Gate 21: Legacy OrderItem Missing Snapshot Policy Fail-Closed
+    // ----------------------------------------------------
+    console.log("[Gate 21] Verifying legacy OrderItem missing snapshotVersion fails closed (no silent lifetime conversion)...");
+    const legacyOrder = await prisma.order.create({
+      data: {
+        id: `ord-legacy-${Date.now()}`,
+        orderNumber: `ORD-LEGACY-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    await prisma.orderItem.create({
+      data: {
+        id: `item-legacy-${Date.now()}`,
+        orderId: legacyOrder.id,
+        productId: lifetimeVariant.productId,
+        variantId: lifetimeVariant.id,
+        productName: "Legacy Theme",
+        variantName: "Legacy 30-Day",
+        sku: `SKU-LEGACY-${Date.now()}`,
+        productType: ProductType.LICENSED_SOFTWARE,
+        fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        isLifetime: false,
+        durationDays: null,
+        durationMonths: null,
+        snapshotVersion: null, // Legacy pre-Phase 5 OrderItem
+      },
+    });
+
+    const legacyOutbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: legacyOrder.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: legacyOrder.id },
+        status: "PENDING",
+      },
+    });
+
+    // Wait for worker to attempt processing
+    const gate21Start = Date.now();
+    let legacyProcessed = null;
+    while (Date.now() - gate21Start < 10000) {
+      await sleep(300);
+      legacyProcessed = await prisma.outboxEvent.findUnique({ where: { id: legacyOutbox.id } });
+      if (legacyProcessed && legacyProcessed.retryCount >= 1) break;
+    }
+
+    if (!legacyProcessed || legacyProcessed.status === "PROCESSED") {
+      throw new Error(`Expected legacy outbox event to fail, but got status=${legacyProcessed?.status}`);
+    }
+    if (!legacyProcessed.error?.includes("Missing entitlement policy snapshot for legacy OrderItem")) {
+      throw new Error(`Unexpected error message for legacy item: ${legacyProcessed.error}`);
+    }
+
+    const legacyEnts = await prisma.entitlement.findMany({ where: { orderId: legacyOrder.id } });
+    if (legacyEnts.length !== 0) {
+      throw new Error(`CRITICAL: Silent entitlement created for legacy OrderItem! count=${legacyEnts.length}`);
+    }
+    console.log("✓ Gate 21 passed: Legacy OrderItem failed closed with explicit error, 0 silent entitlements created\n");
+
+    // ----------------------------------------------------
+    // Gate 22: Malformed Finite Plan Policy Fail-Closed
+    // ----------------------------------------------------
+    console.log("[Gate 22] Verifying malformed finite plan snapshot fails closed...");
+    const malformedOrder = await prisma.order.create({
+      data: {
+        id: `ord-malformed-${Date.now()}`,
+        orderNumber: `ORD-MALFORMED-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    await prisma.orderItem.create({
+      data: {
+        id: `item-malformed-${Date.now()}`,
+        orderId: malformedOrder.id,
+        productId: expiringVariant.productId,
+        variantId: expiringVariant.id,
+        productName: "Malformed Plugin",
+        variantName: "Finite No Duration",
+        sku: `SKU-MALFORMED-${Date.now()}`,
+        productType: ProductType.LICENSED_SOFTWARE,
+        fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        snapshotVersion: 1,
+        licensePlanIdAtPurchase: "plan-finite-dummy",
+        isLifetime: false,
+        durationDays: null,
+        durationMonths: null,
+      },
+    });
+
+    const malformedOutbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: malformedOrder.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: malformedOrder.id },
+        status: "PENDING",
+      },
+    });
+
+    const gate22Start = Date.now();
+    let malformedProcessed = null;
+    while (Date.now() - gate22Start < 10000) {
+      await sleep(300);
+      malformedProcessed = await prisma.outboxEvent.findUnique({ where: { id: malformedOutbox.id } });
+      if (malformedProcessed && malformedProcessed.retryCount >= 1) break;
+    }
+
+    if (!malformedProcessed || malformedProcessed.status === "PROCESSED") {
+      throw new Error(`Expected malformed snapshot outbox event to fail, but got status=${malformedProcessed?.status}`);
+    }
+    if (!malformedProcessed.error?.includes("finite license plan requires positive durationDays or durationMonths")) {
+      throw new Error(`Unexpected error message for malformed snapshot: ${malformedProcessed.error}`);
+    }
+
+    const malformedEnts = await prisma.entitlement.findMany({ where: { orderId: malformedOrder.id } });
+    if (malformedEnts.length !== 0) {
+      throw new Error(`CRITICAL: Entitlement created for malformed snapshot! count=${malformedEnts.length}`);
+    }
+    console.log("✓ Gate 22 passed: Malformed finite plan snapshot failed closed with policy validation error\n");
+
+    // ----------------------------------------------------
+    // Gate 23: ORDER_PAID Missing Order Fail-Closed
+    // ----------------------------------------------------
+    console.log("[Gate 23] Verifying ORDER_PAID event for non-existent order fails closed...");
+    const missingOrderId = `ord-missing-${Date.now()}`;
+    const missingOutbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: missingOrderId,
+        eventType: "ORDER_PAID",
+        payload: { orderId: missingOrderId },
+        status: "PENDING",
+      },
+    });
+
+    const gate23Start = Date.now();
+    let missingProcessed = null;
+    while (Date.now() - gate23Start < 10000) {
+      await sleep(300);
+      missingProcessed = await prisma.outboxEvent.findUnique({ where: { id: missingOutbox.id } });
+      if (missingProcessed && missingProcessed.retryCount >= 1) break;
+    }
+
+    if (!missingProcessed || missingProcessed.status === "PROCESSED") {
+      throw new Error(`Expected missing order outbox event to fail, but got status=${missingProcessed?.status}`);
+    }
+    if (!missingProcessed.error?.includes(`Order '${missingOrderId}' not found`)) {
+      throw new Error(`Unexpected error message for missing order: ${missingProcessed.error}`);
+    }
+    console.log("✓ Gate 23 passed: Missing order outbox event failed closed, retrying with error logged\n");
+
+    // ----------------------------------------------------
+    // Gate 24: AggregateId / Payload Mismatch Fail-Closed
+    // ----------------------------------------------------
+    console.log("[Gate 24] Verifying payload.orderId mismatch with aggregateId fails closed...");
+    const mismatchOutbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: order1.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: "tampered-order-id-xyz" },
+        status: "PENDING",
+      },
+    });
+
+    const gate24Start = Date.now();
+    let mismatchProcessed = null;
+    while (Date.now() - gate24Start < 10000) {
+      await sleep(300);
+      mismatchProcessed = await prisma.outboxEvent.findUnique({ where: { id: mismatchOutbox.id } });
+      if (mismatchProcessed && mismatchProcessed.retryCount >= 1) break;
+    }
+
+    if (!mismatchProcessed || mismatchProcessed.status === "PROCESSED") {
+      throw new Error(`Expected mismatched payload outbox event to fail, but got status=${mismatchProcessed?.status}`);
+    }
+    if (!mismatchProcessed.error?.includes("does not match aggregateId")) {
+      throw new Error(`Unexpected error message for payload mismatch: ${mismatchProcessed.error}`);
+    }
+    console.log("✓ Gate 24 passed: Tampered payload orderId rejected with mismatch error\n");
+
+    // ----------------------------------------------------
+    // Gate 25: Transaction Rollback Atomicity on Domain / Audit Failure
+    // ----------------------------------------------------
+    console.log("[Gate 25] Verifying transaction rollback atomicity when issuance fails...");
+    const rollbackOrder = await prisma.order.create({
+      data: {
+        id: `ord-rollback-${Date.now()}`,
+        orderNumber: `ORD-RB-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    await prisma.orderItem.create({
+      data: {
+        id: `item-rb-${Date.now()}`,
+        orderId: rollbackOrder.id,
+        productId: lifetimeVariant.productId,
+        variantId: lifetimeVariant.id,
+        productName: "Rollback Theme",
+        variantName: "Standard",
+        sku: `SKU-RB-${Date.now()}`,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+        fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        isLifetime: true,
+        snapshotVersion: 1,
+      },
+    });
+
+    let rollbackCaught = false;
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Issue entitlements inside transaction
+        await issueEntitlementsForOrder(rollbackOrder.id, tx);
+        // Force transaction failure (e.g. audit log or downstream constraint failure)
+        throw new Error("Simulated audit/transaction failure for Gate 25");
+      });
+    } catch (err: any) {
+      if (err.message?.includes("Simulated audit/transaction failure")) {
+        rollbackCaught = true;
+      }
+    }
+
+    if (!rollbackCaught) {
+      throw new Error("Transaction did not throw expected simulated failure");
+    }
+
+    const rollbackEnts = await prisma.entitlement.findMany({ where: { orderId: rollbackOrder.id } });
+    if (rollbackEnts.length !== 0) {
+      throw new Error(`CRITICAL: Transaction failed to roll back! Found ${rollbackEnts.length} orphan entitlements.`);
+    }
+    console.log("✓ Gate 25 passed: Transaction atomic rollback verified, 0 orphan entitlements committed\n");
+
+    // ----------------------------------------------------
+    // Gate 26: Database Schema & Migration Drift Verification
+    // ----------------------------------------------------
+    console.log("[Gate 26] Verifying database schema columns & indexes (snapshot_version and @@index([status, expiresAt]))...");
+    const colCheck = await prisma.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'order_items' AND column_name = 'snapshot_version'
+    `;
+    if (colCheck.length === 0) {
+      throw new Error("Schema drift: Column 'snapshot_version' not found on 'order_items' table");
+    }
+
+    const idxCheck = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'entitlements' AND indexname = 'entitlements_status_expires_at_idx'
+    `;
+    if (idxCheck.length === 0) {
+      throw new Error("Schema drift: Index 'entitlements_status_expires_at_idx' not found on 'entitlements' table");
+    }
+    console.log("✓ Gate 26 passed: Schema verified: snapshot_version column and composite status+expiresAt index present\n");
+
     console.log("==================================================");
-    console.log("ALL 20 PHASE 5 GATES PASSED SUCCESSFULLY!");
+    console.log("ALL 26 PHASE 5 GATES PASSED SUCCESSFULLY!");
     console.log("==================================================");
   } finally {
     if (worker1Process) {

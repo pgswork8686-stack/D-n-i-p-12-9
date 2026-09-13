@@ -135,6 +135,7 @@ describe("issueEntitlementsForOrder", () => {
           durationMonths: null,
           maxActivations: null,
           licensePlanIdAtPurchase: "plan-life-1",
+          snapshotVersion: 1,
         },
       ],
     };
@@ -167,6 +168,116 @@ describe("issueEntitlementsForOrder", () => {
     expect(result.entitlements[0].expiresAt).toBeNull();
   });
 
+  it("fails closed when legacy OrderItem is missing snapshotVersion", async () => {
+    const mockOrder = {
+      id: "ord-legacy",
+      orderNumber: "ORD-LEGACY",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-legacy",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "DIGITAL_DOWNLOAD",
+          sku: "SKU-LEGACY",
+          variantName: "Legacy",
+          productName: "Legacy Theme",
+          quantity: 1,
+          isLifetime: false,
+          durationDays: null,
+          durationMonths: null,
+          snapshotVersion: null,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-legacy")).rejects.toThrow(
+      "Missing entitlement policy snapshot for legacy OrderItem 'item-legacy'",
+    );
+  });
+
+  it("fails closed when finite plan snapshot has neither durationDays nor durationMonths", async () => {
+    const mockOrder = {
+      id: "ord-malformed",
+      orderNumber: "ORD-MALFORMED",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-malformed",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "DIGITAL_DOWNLOAD",
+          sku: "SKU-BAD",
+          variantName: "Bad Plan",
+          productName: "Malformed Theme",
+          quantity: 1,
+          isLifetime: false,
+          durationDays: null,
+          durationMonths: null,
+          licensePlanIdAtPurchase: "plan-bad",
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-malformed")).rejects.toThrow(
+      "Malformed entitlement policy snapshot for OrderItem 'item-malformed': finite license plan requires positive durationDays or durationMonths",
+    );
+  });
+
+  it("issues perpetual entitlement when item has no license plan (licensePlanIdAtPurchase is null)", async () => {
+    const mockOrder = {
+      id: "ord-noplan",
+      orderNumber: "ORD-NOPLAN",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-noplan",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "THEME",
+          fulfillmentType: "DIGITAL_DOWNLOAD",
+          sku: "SKU-NOPLAN",
+          variantName: "Perpetual Asset",
+          productName: "Asset Product",
+          quantity: 1,
+          isLifetime: true,
+          durationDays: null,
+          durationMonths: null,
+          licensePlanIdAtPurchase: null,
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+    (prisma.entitlement.findUnique as jest.Mock)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "ent-noplan",
+        orderId: "ord-noplan",
+        orderItemId: "item-noplan",
+        userId: "user-1",
+        status: EntitlementStatus.ACTIVE,
+        expiresAt: null,
+      });
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "ent-noplan" }]);
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: "audit-noplan" });
+
+    const result = await issueEntitlementsForOrder("ord-noplan");
+    expect(result.issuedCount).toBe(1);
+    expect(result.entitlements[0].expiresAt).toBeNull();
+  });
+
   it("issues expiring entitlement with durationDays calculated from snapshot", async () => {
     const mockOrder = {
       id: "ord-2",
@@ -189,6 +300,7 @@ describe("issueEntitlementsForOrder", () => {
           durationMonths: null,
           maxActivations: 3,
           licensePlanIdAtPurchase: "plan-year-1",
+          snapshotVersion: 1,
         },
       ],
     };
@@ -230,6 +342,7 @@ describe("issueEntitlementsForOrder", () => {
           quantity: 1,
           isLifetime: false,
           durationDays: 30,
+          snapshotVersion: 1,
         },
       ],
     };
@@ -268,6 +381,7 @@ describe("issueEntitlementsForOrder", () => {
           quantity: 1,
           isLifetime: false,
           durationDays: 30,
+          snapshotVersion: 1,
         },
       ],
     };

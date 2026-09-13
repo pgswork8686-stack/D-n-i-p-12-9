@@ -63,7 +63,7 @@ export function addUtcMonths(date: Date, months: number): Date {
  * 1. isLifetime === true -> null
  * 2. durationDays > 0 -> activatedAt + durationDays * 86400000 ms
  * 3. durationMonths > 0 -> addUtcMonths(activatedAt, durationMonths)
- * 4. otherwise -> null (lifetime default)
+ * 4. otherwise -> null (intentional no-plan perpetual access)
  */
 export function calculateExpirationDate(
   activatedAt: Date,
@@ -86,7 +86,8 @@ export function calculateExpirationDate(
 
 /**
  * Authoritatively issues entitlements for an Order in PAID state.
- * Uses ONLY the OrderItem snapshot fields (never mutable catalog variant plan).
+ * Uses ONLY the OrderItem snapshot fields (ZERO mutable catalog variant plan fallback).
+ * Fails closed on missing or malformed snapshot policy.
  * Idempotent and conflict-safe via ON CONFLICT ("order_item_id") DO NOTHING,
  * ensuring no duplicate audit logs and no PostgreSQL transaction aborts.
  */
@@ -130,19 +131,33 @@ export async function issueEntitlementsForOrder(
         continue;
       }
 
-      // 3. Resolve expiration policy strictly from item snapshot (with fallback to variant plan if unpopulated in mock)
-      const activatedAt = new Date();
-      const isLifetime =
-        item.isLifetime ?? (item as any).variant?.licensePlan?.isLifetime ?? false;
-      const durationDays =
-        item.durationDays ?? (item as any).variant?.licensePlan?.durationDays ?? null;
-      const durationMonths =
-        item.durationMonths ?? (item as any).variant?.licensePlan?.durationMonths ?? null;
+      // 3. Blocker check: snapshotVersion MUST be present. Legacy rows fail closed.
+      if (!item.snapshotVersion) {
+        throw new Error(
+          `Missing entitlement policy snapshot for legacy OrderItem '${item.id}'`,
+        );
+      }
 
+      // 4. Strict policy validation for snapshotVersion === 1
+      if (item.licensePlanIdAtPurchase) {
+        const hasValidPolicy =
+          item.isLifetime === true ||
+          (typeof item.durationDays === "number" && item.durationDays > 0) ||
+          (typeof item.durationMonths === "number" && item.durationMonths > 0);
+
+        if (!hasValidPolicy) {
+          throw new Error(
+            `Malformed entitlement policy snapshot for OrderItem '${item.id}': finite license plan requires positive durationDays or durationMonths`,
+          );
+        }
+      }
+
+      // 5. Expiration calculation strictly from item snapshot (ZERO mutable fallback)
+      const activatedAt = new Date();
       const expiresAt = calculateExpirationDate(activatedAt, {
-        isLifetime,
-        durationDays,
-        durationMonths,
+        isLifetime: item.isLifetime,
+        durationDays: item.durationDays,
+        durationMonths: item.durationMonths,
       });
 
       const newId = crypto.randomUUID();
@@ -152,13 +167,14 @@ export async function issueEntitlementsForOrder(
         variantName: item.variantName,
         productName: item.productName,
         licensePlanIdAtPurchase: item.licensePlanIdAtPurchase,
-        isLifetime,
-        durationDays,
-        durationMonths,
+        isLifetime: item.isLifetime,
+        durationDays: item.durationDays,
+        durationMonths: item.durationMonths,
         maxActivations: item.maxActivations,
+        snapshotVersion: item.snapshotVersion,
       };
 
-      // 4. Conflict-safe insert: DO NOTHING on order_item_id conflict
+      // 6. Conflict-safe insert: DO NOTHING on order_item_id conflict
       let insertedId: string | null = null;
 
       try {
@@ -238,7 +254,7 @@ export async function issueEntitlementsForOrder(
       }
 
       if (insertedId) {
-        // We won the race and created the entitlement
+        // We won the race and created the entitlement -> atomically log audit
         await tx.auditLog.create({
           data: {
             action: "ENTITLEMENT_CREATED",
@@ -254,8 +270,9 @@ export async function issueEntitlementsForOrder(
               quantity: item.quantity,
               status: "ACTIVE",
               expiresAt: expiresAt ? expiresAt.toISOString() : null,
-              isLifetime,
+              isLifetime: item.isLifetime,
               licensePlanIdAtPurchase: item.licensePlanIdAtPurchase,
+              snapshotVersion: item.snapshotVersion,
             },
           },
         });

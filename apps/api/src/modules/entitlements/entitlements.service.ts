@@ -32,16 +32,17 @@ export class EntitlementsService {
     externalTx?: Prisma.TransactionClient,
   ): Promise<Entitlement[]> {
     try {
-      const result = await dbIssueEntitlementsForOrder(
-        orderId,
-        externalTx || (prisma as any),
-      );
+      const result = await dbIssueEntitlementsForOrder(orderId, externalTx);
       return result.entitlements;
     } catch (err: any) {
       if (err.message?.includes("not found")) {
         throw new NotFoundException(err.message);
       }
-      if (err.message?.includes("expected 'PAID'")) {
+      if (
+        err.message?.includes("expected 'PAID'") ||
+        err.message?.includes("Missing entitlement policy snapshot") ||
+        err.message?.includes("Malformed entitlement policy snapshot")
+      ) {
         throw new BadRequestException(err.message);
       }
       throw err;

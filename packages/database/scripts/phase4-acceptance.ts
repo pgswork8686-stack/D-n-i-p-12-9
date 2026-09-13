@@ -658,40 +658,60 @@ async function runAcceptance() {
   console.log(
     "\n[Gate 15] Concurrency probe: Multi-worker outbox processing with SKIP LOCKED...",
   );
+  const probeOrderIds = [
+    `probe-ord-1-${Date.now()}`,
+    `probe-ord-2-${Date.now()}`,
+    `probe-ord-3-${Date.now()}`,
+    `probe-ord-4-${Date.now()}`,
+  ];
+  for (let i = 0; i < 4; i++) {
+    await prisma.order.create({
+      data: {
+        id: probeOrderIds[i],
+        orderNumber: `ORD-PROBE-${Date.now()}-${i}`,
+        userId: dataB.order.userId,
+        currency: "USD",
+        status: "PAID",
+        subtotalAmount: 0,
+        discountAmount: 0,
+        totalAmount: 0,
+      },
+    });
+  }
   const dummyEvents = await prisma.$transaction([
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-1-${Date.now()}`,
+        aggregateId: probeOrderIds[0],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 1 },
+        payload: { orderId: probeOrderIds[0], testWorker: 1 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-2-${Date.now()}`,
+        aggregateId: probeOrderIds[1],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 2 },
+        payload: { orderId: probeOrderIds[1], testWorker: 2 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-3-${Date.now()}`,
+        aggregateId: probeOrderIds[2],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 3 },
+        payload: { orderId: probeOrderIds[2], testWorker: 3 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-4-${Date.now()}`,
+        aggregateId: probeOrderIds[3],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 4 },
+        payload: { orderId: probeOrderIds[3], testWorker: 4 },
         status: "PENDING",
       },
     }),
@@ -1244,12 +1264,25 @@ async function runAcceptance() {
   console.log(
     "\n[Gate 22] Outbox Stale Lease: Stale worker cannot finalize reclaimed event...",
   );
+  const staleOrderId = `stale-order-${Date.now()}`;
+  await prisma.order.create({
+    data: {
+      id: staleOrderId,
+      orderNumber: `ORD-STALE-${Date.now()}`,
+      userId: dataB.order.userId,
+      currency: "USD",
+      status: "PAID",
+      subtotalAmount: 0,
+      discountAmount: 0,
+      totalAmount: 0,
+    },
+  });
   const staleEvent = await prisma.outboxEvent.create({
     data: {
       aggregateType: "Order",
-      aggregateId: `stale-order-${Date.now()}`,
+      aggregateId: staleOrderId,
       eventType: "ORDER_PAID",
-      payload: { test: "lease" },
+      payload: { orderId: staleOrderId, test: "lease" },
       status: "PROCESSING",
       lockOwner: "worker-stale-old",
       lockedAt: new Date(Date.now() - 3600 * 1000),

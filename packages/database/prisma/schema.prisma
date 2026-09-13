@@ -449,6 +449,7 @@ model OrderItem {
   durationDays            Int?            @map("duration_days")
   durationMonths          Int?            @map("duration_months")
   maxActivations          Int?            @map("max_activations")
+  snapshotVersion         Int?            @map("snapshot_version")
   metadata                Json?
   createdAt               DateTime        @default(now()) @map("created_at")
 

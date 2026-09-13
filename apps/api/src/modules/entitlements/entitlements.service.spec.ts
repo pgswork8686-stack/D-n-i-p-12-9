@@ -33,6 +33,7 @@ jest.mock("@nexus/database", () => {
       auditLog: {
         create: jest.fn(),
       },
+      $queryRaw: jest.fn(),
     },
   };
 });
@@ -42,6 +43,7 @@ describe("EntitlementsService", () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    (global as any).prismaGlobal = prisma;
     const module: TestingModule = await Test.createTestingModule({
       providers: [EntitlementsService],
     }).compile();
@@ -82,6 +84,50 @@ describe("EntitlementsService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it("throws BadRequestException if legacy order item is missing snapshotVersion", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-legacy",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-legacy",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Legacy Item",
+            snapshotVersion: null,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-legacy"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if finite plan has missing duration in snapshot", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-bad",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-bad",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Bad Item",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: false,
+            durationDays: null,
+            durationMonths: null,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-bad"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it("creates entitlements for all items when order is PAID", async () => {
       const mockOrder = {
         id: "order-1",
@@ -99,13 +145,12 @@ describe("EntitlementsService", () => {
             productType: ProductType.DOWNLOADABLE_ASSET,
             fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
             quantity: 2,
-            variant: {
-              licensePlan: {
-                isLifetime: true,
-                durationDays: null,
-                durationMonths: null,
-              },
-            },
+            snapshotVersion: 1,
+            isLifetime: true,
+            durationDays: null,
+            durationMonths: null,
+            maxActivations: null,
+            licensePlanIdAtPurchase: "plan-life-1",
           },
           {
             id: "item-2",
@@ -117,30 +162,54 @@ describe("EntitlementsService", () => {
             productType: ProductType.LICENSED_SOFTWARE,
             fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
             quantity: 1,
-            variant: {
-              licensePlan: {
-                isLifetime: false,
-                durationDays: 365,
-                durationMonths: null,
-              },
-            },
+            snapshotVersion: 1,
+            isLifetime: false,
+            durationDays: 365,
+            durationMonths: null,
+            maxActivations: 3,
+            licensePlanIdAtPurchase: "plan-year-1",
           },
         ],
       };
 
+      const ent1 = {
+        id: "ent-item-1",
+        orderId: "order-1",
+        orderItemId: "item-1",
+        userId: "user-1",
+        status: EntitlementStatus.ACTIVE,
+        expiresAt: null,
+        quantity: 2,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+      };
+      const ent2 = {
+        id: "ent-item-2",
+        orderId: "order-1",
+        orderItemId: "item-2",
+        userId: "user-1",
+        status: EntitlementStatus.ACTIVE,
+        expiresAt: new Date(Date.now() + 365 * 86400000),
+        quantity: 1,
+        productType: ProductType.LICENSED_SOFTWARE,
+      };
+
       (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
-      (prisma.entitlement.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.entitlement.create as jest.Mock).mockImplementation(({ data }) => ({
-        id: `ent-${data.orderItemId}`,
-        ...data,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }));
+      // Item 1: findUnique (null) -> $queryRaw -> findUnique (ent1)
+      // Item 2: findUnique (null) -> $queryRaw -> findUnique (ent2)
+      (prisma.entitlement.findUnique as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(ent1)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(ent2);
+      (prisma.$queryRaw as jest.Mock)
+        .mockResolvedValueOnce([{ id: "ent-item-1" }])
+        .mockResolvedValueOnce([{ id: "ent-item-2" }]);
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: "audit-1" });
 
       const results = await service.issueEntitlementsForOrder("order-1");
 
       expect(results).toHaveLength(2);
-      expect(prisma.entitlement.create).toHaveBeenCalledTimes(2);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
 
       // Item 1: Lifetime -> expiresAt is null
       expect(results[0].status).toBe(EntitlementStatus.ACTIVE);
@@ -155,6 +224,34 @@ describe("EntitlementsService", () => {
 
       // Audit logs recorded
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it("rolls back transaction if audit log recording fails", async () => {
+      const mockOrder = {
+        id: "order-rollback",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-rb",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Theme",
+            snapshotVersion: 1,
+            isLifetime: true,
+            quantity: 1,
+          },
+        ],
+      };
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+      (prisma.entitlement.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "ent-rb" }]);
+      (prisma.auditLog.create as jest.Mock).mockRejectedValueOnce(
+        new Error("Audit failure DB connection died"),
+      );
+
+      await expect(
+        service.issueEntitlementsForOrder("order-rollback"),
+      ).rejects.toThrow("Audit failure DB connection died");
     });
 
     it("does not duplicate entitlement if already exists (idempotent replay)", async () => {
@@ -174,7 +271,11 @@ describe("EntitlementsService", () => {
             productType: ProductType.DOWNLOADABLE_ASSET,
             fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
             quantity: 1,
-            variant: { licensePlan: null },
+            snapshotVersion: 1,
+            isLifetime: true,
+            durationDays: null,
+            durationMonths: null,
+            licensePlanIdAtPurchase: null,
           },
         ],
       };
@@ -194,7 +295,7 @@ describe("EntitlementsService", () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual(existingEntitlement);
-      expect(prisma.entitlement.create).not.toHaveBeenCalled();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
       expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });

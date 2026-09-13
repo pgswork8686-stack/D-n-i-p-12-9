@@ -160,4 +160,91 @@ describe("OutboxProcessor", () => {
     expect(result.processedCount).toBe(0);
     expect(result.results.length).toBe(0);
   });
+
+  it("fails closed when aggregateType is not 'Order' for ORDER_PAID event", async () => {
+    const mockEvents = [
+      {
+        id: "evt-bad-type",
+        eventType: "ORDER_PAID",
+        aggregateType: "Payment",
+        aggregateId: "pay-123",
+        status: "PROCESSING",
+        retryCount: 0,
+        payload: { orderId: "pay-123" },
+      },
+    ];
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-bad-type" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const result = await processOutboxEvents({ workerId: "worker-1" });
+
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-bad-type", status: "PROCESSING", lockOwner: "worker-1" },
+      data: expect.objectContaining({
+        status: "PENDING",
+        error: expect.stringContaining("Invalid aggregateType 'Payment'"),
+      }),
+    });
+    expect(issueEntitlementsForOrder).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when payload orderId does not match aggregateId", async () => {
+    const mockEvents = [
+      {
+        id: "evt-mismatch",
+        eventType: "ORDER_PAID",
+        aggregateType: "Order",
+        aggregateId: "order-A",
+        status: "PROCESSING",
+        retryCount: 0,
+        payload: { orderId: "order-B" },
+      },
+    ];
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-mismatch" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const result = await processOutboxEvents({ workerId: "worker-1" });
+
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-mismatch", status: "PROCESSING", lockOwner: "worker-1" },
+      data: expect.objectContaining({
+        status: "PENDING",
+        error: expect.stringContaining("Payload orderId 'order-B' does not match aggregateId 'order-A'"),
+      }),
+    });
+    expect(issueEntitlementsForOrder).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on unsupported event types", async () => {
+    const mockEvents = [
+      {
+        id: "evt-unknown",
+        eventType: "UNKNOWN_FUTURE_EVENT",
+        aggregateType: "Order",
+        aggregateId: "order-123",
+        status: "PROCESSING",
+        retryCount: 0,
+        payload: {},
+      },
+    ];
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-unknown" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const result = await processOutboxEvents({ workerId: "worker-1" });
+
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-unknown", status: "PROCESSING", lockOwner: "worker-1" },
+      data: expect.objectContaining({
+        status: "PENDING",
+        error: expect.stringContaining("Unsupported outbox event type 'UNKNOWN_FUTURE_EVENT'"),
+      }),
+    });
+    expect(issueEntitlementsForOrder).not.toHaveBeenCalled();
+  });
 });
