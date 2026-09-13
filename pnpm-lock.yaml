@@ -29,6 +29,9 @@ importers:
       '@nexus/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@nexus/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       next:
         specifier: 14.2.26
         version: 14.2.26(@babel/core@7.29.7(supports-color@8.1.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -273,6 +276,9 @@ importers:
       '@nexus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@nexus/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@nexus/utils':
         specifier: workspace:*
         version: link:../../packages/utils

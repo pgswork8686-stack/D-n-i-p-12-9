@@ -8,6 +8,9 @@ import { UsersModule } from "./modules/users/users.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { QueueModule } from "./modules/queue/queue.module";
 import { CatalogModule } from "./modules/catalog/catalog.module";
+import { CartModule } from "./modules/cart/cart.module";
+import { OrdersModule } from "./modules/orders/orders.module";
+import { PaymentsModule } from "./modules/payments/payments.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -22,6 +25,9 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     AuditModule,
     UsersModule,
     CatalogModule,
+    CartModule,
+    OrdersModule,
+    PaymentsModule,
     HealthModule,
     StorageModule,
     AuthModule,

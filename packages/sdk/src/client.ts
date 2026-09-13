@@ -21,6 +21,16 @@ import {
   UpdateCategoryRequest,
   CatalogFilterQuery,
   PaginatedResponse,
+  CartDto,
+  AddToCartRequest,
+  UpdateCartItemRequest,
+  CheckoutRequest,
+  CheckoutResponse,
+  OrderDto,
+  TestPaymentCallbackRequest,
+  TestPaymentCallbackResponse,
+  OrderFilterQuery,
+  Currency,
 } from "@nexus/contracts";
 
 export interface NexusClientConfig {
@@ -389,6 +399,161 @@ export class NexusApiClient {
       throw new Error(`Admin update category failed (${res.status}): ${err}`);
     }
     return (await res.json()) as CategoryDto;
+  }
+
+  // --------------------------------------------------------
+  // Commerce & Cart Methods
+  // --------------------------------------------------------
+
+  async getCart(currency?: Currency): Promise<CartDto> {
+    const url = new URL(`${this.baseUrl}/cart`);
+    if (currency) {
+      url.searchParams.set("currency", currency);
+    }
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get cart failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CartDto;
+  }
+
+  async addToCart(dto: AddToCartRequest): Promise<CartDto> {
+    const res = await fetch(`${this.baseUrl}/cart/items`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Add to cart failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CartDto;
+  }
+
+  async updateCartItem(itemId: string, dto: UpdateCartItemRequest): Promise<CartDto> {
+    const res = await fetch(`${this.baseUrl}/cart/items/${itemId}`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update cart item failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CartDto;
+  }
+
+  async removeCartItem(itemId: string): Promise<CartDto> {
+    const res = await fetch(`${this.baseUrl}/cart/items/${itemId}`, {
+      method: "DELETE",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Remove cart item failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CartDto;
+  }
+
+  async clearCart(): Promise<{ success: boolean }> {
+    const res = await fetch(`${this.baseUrl}/cart`, {
+      method: "DELETE",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Clear cart failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as { success: boolean };
+  }
+
+  async checkout(dto: CheckoutRequest): Promise<CheckoutResponse> {
+    const res = await fetch(`${this.baseUrl}/checkout`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Checkout failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CheckoutResponse;
+  }
+
+  async listOrders(query?: OrderFilterQuery): Promise<PaginatedResponse<OrderDto>> {
+    const url = new URL(`${this.baseUrl}/orders`);
+    if (query?.page) url.searchParams.set("page", String(query.page));
+    if (query?.limit) url.searchParams.set("limit", String(query.limit));
+    if (query?.status) url.searchParams.set("status", query.status);
+
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List orders failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaginatedResponse<OrderDto>;
+  }
+
+  async getOrder(id: string): Promise<OrderDto> {
+    const res = await fetch(`${this.baseUrl}/orders/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get order failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as OrderDto;
+  }
+
+  async listAdminOrders(query?: OrderFilterQuery): Promise<PaginatedResponse<OrderDto>> {
+    const url = new URL(`${this.baseUrl}/admin/orders`);
+    if (query?.page) url.searchParams.set("page", String(query.page));
+    if (query?.limit) url.searchParams.set("limit", String(query.limit));
+    if (query?.status) url.searchParams.set("status", query.status);
+    if (query?.userId) url.searchParams.set("userId", query.userId);
+
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List admin orders failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaginatedResponse<OrderDto>;
+  }
+
+  async getAdminOrder(id: string): Promise<OrderDto> {
+    const res = await fetch(`${this.baseUrl}/admin/orders/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get admin order failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as OrderDto;
+  }
+
+  async simulateTestPayment(dto: TestPaymentCallbackRequest): Promise<TestPaymentCallbackResponse> {
+    const res = await fetch(`${this.baseUrl}/payments/test-callback`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Simulate test payment failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as TestPaymentCallbackResponse;
   }
 
   private buildHeaders(): Record<string, string> {
