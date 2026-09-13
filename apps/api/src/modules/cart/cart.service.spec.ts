@@ -59,6 +59,7 @@ describe("CartService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -77,9 +78,11 @@ describe("CartService", () => {
             id: "var-1",
             sku: "SKU-PRO-1",
             name: "Pro 1 Site",
+            status: VariantStatus.ACTIVE,
             product: {
               id: "prod-1",
               name: "Nexus Plugin",
+              status: ProductStatus.ACTIVE,
               productType: ProductType.LICENSED_SOFTWARE,
               fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
             },
@@ -138,6 +141,7 @@ describe("CartService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -145,6 +149,7 @@ describe("CartService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
       });
       (prisma.cartItem.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.cartItem.upsert as jest.Mock).mockResolvedValue({});
@@ -228,6 +233,39 @@ describe("CartService", () => {
           currency: Currency.USD,
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it("rejects adding item in VND when cart already has USD items", async () => {
+      (prisma.productVariant.findUnique as jest.Mock).mockResolvedValue({
+        id: "var-vnd",
+        sku: "SKU-VND",
+        status: VariantStatus.ACTIVE,
+        product: { id: "prod-1", status: ProductStatus.ACTIVE },
+        prices: [{ id: "price-vnd", currency: Currency.VND, amount: 200000, isActive: true }],
+      });
+      (prisma.cart.findFirst as jest.Mock).mockResolvedValue({
+        id: "cart-usd",
+        userId: "user-1",
+        status: "ACTIVE",
+        currency: Currency.USD,
+      });
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue({
+        id: "cart-usd",
+        userId: "user-1",
+        status: "ACTIVE",
+        currency: Currency.USD,
+      });
+      (prisma.cartItem.findMany as jest.Mock).mockResolvedValue([
+        { id: "item-usd", variantId: "var-usd", priceId: "price-usd" },
+      ]);
+
+      await expect(
+        service.addItem("user-1", {
+          variantId: "var-vnd",
+          quantity: 1,
+          currency: Currency.VND,
+        }),
+      ).rejects.toThrow("Clear cart to change currency");
     });
   });
 

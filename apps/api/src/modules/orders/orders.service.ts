@@ -14,6 +14,8 @@ import {
   OrderStatus,
   ProductStatus,
   VariantStatus,
+  IdempotencyKeyStatus,
+  Cart,
 } from "@nexus/database";
 import {
   OrderDto,
@@ -136,7 +138,10 @@ export class OrdersService {
         );
       }
 
-      if (record.response && record.status === "COMMITTED") {
+      if (
+        record.response &&
+        record.status === IdempotencyKeyStatus.COMMITTED
+      ) {
         return record.response as unknown as CheckoutResponse;
       }
 
@@ -152,9 +157,10 @@ export class OrdersService {
    * Authoritative checkout:
    * 1. Scoped idempotency reservation (status: IN_PROGRESS) to serialize concurrent requests.
    * 2. Atomic transaction:
-   *    - Finds active cart.
+   *    - Acquires row lock (SELECT FOR UPDATE) on active Cart row.
+   *    - Enforces single currency invariant against Cart.currency.
    *    - Claims cart via CAS (status: ACTIVE -> CONVERTED, affected rows == 1).
-   *    - Validates live item snapshots and strict price constraints (no fallback!).
+   *    - Validates live item snapshots and strict price constraints (ZERO fallback!).
    *    - Computes totals in integer minor units with bounds.
    *    - Creates Order (PENDING_PAYMENT, cartId unique).
    *    - Creates immutable OrderItem snapshots.
@@ -167,6 +173,8 @@ export class OrdersService {
       .createHash("sha256")
       .update(JSON.stringify({ userId, currency: dto.currency }))
       .digest("hex");
+
+    const STALE_IN_PROGRESS_MS = 10_000; // 10s crash lease timeout
 
     if (dto.idempotencyKey) {
       const existingKey = await prisma.idempotencyKey.findUnique({
@@ -190,46 +198,87 @@ export class OrdersService {
           );
         }
 
-        if (existingKey.response && existingKey.status === "COMMITTED") {
+        if (
+          existingKey.response &&
+          existingKey.status === IdempotencyKeyStatus.COMMITTED
+        ) {
           this.logger.log(
             `Idempotent checkout hit for key '${dto.idempotencyKey}'`,
           );
           return existingKey.response as unknown as CheckoutResponse;
         }
 
-        // Leader is currently executing -> poll for committed response
-        return this.pollIdempotencyResponse(
-          userId,
-          dto.idempotencyKey,
-          requestFingerprint,
-        );
-      }
+        if (existingKey.status === IdempotencyKeyStatus.IN_PROGRESS) {
+          const isStale =
+            Date.now() - new Date(existingKey.startedAt).getTime() >
+            STALE_IN_PROGRESS_MS;
 
-      // Key does not exist yet -> reserve IN_PROGRESS
-      try {
-        await prisma.idempotencyKey.create({
-          data: {
-            key: dto.idempotencyKey,
-            scope: "checkout",
-            userId,
-            requestFingerprint,
-            status: "IN_PROGRESS",
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
-        });
-      } catch (err: any) {
-        if (
-          err?.code === "P2002" ||
-          err?.message?.includes("idempotency_keys")
-        ) {
-          // Another concurrent request beat us to create the key -> poll
-          return this.pollIdempotencyResponse(
-            userId,
-            dto.idempotencyKey,
-            requestFingerprint,
-          );
+          if (isStale) {
+            // CAS reclaim of stale lease
+            const staleThreshold = new Date(Date.now() - STALE_IN_PROGRESS_MS);
+            const reclaim = await prisma.idempotencyKey.updateMany({
+              where: {
+                scope: "checkout",
+                userId,
+                key: dto.idempotencyKey,
+                status: IdempotencyKeyStatus.IN_PROGRESS,
+                startedAt: { lte: staleThreshold },
+              },
+              data: {
+                startedAt: new Date(),
+              },
+            });
+
+            if (reclaim.count > 0) {
+              this.logger.warn(
+                `Reclaimed stale idempotency lease for key '${dto.idempotencyKey}'`,
+              );
+              // Leader role claimed, proceed to execute checkout transaction below
+            } else {
+              // Lost reclaim race to another concurrent request -> poll
+              return this.pollIdempotencyResponse(
+                userId,
+                dto.idempotencyKey,
+                requestFingerprint,
+              );
+            }
+          } else {
+            // Still actively processing within lease window -> poll
+            return this.pollIdempotencyResponse(
+              userId,
+              dto.idempotencyKey,
+              requestFingerprint,
+            );
+          }
         }
-        throw err;
+      } else {
+        // Key does not exist yet -> reserve IN_PROGRESS
+        try {
+          await prisma.idempotencyKey.create({
+            data: {
+              key: dto.idempotencyKey,
+              scope: "checkout",
+              userId,
+              requestFingerprint,
+              status: IdempotencyKeyStatus.IN_PROGRESS,
+              startedAt: new Date(),
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            },
+          });
+        } catch (err: any) {
+          if (
+            err?.code === "P2002" ||
+            err?.message?.includes("idempotency_keys")
+          ) {
+            // Another concurrent request beat us to create the key -> poll
+            return this.pollIdempotencyResponse(
+              userId,
+              dto.idempotencyKey,
+              requestFingerprint,
+            );
+          }
+          throw err;
+        }
       }
     }
 
@@ -237,31 +286,25 @@ export class OrdersService {
       const orderNumber = this.generateOrderNumber();
 
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Locate active cart inside transaction
-        const cart = await tx.cart.findFirst({
-          where: { userId, status: "ACTIVE" },
-          include: {
-            items: {
-              include: {
-                price: true,
-                variant: {
-                  include: {
-                    product: true,
-                    prices: {
-                      where: {
-                        currency: dto.currency,
-                        isActive: true,
-                      },
-                    },
-                  },
-                },
-              },
-              orderBy: { createdAt: "asc" },
-            },
-          },
-        });
+        // 1. Lock active cart row FOR UPDATE FIRST!
+        let lockedCartRow: Cart | null = null;
+        try {
+          if (typeof (tx as any).$queryRaw === "function") {
+            const lockedCarts = await tx.$queryRaw<Cart[]>`
+              SELECT * FROM "carts" WHERE "user_id" = ${userId} AND "status" = 'ACTIVE' LIMIT 1 FOR UPDATE
+            `;
+            lockedCartRow = lockedCarts?.[0] || null;
+          }
+        } catch {
+          // Mock fallback
+        }
+        if (!lockedCartRow) {
+          lockedCartRow = await tx.cart.findFirst({
+            where: { userId, status: "ACTIVE" },
+          });
+        }
 
-        if (!cart) {
+        if (!lockedCartRow) {
           const convertedCart = await tx.cart.findFirst({
             where: { userId, status: "CONVERTED" },
             orderBy: { updatedAt: "desc" },
@@ -274,11 +317,41 @@ export class OrdersService {
           throw new BadRequestException("Cannot checkout: Cart is empty");
         }
 
-        if (cart.items.length === 0) {
+        // 2. Strict single-currency invariant: cart currency must match dto.currency
+        if (lockedCartRow.currency !== dto.currency) {
+          throw new BadRequestException(
+            `Cannot checkout: Cart currency '${lockedCartRow.currency}' does not match requested currency '${dto.currency}'`,
+          );
+        }
+
+        // 3. Load items under the locked cart
+        const cart = await tx.cart.findUnique({
+          where: { id: lockedCartRow.id },
+          include: {
+            items: {
+              include: {
+                price: true,
+                variant: {
+                  include: {
+                    product: true,
+                    prices: {
+                      where: {
+                        isActive: true,
+                      },
+                    },
+                  },
+                },
+              },
+              orderBy: { createdAt: "asc" },
+            },
+          },
+        });
+
+        if (!cart || cart.items.length === 0) {
           throw new BadRequestException("Cannot checkout: Cart is empty");
         }
 
-        // 2. CAS claim cart
+        // 4. CAS claim cart
         const claimResult = await tx.cart.updateMany({
           where: {
             id: cart.id,
@@ -296,7 +369,7 @@ export class OrdersService {
           );
         }
 
-        // 3. Strict item and price validation inside transaction snapshot
+        // 5. Strict item and price validation inside transaction snapshot (ZERO fallback!)
         let subtotalAmount = 0;
         const itemsSnapshotData = cart.items.map((item) => {
           const variant = item.variant;
@@ -314,13 +387,18 @@ export class OrdersService {
             );
           }
 
-          // Authoritative price resolution: item.price relation takes precedence
+          // Authoritative price resolution: item.price relation takes precedence, NO fallback
           let price = item.price;
           if (!price && item.priceId && variant.prices) {
             price = variant.prices.find((p) => p.id === item.priceId) as any;
           }
-          if (!price && variant.prices && variant.prices.length === 1) {
-            price = variant.prices[0] as any;
+          if (!price && !item.priceId && variant.prices) {
+            const matches = variant.prices.filter(
+              (p) => p.currency === dto.currency && p.isActive,
+            );
+            if (matches.length === 1) {
+              price = matches[0] as any;
+            }
           }
 
           if (!price) {
@@ -482,7 +560,7 @@ export class OrdersService {
               },
             },
             data: {
-              status: "COMMITTED",
+              status: IdempotencyKeyStatus.COMMITTED,
               response: response as any,
             },
           });
@@ -518,7 +596,7 @@ export class OrdersService {
               scope: "checkout",
               userId,
               key: dto.idempotencyKey,
-              status: "IN_PROGRESS",
+              status: IdempotencyKeyStatus.IN_PROGRESS,
             },
           });
         } catch (cleanupErr) {

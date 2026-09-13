@@ -10,6 +10,9 @@ CREATE TYPE "PaymentStatus" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED', 'CANCELLE
 -- CreateEnum
 CREATE TYPE "OutboxEventStatus" AS ENUM ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED');
 
+-- CreateEnum
+CREATE TYPE "IdempotencyKeyStatus" AS ENUM ('IN_PROGRESS', 'COMMITTED', 'FAILED');
+
 -- AlterTable
 ALTER TABLE "permissions" ALTER COLUMN "updated_at" DROP DEFAULT;
 
@@ -24,6 +27,7 @@ CREATE TABLE "carts" (
     "id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "status" "CartStatus" NOT NULL DEFAULT 'ACTIVE',
+    "currency" "Currency" NOT NULL DEFAULT 'USD',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -139,7 +143,8 @@ CREATE TABLE "idempotency_keys" (
     "user_id" TEXT NOT NULL,
     "request_fingerprint" TEXT NOT NULL,
     "response" JSONB,
-    "status" TEXT NOT NULL DEFAULT 'COMMITTED',
+    "status" "IdempotencyKeyStatus" NOT NULL DEFAULT 'IN_PROGRESS',
+    "started_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "expires_at" TIMESTAMP(3) NOT NULL,
 
@@ -226,6 +231,9 @@ CREATE UNIQUE INDEX "idempotency_keys_scope_user_id_key_key" ON "idempotency_key
 
 -- CreateIndex
 CREATE INDEX "idempotency_keys_expires_at_idx" ON "idempotency_keys"("expires_at");
+
+-- CreateIndex
+CREATE INDEX "idempotency_keys_status_started_at_idx" ON "idempotency_keys"("status", "started_at");
 
 -- AddForeignKey
 ALTER TABLE "carts" ADD CONSTRAINT "carts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

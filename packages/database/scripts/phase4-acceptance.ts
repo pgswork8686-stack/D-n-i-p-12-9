@@ -1249,8 +1249,477 @@ async function runAcceptance() {
     "✓ Gate 22 passed: Lease ownership CAS prevented stale worker from finalizing reclaimed event.",
   );
 
+  // ----------------------------------------------------
+  // Gate 23: Concurrent Checkout vs PATCH cart item (Row lock serialization)
+  // ----------------------------------------------------
+  console.log("\n[Gate 23] Testing true concurrent race: Checkout vs PATCH cart item...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  const addG23Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  const cartG23: any = await addG23Res.json();
+  const itemG23 = cartG23.items[0];
+
+  const [resCheckoutG23, resPatchG23] = await Promise.all([
+    fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    }),
+    fetch(`${API_BASE}/cart/items/${itemG23.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ quantity: 5 }),
+    }),
+  ]);
+
+  const bodyCheckoutG23: any = await resCheckoutG23.json();
+  const bodyPatchG23: any = await resPatchG23.json();
+
+  console.log(`  Checkout status: ${resCheckoutG23.status}, Order: ${bodyCheckoutG23.order?.orderNumber || JSON.stringify(bodyCheckoutG23)}`);
+  console.log(`  Patch status: ${resPatchG23.status}, Result: ${JSON.stringify(bodyPatchG23.message || bodyPatchG23.id)}`);
+
+  if (resCheckoutG23.status === 201 && resPatchG23.status === 409) {
+    console.log("  Outcome: Checkout serialized first, PATCH correctly rejected with 409 Conflict.");
+  } else if (resCheckoutG23.status === 201 && resPatchG23.status === 200) {
+    console.log("  Outcome: PATCH serialized first, Checkout converted cart with updated quantity.");
+    if (bodyCheckoutG23.order.items[0].quantity !== 5) {
+      throw new Error(`Gate 23 failed: Expected checkout order item quantity to be 5, got ${bodyCheckoutG23.order.items[0].quantity}`);
+    }
+  } else {
+    throw new Error(`Gate 23 failed: Inconsistent concurrent outcome. Checkout: ${resCheckoutG23.status}, Patch: ${resPatchG23.status}`);
+  }
+  console.log("✓ Gate 23 passed: Checkout and PATCH cart item strictly linearized without race corruption.");
+
+  // ----------------------------------------------------
+  // Gate 24: Concurrent Checkout vs POST cart item
+  // ----------------------------------------------------
+  console.log("\n[Gate 24] Testing true concurrent race: Checkout vs POST cart item...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+
+  const variant2 = targetProduct.variants.length > 1 ? targetProduct.variants[1] : targetVariant;
+
+  const [resCheckoutG24, resPostG24] = await Promise.all([
+    fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    }),
+    fetch(`${API_BASE}/cart/items`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({
+        variantId: variant2.id,
+        quantity: 2,
+        currency: "USD",
+      }),
+    }),
+  ]);
+
+  const bodyCheckoutG24: any = await resCheckoutG24.json();
+  const bodyPostG24: any = await resPostG24.json();
+
+  console.log(`  Checkout status: ${resCheckoutG24.status}, Order: ${bodyCheckoutG24.order?.orderNumber || JSON.stringify(bodyCheckoutG24)}`);
+  console.log(`  Post status: ${resPostG24.status}, Result: ${JSON.stringify(bodyPostG24.message || bodyPostG24.id)}`);
+
+  if (resCheckoutG24.status === 201 && (resPostG24.status === 409 || resPostG24.status === 201)) {
+    console.log("  Outcome: Strictly serialized without corrupt state.");
+  } else {
+    throw new Error(`Gate 24 failed: Inconsistent concurrent outcome. Checkout: ${resCheckoutG24.status}, POST: ${resPostG24.status}`);
+  }
+  console.log("✓ Gate 24 passed: Checkout and POST cart item strictly linearized.");
+
+  // ----------------------------------------------------
+  // Gate 25: Concurrent Checkout vs DELETE cart item
+  // ----------------------------------------------------
+  console.log("\n[Gate 25] Testing true concurrent race: Checkout vs DELETE cart item...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  const addG25Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 2,
+      currency: "USD",
+    }),
+  });
+  const cartG25: any = await addG25Res.json();
+  const itemG25 = cartG25.items[0];
+
+  const [resCheckoutG25, resDeleteG25] = await Promise.all([
+    fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    }),
+    fetch(`${API_BASE}/cart/items/${itemG25.id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${customerToken}`,
+      },
+    }),
+  ]);
+
+  console.log(`  Checkout status: ${resCheckoutG25.status}, Delete status: ${resDeleteG25.status}`);
+  if (resCheckoutG25.status === 201 && (resDeleteG25.status === 409 || resDeleteG25.status === 200)) {
+    console.log("  Outcome: Successfully serialized.");
+  } else {
+    throw new Error(`Gate 25 failed: Inconsistent outcome. Checkout: ${resCheckoutG25.status}, Delete: ${resDeleteG25.status}`);
+  }
+  console.log("✓ Gate 25 passed: Checkout and DELETE cart item strictly linearized.");
+
+  // ----------------------------------------------------
+  // Gate 26: Concurrent Checkout vs clear cart (DELETE /cart)
+  // ----------------------------------------------------
+  console.log("\n[Gate 26] Testing true concurrent race: Checkout vs clear cart...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+
+  const [resCheckoutG26, resClearG26] = await Promise.all([
+    fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    }),
+    fetch(`${API_BASE}/cart`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${customerToken}`,
+      },
+    }),
+  ]);
+
+  console.log(`  Checkout status: ${resCheckoutG26.status}, Clear cart status: ${resClearG26.status}`);
+  if (resClearG26.status === 200 && (resCheckoutG26.status === 201 || resCheckoutG26.status === 400)) {
+    console.log("  Outcome: Clean serialization, no corrupted order created.");
+  } else {
+    throw new Error(`Gate 26 failed: Inconsistent outcome. Checkout: ${resCheckoutG26.status}, Clear: ${resClearG26.status}`);
+  }
+  console.log("✓ Gate 26 passed: Checkout and clear cart strictly linearized.");
+
+  // ----------------------------------------------------
+  // Gate 27: Mixed USD / VND cart rejected
+  // ----------------------------------------------------
+  console.log("\n[Gate 27] Enforcing single currency per cart: Mixed USD / VND rejection...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  const addUsdRes = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  if (!addUsdRes.ok) throw new Error(`Gate 27: Failed to add initial USD item: ${await addUsdRes.text()}`);
+
+  const addVndRes = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "VND",
+    }),
+  });
+
+  if (addVndRes.status !== 400) {
+    throw new Error(`Gate 27 failed: Expected 400 Bad Request when adding VND item to USD cart, got ${addVndRes.status}`);
+  }
+  const vndErr: any = await addVndRes.json();
+  console.log(`  Rejected as expected: ${vndErr.message}`);
+  if (!vndErr.message?.includes("Clear cart to change currency")) {
+    throw new Error(`Gate 27 failed: Error message does not instruct user to clear cart to switch currency: ${vndErr.message}`);
+  }
+  console.log("✓ Gate 27 passed: Single currency per cart enforced (Option A).");
+
+  // ----------------------------------------------------
+  // Gate 28: GET cart never cross-sums currency
+  // ----------------------------------------------------
+  console.log("\n[Gate 28] Verifying GET /cart never cross-sums different currencies...");
+  const dbUser = await prisma.user.findFirst({ where: { email: "customer@nexustheme.dev" } });
+  if (!dbUser) throw new Error("Gate 28: Customer user not found");
+
+  const activeCart = await prisma.cart.findFirst({
+    where: { userId: dbUser.id, status: "ACTIVE" },
+  });
+  if (!activeCart) throw new Error("Gate 28: Active cart not found");
+
+  const vndPrice = await prisma.productPrice.findFirst({
+    where: { variantId: targetVariant.id, currency: "VND", isActive: true },
+  });
+  if (!vndPrice) throw new Error("Gate 28: VND price not found for target variant");
+
+  const rogueItem = await prisma.cartItem.create({
+    data: {
+      cartId: activeCart.id,
+      variantId: targetVariant.id,
+      priceId: vndPrice.id,
+      quantity: 3,
+    },
+  });
+
+  const getCartG28Res = await fetch(`${API_BASE}/cart`, {
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  const cartG28Data: any = await getCartG28Res.json();
+
+  console.log(`  Cart currency: ${cartG28Data.currency}, Subtotal: ${cartG28Data.subtotalAmount}, Total: ${cartG28Data.totalAmount}`);
+  const usdItem = cartG28Data.items.find((i: any) => i.currency === "USD");
+  const rogueItemDto = cartG28Data.items.find((i: any) => i.id === rogueItem.id);
+
+  if (!usdItem || !usdItem.isAvailable) {
+    throw new Error("Gate 28 failed: USD item should be available");
+  }
+  if (!rogueItemDto || rogueItemDto.isAvailable !== false) {
+    throw new Error("Gate 28 failed: Mismatched VND item must have isAvailable: false");
+  }
+  if (!rogueItemDto.unavailableReason?.includes("Currency mismatch")) {
+    throw new Error(`Gate 28 failed: Expected unavailableReason to mention currency mismatch, got: ${rogueItemDto.unavailableReason}`);
+  }
+  if (cartG28Data.subtotalAmount !== usdItem.lineTotalAmount) {
+    throw new Error(`Gate 28 failed: Subtotal was cross-summed! Expected ${usdItem.lineTotalAmount}, got ${cartG28Data.subtotalAmount}`);
+  }
+
+  await prisma.cartItem.delete({ where: { id: rogueItem.id } });
+  console.log("✓ Gate 28 passed: Zero cross-currency sum and unavailable flag properly enforced.");
+
+  // ----------------------------------------------------
+  // Gate 29: Inactive selected price not treated as valid cart total
+  // ----------------------------------------------------
+  console.log("\n[Gate 29] Inactive price: Excluded from cart total and strictly rejects checkout...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  const addG29Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  const cartG29: any = await addG29Res.json();
+  const itemG29 = cartG29.items[0];
+
+  await prisma.productPrice.update({
+    where: { id: itemG29.priceId },
+    data: { isActive: false },
+  });
+
+  try {
+    const checkCartRes = await fetch(`${API_BASE}/cart`, {
+      headers: { Authorization: `Bearer ${customerToken}` },
+    });
+    const checkCartData: any = await checkCartRes.json();
+    console.log(`  Cart subtotal with inactive price: ${checkCartData.subtotalAmount}`);
+    if (checkCartData.subtotalAmount !== 0) {
+      throw new Error(`Gate 29 failed: Inactive price was included in cart subtotal! Expected 0, got ${checkCartData.subtotalAmount}`);
+    }
+    if (checkCartData.items[0].isAvailable !== false) {
+      throw new Error("Gate 29 failed: Item with inactive price must be flagged isAvailable: false");
+    }
+
+    const checkCheckoutRes = await fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    });
+
+    if (checkCheckoutRes.status !== 400) {
+      throw new Error(`Gate 29 failed: Expected 400 Bad Request on checkout with inactive price, got ${checkCheckoutRes.status}`);
+    }
+    const checkoutErr: any = await checkCheckoutRes.json();
+    console.log(`  Checkout rejected as expected: ${checkoutErr.message}`);
+  } finally {
+    await prisma.productPrice.update({
+      where: { id: itemG29.priceId },
+      data: { isActive: true },
+    });
+  }
+  console.log("✓ Gate 29 passed: Inactive price excluded from cart total and checkout fail-closed.");
+
+  // ----------------------------------------------------
+  // Gate 30: Stale IN_PROGRESS idempotency lease recovery
+  // ----------------------------------------------------
+  console.log("\n[Gate 30] Idempotency: Stale IN_PROGRESS lease recovery after crash...");
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+
+  const staleKey = `stale-recovery-key-${Date.now()}`;
+  const requestFingerprint = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ userId: dbUser.id, currency: "USD" }))
+    .digest("hex");
+
+  await prisma.idempotencyKey.create({
+    data: {
+      key: staleKey,
+      scope: "checkout",
+      userId: dbUser.id,
+      requestFingerprint,
+      status: "IN_PROGRESS",
+      startedAt: new Date(Date.now() - 15000), // 15s ago
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+    },
+  });
+
+  const reclaimRes = await fetch(`${API_BASE}/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      currency: "USD",
+      idempotencyKey: staleKey,
+    }),
+  });
+
+  if (reclaimRes.status !== 201) {
+    const errText = await reclaimRes.text();
+    throw new Error(`Gate 30 failed: Expected 201 Created after reclaiming stale lease, got ${reclaimRes.status}: ${errText}`);
+  }
+
+  const reclaimData: any = await reclaimRes.json();
+  console.log(`  Checkout succeeded with reclaimed key, Order: ${reclaimData.order?.orderNumber}`);
+
+  const keyInDb = await prisma.idempotencyKey.findUnique({
+    where: {
+      scope_userId_key: {
+        scope: "checkout",
+        userId: dbUser.id,
+        key: staleKey,
+      },
+    },
+  });
+
+  if (keyInDb?.status !== "COMMITTED") {
+    throw new Error(`Gate 30 failed: Expected idempotency key to be COMMITTED, got ${keyInDb?.status}`);
+  }
+
+  const replayRes = await fetch(`${API_BASE}/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      currency: "USD",
+      idempotencyKey: staleKey,
+    }),
+  });
+  const replayData: any = await replayRes.json();
+  if (replayData.order?.id !== reclaimData.order?.id) {
+    throw new Error("Gate 30 failed: Replay did not return identical order");
+  }
+  console.log("✓ Gate 30 passed: Stale IN_PROGRESS lease reclaimed and idempotently committed.");
+
   console.log("\n==================================================");
-  console.log("ALL 22 LIVE RUNTIME ACCEPTANCE GATES PASSED!");
+  console.log("ALL 30 LIVE RUNTIME ACCEPTANCE GATES PASSED!");
   console.log("==================================================");
 }
 

@@ -38,11 +38,16 @@ jest.mock("@nexus/database", () => {
       },
       cart: {
         findFirst: jest.fn(),
+        findUnique: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
       },
       idempotencyKey: {
         findUnique: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn(),
+        deleteMany: jest.fn(),
         upsert: jest.fn(),
       },
     },
@@ -141,6 +146,7 @@ describe("OrdersService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         items: [
           {
             id: "ci-1",
@@ -172,6 +178,7 @@ describe("OrdersService", () => {
       };
 
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
       (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
 
       const mockCreatedOrder = {
@@ -300,6 +307,7 @@ describe("OrdersService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         items: [
           {
             id: "ci-1",
@@ -319,6 +327,7 @@ describe("OrdersService", () => {
       };
 
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
       (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 0 }); // Lost race!
 
       await expect(
@@ -331,6 +340,7 @@ describe("OrdersService", () => {
         id: "cart-1",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         items: [
           {
             id: "ci-1",
@@ -395,6 +405,121 @@ describe("OrdersService", () => {
 
       expect(res).toEqual(committedResponse);
       expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects checkout when requested currency does not match cart currency", async () => {
+      const mockCart = {
+        id: "cart-vnd",
+        userId: "user-1",
+        status: "ACTIVE",
+        currency: Currency.VND,
+        items: [{ id: "ci-1" }],
+      };
+      (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
+
+      await expect(
+        service.checkout("user-1", { currency: Currency.USD }),
+      ).rejects.toThrow("does not match requested currency");
+    });
+
+    it("idempotency: reclaims stale IN_PROGRESS lease and succeeds", async () => {
+      const expectedFingerprint = crypto
+        .createHash("sha256")
+        .update(JSON.stringify({ userId: "user-1", currency: Currency.USD }))
+        .digest("hex");
+
+      const mockCart = {
+        id: "cart-1",
+        userId: "user-1",
+        status: "ACTIVE",
+        currency: Currency.USD,
+        items: [
+          {
+            id: "ci-1",
+            variantId: "var-1",
+            quantity: 1,
+            variant: {
+              id: "var-1",
+              sku: "SKU-PRO",
+              status: VariantStatus.ACTIVE,
+              product: { status: ProductStatus.ACTIVE },
+              prices: [{ currency: Currency.USD, amount: 2000, isActive: true }],
+            },
+          },
+        ],
+      };
+
+      (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      (prisma.idempotencyKey.findUnique as jest.Mock).mockResolvedValue({
+        id: "idem-stale",
+        key: "key-stale",
+        userId: "user-1",
+        requestFingerprint: expectedFingerprint,
+        status: "IN_PROGRESS",
+        startedAt: new Date(Date.now() - 15000), // 15s ago (> 10s lease)
+        expiresAt: new Date(Date.now() + 60000),
+        response: null,
+      });
+
+      (prisma.idempotencyKey.updateMany as jest.Mock).mockResolvedValue({ count: 1 }); // Won CAS reclaim
+      (prisma.idempotencyKey.update as jest.Mock).mockResolvedValue({});
+      (prisma.order.create as jest.Mock).mockResolvedValue({
+        id: "order-reclaim",
+        orderNumber: "ORD-REC-1",
+        userId: "user-1",
+        status: OrderStatus.PENDING_PAYMENT,
+        currency: Currency.USD,
+        subtotalAmount: 2000,
+        discountAmount: 0,
+        totalAmount: 2000,
+        cartId: "cart-1",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      (prisma.orderItem.create as jest.Mock).mockResolvedValue({
+        id: "oi-rec",
+        orderId: "order-reclaim",
+        productId: "prod-1",
+        variantId: "var-1",
+        productName: "Prod",
+        variantName: "Var",
+        sku: "SKU-PRO",
+        productType: ProductType.LICENSED_SOFTWARE,
+        fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+        unitAmount: 2000,
+        quantity: 1,
+        lineTotalAmount: 2000,
+        currency: Currency.USD,
+        createdAt: new Date(),
+      });
+      (prisma.payment.create as jest.Mock).mockResolvedValue({
+        id: "pay-rec",
+        orderId: "order-reclaim",
+        provider: "TEST",
+        status: "PENDING",
+        amount: 2000,
+        currency: Currency.USD,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const res = await service.checkout("user-1", {
+        currency: Currency.USD,
+        idempotencyKey: "key-stale",
+      });
+
+      expect(res.order.id).toBe("order-reclaim");
+      expect(prisma.idempotencyKey.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            startedAt: expect.any(Date),
+          }),
+        }),
+      );
     });
   });
 

@@ -32,6 +32,7 @@ jest.mock("@nexus/database", () => {
       },
       cart: {
         findFirst: jest.fn(),
+        findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
@@ -86,6 +87,7 @@ describe("Commerce Round 2 Comprehensive Regressions", () => {
         id: "cart-ambiguous",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         items: [
           {
             id: "ci-1",
@@ -123,6 +125,7 @@ describe("Commerce Round 2 Comprehensive Regressions", () => {
       };
 
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
 
       await expect(
         ordersService.checkout("user-1", { currency: Currency.USD }),
@@ -134,6 +137,7 @@ describe("Commerce Round 2 Comprehensive Regressions", () => {
         id: "cart-with-priceId",
         userId: "user-1",
         status: "ACTIVE",
+        currency: Currency.USD,
         items: [
           {
             id: "ci-1",
@@ -174,6 +178,7 @@ describe("Commerce Round 2 Comprehensive Regressions", () => {
       };
 
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue(mockCart);
       (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
       (prisma.order.create as jest.Mock).mockResolvedValue({
         id: "ord-1",

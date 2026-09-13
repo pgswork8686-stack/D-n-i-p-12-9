@@ -21,6 +21,8 @@ export interface CartItemDto {
   unitAmount: number;
   lineTotalAmount: number;
   currency: Currency;
+  isAvailable: boolean;
+  unavailableReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }
