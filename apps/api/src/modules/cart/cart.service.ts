@@ -15,6 +15,7 @@ import {
 } from "@nexus/database";
 import { CartDto, CartItemDto } from "@nexus/contracts";
 import { AddToCartDto } from "./dto/cart.dto";
+import { lockCartById, lockActiveCartByUser } from "./cart-lock.helper";
 
 const MAX_SAFE_AMOUNT = 2147483647; // PostgreSQL Int32 limit
 
@@ -288,23 +289,8 @@ export class CartService {
     }
 
     await prisma.$transaction(async (tx) => {
-      // Linearize all cart mutations using SELECT FOR UPDATE
-      let currentCart: Cart | null = null;
-      try {
-        if (typeof (tx as any).$queryRaw === "function") {
-          const locked = await tx.$queryRaw<Cart[]>`
-            SELECT * FROM "carts" WHERE "id" = ${targetCart.id} FOR UPDATE
-          `;
-          currentCart = locked?.[0] || null;
-        }
-      } catch {
-        // Fallback for mocked unit test
-      }
-      if (!currentCart) {
-        currentCart = await tx.cart.findUnique({
-          where: { id: targetCart.id },
-        });
-      }
+      // Linearize all cart mutations using SELECT FOR UPDATE (fail closed)
+      const currentCart = await lockCartById(tx, targetCart.id);
 
       if (!currentCart || currentCart.status !== "ACTIVE") {
         throw new ConflictException(
@@ -397,23 +383,8 @@ export class CartService {
         );
       }
 
-      // Linearize on cart row FOR UPDATE
-      let lockedCart: Cart | null = null;
-      try {
-        if (typeof (tx as any).$queryRaw === "function") {
-          const locked = await tx.$queryRaw<Cart[]>`
-            SELECT * FROM "carts" WHERE "id" = ${cartItem.cartId} FOR UPDATE
-          `;
-          lockedCart = locked?.[0] || null;
-        }
-      } catch {
-        // Fallback for mock
-      }
-      if (!lockedCart) {
-        lockedCart = await tx.cart.findUnique({
-          where: { id: cartItem.cartId },
-        });
-      }
+      // Linearize on cart row FOR UPDATE (fail closed)
+      const lockedCart = await lockCartById(tx, cartItem.cartId);
 
       if (!lockedCart || lockedCart.status !== "ACTIVE") {
         throw new ConflictException(
@@ -465,23 +436,8 @@ export class CartService {
         );
       }
 
-      // Linearize on cart row FOR UPDATE
-      let lockedCart: Cart | null = null;
-      try {
-        if (typeof (tx as any).$queryRaw === "function") {
-          const locked = await tx.$queryRaw<Cart[]>`
-            SELECT * FROM "carts" WHERE "id" = ${cartItem.cartId} FOR UPDATE
-          `;
-          lockedCart = locked?.[0] || null;
-        }
-      } catch {
-        // Fallback for mock
-      }
-      if (!lockedCart) {
-        lockedCart = await tx.cart.findUnique({
-          where: { id: cartItem.cartId },
-        });
-      }
+      // Linearize on cart row FOR UPDATE (fail closed)
+      const lockedCart = await lockCartById(tx, cartItem.cartId);
 
       if (!lockedCart || lockedCart.status !== "ACTIVE") {
         throw new ConflictException(
@@ -503,22 +459,8 @@ export class CartService {
    */
   async clearCart(userId: string): Promise<{ success: boolean }> {
     await prisma.$transaction(async (tx) => {
-      let cart: Cart | null = null;
-      try {
-        if (typeof (tx as any).$queryRaw === "function") {
-          const locked = await tx.$queryRaw<Cart[]>`
-            SELECT * FROM "carts" WHERE "user_id" = ${userId} AND "status" = 'ACTIVE' LIMIT 1 FOR UPDATE
-          `;
-          cart = locked?.[0] || null;
-        }
-      } catch {
-        // Fallback for mock
-      }
-      if (!cart) {
-        cart = await tx.cart.findFirst({
-          where: { userId, status: "ACTIVE" },
-        });
-      }
+      // Linearize on cart row FOR UPDATE (fail closed)
+      const cart = await lockActiveCartByUser(tx, userId);
 
       if (!cart || cart.status !== "ACTIVE") {
         return;

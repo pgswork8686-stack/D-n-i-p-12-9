@@ -27,6 +27,11 @@ async function runAcceptance() {
   const customer2Token = "dev-no-email:sub_dev_customer_002";
   const adminToken = "dev-admin-token";
 
+  const customerMeRes = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  const customerUser: any = await customerMeRes.json();
+
   // ----------------------------------------------------
   // Gate 1: Health 200
   // ----------------------------------------------------
@@ -1332,7 +1337,9 @@ async function runAcceptance() {
     }),
   });
 
-  const variant2 = targetProduct.variants.length > 1 ? targetProduct.variants[1] : targetVariant;
+  const variant2 = targetProduct.variants.find(
+    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+  ) || targetVariant;
 
   const [resCheckoutG24, resPostG24] = await Promise.all([
     fetch(`${API_BASE}/checkout`, {
@@ -1363,12 +1370,48 @@ async function runAcceptance() {
   console.log(`  Checkout status: ${resCheckoutG24.status}, Order: ${bodyCheckoutG24.order?.orderNumber || JSON.stringify(bodyCheckoutG24)}`);
   console.log(`  Post status: ${resPostG24.status}, Result: ${JSON.stringify(bodyPostG24.message || bodyPostG24.id)}`);
 
-  if (resCheckoutG24.status === 201 && (resPostG24.status === 409 || resPostG24.status === 201)) {
-    console.log("  Outcome: Strictly serialized without corrupt state.");
+  if (resCheckoutG24.status !== 201) {
+    throw new Error(`Gate 24 failed: Expected checkout to succeed with 201, got ${resCheckoutG24.status}`);
+  }
+
+  const orderInDbG24 = await prisma.order.findUnique({
+    where: { id: bodyCheckoutG24.order.id },
+    include: { items: true },
+  });
+  if (!orderInDbG24) {
+    throw new Error(`Gate 24 failed: Order ${bodyCheckoutG24.order.id} not found in DB`);
+  }
+
+  const convertedCartG24 = await prisma.cart.findUnique({
+    where: { id: orderInDbG24.cartId! },
+    include: { items: true },
+  });
+  if (!convertedCartG24 || convertedCartG24.status !== "CONVERTED") {
+    throw new Error(`Gate 24 failed: Cart ${orderInDbG24.cartId} is not in CONVERTED state in DB`);
+  }
+
+  if (resPostG24.status === 409) {
+    console.log("  Outcome: Checkout serialized FIRST. POST rejected with 409 Conflict.");
+    const hasNewItemInOrder = orderInDbG24.items.some((i) => i.variantId === variant2.id);
+    if (hasNewItemInOrder && variant2.id !== targetVariant.id) {
+      throw new Error("Gate 24 failed: Order items snapshot contains newly posted item despite 409 Conflict");
+    }
+    const hasNewItemInCart = convertedCartG24.items.some((i) => i.variantId === variant2.id);
+    if (hasNewItemInCart && variant2.id !== targetVariant.id) {
+      throw new Error("Gate 24 failed: Converted cart mutated after conversion despite 409 Conflict");
+    }
+    console.log("  DB Verification: Converted cart immutable, Order snapshot strictly excludes 409-rejected item.");
+  } else if (resPostG24.status === 201) {
+    console.log("  Outcome: POST serialized FIRST. Checkout converted cart containing both items.");
+    const hasNewItemInOrder = orderInDbG24.items.some((i) => i.variantId === variant2.id);
+    if (!hasNewItemInOrder) {
+      throw new Error("Gate 24 failed: POST returned 201 but order items snapshot missed the newly added variant");
+    }
+    console.log("  DB Verification: Order snapshot includes the newly added item.");
   } else {
     throw new Error(`Gate 24 failed: Inconsistent concurrent outcome. Checkout: ${resCheckoutG24.status}, POST: ${resPostG24.status}`);
   }
-  console.log("✓ Gate 24 passed: Checkout and POST cart item strictly linearized.");
+  console.log("✓ Gate 24 passed: Checkout and POST cart item strictly linearized with exact DB snapshot verification.");
 
   // ----------------------------------------------------
   // Gate 25: Concurrent Checkout vs DELETE cart item
@@ -1379,7 +1422,7 @@ async function runAcceptance() {
     headers: { Authorization: `Bearer ${customerToken}` },
   });
 
-  const addG25Res = await fetch(`${API_BASE}/cart/items`, {
+  await fetch(`${API_BASE}/cart/items`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1387,12 +1430,32 @@ async function runAcceptance() {
     },
     body: JSON.stringify({
       variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+
+  const variantToDel = targetProduct.variants.find(
+    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+  ) || targetVariant;
+
+  const addG25Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: variantToDel.id,
       quantity: 2,
       currency: "USD",
     }),
   });
   const cartG25: any = await addG25Res.json();
-  const itemG25 = cartG25.items[0];
+  const itemG25 = cartG25.items.find((i: any) => i.variantId === variantToDel.id);
+  if (!itemG25) {
+    throw new Error("Gate 25 setup failed: Could not find item to delete in cart");
+  }
 
   const [resCheckoutG25, resDeleteG25] = await Promise.all([
     fetch(`${API_BASE}/checkout`, {
@@ -1412,12 +1475,51 @@ async function runAcceptance() {
   ]);
 
   console.log(`  Checkout status: ${resCheckoutG25.status}, Delete status: ${resDeleteG25.status}`);
-  if (resCheckoutG25.status === 201 && (resDeleteG25.status === 409 || resDeleteG25.status === 200)) {
-    console.log("  Outcome: Successfully serialized.");
+  if (resCheckoutG25.status !== 201) {
+    throw new Error(`Gate 25 failed: Expected checkout 201, got ${resCheckoutG25.status}`);
+  }
+
+  const bodyCheckoutG25: any = await resCheckoutG25.json();
+  const orderInDbG25 = await prisma.order.findUnique({
+    where: { id: bodyCheckoutG25.order.id },
+    include: { items: true },
+  });
+  if (!orderInDbG25) {
+    throw new Error(`Gate 25 failed: Order ${bodyCheckoutG25.order.id} not found in DB`);
+  }
+
+  const convertedCartG25 = await prisma.cart.findUnique({
+    where: { id: orderInDbG25.cartId! },
+    include: { items: true },
+  });
+  if (!convertedCartG25 || convertedCartG25.status !== "CONVERTED") {
+    throw new Error(`Gate 25 failed: Converted cart not found or not CONVERTED in DB`);
+  }
+
+  if (resDeleteG25.status === 409) {
+    console.log("  Outcome: Checkout serialized FIRST. DELETE rejected with 409 Conflict.");
+    const hasDeletedItemInOrder = orderInDbG25.items.some((i) => i.variantId === variantToDel.id);
+    if (!hasDeletedItemInOrder) {
+      throw new Error("Gate 25 failed: Checkout won lock but order items snapshot missed the item");
+    }
+    const hasItemInCart = convertedCartG25.items.some((i) => i.variantId === variantToDel.id);
+    if (!hasItemInCart) {
+      throw new Error("Gate 25 failed: Converted cart corrupted by rejected DELETE");
+    }
+    console.log("  DB Verification: Converted cart preserved, Order snapshot includes the contested item.");
+  } else if (resDeleteG25.status === 200) {
+    console.log("  Outcome: DELETE serialized FIRST. Checkout snapshot reflects deleted item removed.");
+    if (variantToDel.id !== targetVariant.id) {
+      const hasDeletedItemInOrder = orderInDbG25.items.some((i) => i.variantId === variantToDel.id);
+      if (hasDeletedItemInOrder) {
+        throw new Error("Gate 25 failed: DELETE returned 200 OK but deleted item still appears in Order snapshot");
+      }
+    }
+    console.log("  DB Verification: Deleted item is strictly absent from Order items snapshot.");
   } else {
     throw new Error(`Gate 25 failed: Inconsistent outcome. Checkout: ${resCheckoutG25.status}, Delete: ${resDeleteG25.status}`);
   }
-  console.log("✓ Gate 25 passed: Checkout and DELETE cart item strictly linearized.");
+  console.log("✓ Gate 25 passed: Checkout and DELETE cart item strictly linearized with exact DB snapshot verification.");
 
   // ----------------------------------------------------
   // Gate 26: Concurrent Checkout vs clear cart (DELETE /cart)
@@ -1459,12 +1561,42 @@ async function runAcceptance() {
   ]);
 
   console.log(`  Checkout status: ${resCheckoutG26.status}, Clear cart status: ${resClearG26.status}`);
-  if (resClearG26.status === 200 && (resCheckoutG26.status === 201 || resCheckoutG26.status === 400)) {
-    console.log("  Outcome: Clean serialization, no corrupted order created.");
+  if (resClearG26.status !== 200) {
+    throw new Error(`Gate 26 failed: Expected clear cart to return 200 OK, got ${resClearG26.status}`);
+  }
+
+  if (resCheckoutG26.status === 201) {
+    console.log("  Outcome: Checkout serialized FIRST. Order created; clear cart was a safe no-op on converted cart.");
+    const bodyCheckoutG26: any = await resCheckoutG26.json();
+    const orderInDbG26 = await prisma.order.findUnique({
+      where: { id: bodyCheckoutG26.order.id },
+      include: { items: true },
+    });
+    if (!orderInDbG26 || orderInDbG26.items.length !== 1 || orderInDbG26.items[0].variantId !== targetVariant.id) {
+      throw new Error("Gate 26 failed: Order snapshot corrupted or items missing");
+    }
+    const convertedCartG26 = await prisma.cart.findUnique({
+      where: { id: orderInDbG26.cartId! },
+      include: { items: true },
+    });
+    if (!convertedCartG26 || convertedCartG26.status !== "CONVERTED" || convertedCartG26.items.length !== 1) {
+      throw new Error("Gate 26 failed: Converted cart items were deleted or cart is not CONVERTED in DB");
+    }
+    console.log("  DB Verification: Order snapshot intact, converted cart items preserved.");
+  } else if (resCheckoutG26.status === 400) {
+    console.log("  Outcome: Clear cart serialized FIRST. Checkout failed with 400 Bad Request (cart empty). No corrupt order created.");
+    const activeCartG26 = await prisma.cart.findFirst({
+      where: { userId: customerUser.id, status: "ACTIVE" },
+      include: { items: true },
+    });
+    if (activeCartG26 && activeCartG26.items.length !== 0) {
+      throw new Error("Gate 26 failed: Clear cart won lock but active cart still has items in DB");
+    }
+    console.log("  DB Verification: Active cart has 0 items, zero order created.");
   } else {
     throw new Error(`Gate 26 failed: Inconsistent outcome. Checkout: ${resCheckoutG26.status}, Clear: ${resClearG26.status}`);
   }
-  console.log("✓ Gate 26 passed: Checkout and clear cart strictly linearized.");
+  console.log("✓ Gate 26 passed: Checkout and clear cart strictly linearized with exact DB snapshot verification.");
 
   // ----------------------------------------------------
   // Gate 27: Mixed USD / VND cart rejected

@@ -15,7 +15,6 @@ import {
   ProductStatus,
   VariantStatus,
   IdempotencyKeyStatus,
-  Cart,
 } from "@nexus/database";
 import {
   OrderDto,
@@ -26,6 +25,7 @@ import {
 } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
 import { CheckoutDto, OrderFilterDto } from "./dto/orders.dto";
+import { lockActiveCartByUser } from "../cart/cart-lock.helper";
 
 const MAX_SAFE_AMOUNT = 2147483647; // PostgreSQL Int32 limit
 
@@ -286,23 +286,8 @@ export class OrdersService {
       const orderNumber = this.generateOrderNumber();
 
       const result = await prisma.$transaction(async (tx) => {
-        // 1. Lock active cart row FOR UPDATE FIRST!
-        let lockedCartRow: Cart | null = null;
-        try {
-          if (typeof (tx as any).$queryRaw === "function") {
-            const lockedCarts = await tx.$queryRaw<Cart[]>`
-              SELECT * FROM "carts" WHERE "user_id" = ${userId} AND "status" = 'ACTIVE' LIMIT 1 FOR UPDATE
-            `;
-            lockedCartRow = lockedCarts?.[0] || null;
-          }
-        } catch {
-          // Mock fallback
-        }
-        if (!lockedCartRow) {
-          lockedCartRow = await tx.cart.findFirst({
-            where: { userId, status: "ACTIVE" },
-          });
-        }
+        // 1. Lock active cart row FOR UPDATE FIRST! (fail closed)
+        const lockedCartRow = await lockActiveCartByUser(tx, userId);
 
         if (!lockedCartRow) {
           const convertedCart = await tx.cart.findFirst({
