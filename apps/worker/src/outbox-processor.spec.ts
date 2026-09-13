@@ -1,5 +1,10 @@
 import { processOutboxEvents } from "./outbox-processor";
 import { prisma, OutboxEventStatus } from "@nexus/database";
+import { issueEntitlementsForOrder } from "./entitlement-issuer";
+
+jest.mock("./entitlement-issuer", () => ({
+  issueEntitlementsForOrder: jest.fn().mockResolvedValue({ orderId: "order-123", issuedCount: 1, entitlements: [] }),
+}));
 
 jest.mock("@nexus/database", () => {
   return {
@@ -51,6 +56,7 @@ describe("OutboxProcessor", () => {
       }),
     });
 
+    expect(issueEntitlementsForOrder).toHaveBeenCalledWith("order-123");
     expect(result.processedCount).toBe(1);
     expect(result.results[0].status).toBe("PROCESSED");
   });

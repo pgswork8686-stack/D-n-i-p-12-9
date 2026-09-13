@@ -31,6 +31,10 @@ import {
   TestPaymentCallbackResponse,
   OrderFilterQuery,
   Currency,
+  EntitlementDto,
+  EntitlementFilterQuery,
+  AdminEntitlementFilterQuery,
+  RevokeEntitlementRequest,
 } from "@nexus/contracts";
 
 export interface NexusClientConfig {
@@ -637,6 +641,92 @@ export class NexusApiClient {
       throw new Error(`Simulate test payment failed (${res.status}): ${err}`);
     }
     return (await res.json()) as TestPaymentCallbackResponse;
+  }
+
+  async listEntitlements(
+    query?: EntitlementFilterQuery,
+  ): Promise<PaginatedResponse<EntitlementDto>> {
+    const url = new URL(`${this.baseUrl}/entitlements`);
+    if (query?.page) url.searchParams.set("page", String(query.page));
+    if (query?.limit) url.searchParams.set("limit", String(query.limit));
+    if (query?.status) url.searchParams.set("status", query.status);
+    if (query?.productId) url.searchParams.set("productId", query.productId);
+    if (query?.fulfillmentType)
+      url.searchParams.set("fulfillmentType", query.fulfillmentType);
+
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List entitlements failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaginatedResponse<EntitlementDto>;
+  }
+
+  async getEntitlement(id: string): Promise<EntitlementDto> {
+    const res = await fetch(`${this.baseUrl}/entitlements/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get entitlement failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as EntitlementDto;
+  }
+
+  async listAdminEntitlements(
+    query?: AdminEntitlementFilterQuery,
+  ): Promise<PaginatedResponse<EntitlementDto>> {
+    const url = new URL(`${this.baseUrl}/admin/entitlements`);
+    if (query?.page) url.searchParams.set("page", String(query.page));
+    if (query?.limit) url.searchParams.set("limit", String(query.limit));
+    if (query?.status) url.searchParams.set("status", query.status);
+    if (query?.userId) url.searchParams.set("userId", query.userId);
+    if (query?.orderId) url.searchParams.set("orderId", query.orderId);
+    if (query?.productId) url.searchParams.set("productId", query.productId);
+    if (query?.fulfillmentType)
+      url.searchParams.set("fulfillmentType", query.fulfillmentType);
+
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List admin entitlements failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaginatedResponse<EntitlementDto>;
+  }
+
+  async getAdminEntitlement(id: string): Promise<EntitlementDto> {
+    const res = await fetch(`${this.baseUrl}/admin/entitlements/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get admin entitlement failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as EntitlementDto;
+  }
+
+  async adminRevokeEntitlement(
+    id: string,
+    reason?: string,
+  ): Promise<EntitlementDto> {
+    const res = await fetch(`${this.baseUrl}/admin/entitlements/${id}/revoke`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Admin revoke entitlement failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as EntitlementDto;
   }
 
   private buildHeaders(): Record<string, string> {

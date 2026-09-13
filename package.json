@@ -20,6 +20,7 @@
     "db:seed:all": "pnpm db:seed:system && pnpm db:seed:catalog",
     "worker:smoke": "pnpm --filter @nexus/worker test:smoke",
     "test:acceptance:phase4": "pnpm --filter @nexus/database acceptance:phase4",
+    "test:acceptance:phase5": "pnpm --filter @nexus/database acceptance:phase5",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo clean && rm -rf node_modules"
   },

@@ -20,6 +20,7 @@ model User {
   carts       Cart[]
   orders      Order[]
   idempotencyKeys IdempotencyKey[]
+  entitlements Entitlement[]
 
   @@map("users")
 }
@@ -208,6 +209,7 @@ model Product {
   categories       ProductCategory[]
   media            ProductMedia[]
   orderItems       OrderItem[]
+  entitlements     Entitlement[]
 
   @@index([status])
   @@index([productType])
@@ -232,6 +234,7 @@ model ProductVariant {
   prices        ProductPrice[]
   cartItems     CartItem[]
   orderItems    OrderItem[]
+  entitlements  Entitlement[]
 
   @@index([productId])
   @@index([sku])
@@ -419,6 +422,7 @@ model Order {
   cart           Cart?       @relation(fields: [cartId], references: [id], onDelete: SetNull)
   items          OrderItem[]
   payments       Payment[]
+  entitlements   Entitlement[]
 
   @@index([userId])
   @@index([status])
@@ -446,6 +450,7 @@ model OrderItem {
   order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant         ProductVariant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  entitlement     Entitlement?
 
   @@index([orderId])
   @@index([productId])
@@ -533,4 +538,48 @@ model IdempotencyKey {
   @@index([status, startedAt])
   @@map("idempotency_keys")
 }
+
+// --------------------------------------------------------
+// Phase 5 — Entitlement Engine Models
+// --------------------------------------------------------
+
+enum EntitlementStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+model Entitlement {
+  id              String            @id @default(uuid())
+  userId          String            @map("user_id")
+  orderId         String            @map("order_id")
+  orderItemId     String            @unique @map("order_item_id")
+  productId       String            @map("product_id")
+  variantId       String            @map("variant_id")
+  productType     ProductType       @map("product_type")
+  fulfillmentType FulfillmentType   @map("fulfillment_type")
+  status          EntitlementStatus @default(ACTIVE)
+  quantity        Int               @default(1)
+  activatedAt     DateTime          @default(now()) @map("activated_at")
+  expiresAt       DateTime?         @map("expires_at")
+  revokedAt       DateTime?         @map("revoked_at")
+  metadata        Json?
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order           Order             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem       OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  product         Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant         ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([orderId])
+  @@index([status])
+  @@index([productId])
+  @@index([variantId])
+  @@index([expiresAt])
+  @@map("entitlements")
+}
+
 

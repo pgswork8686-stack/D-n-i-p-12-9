@@ -1,4 +1,5 @@
 import { prisma, OutboxEventStatus } from "@nexus/database";
+import { issueEntitlementsForOrder } from "./entitlement-issuer";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -116,10 +117,21 @@ export async function processOutboxEvents(
     );
 
     try {
-      // Strictly foundational logging in Phase 4:
-      // NO entitlement creation (Phase 5)
+      // Phase 5: Authoritatively issue entitlements for ORDER_PAID events
+      // Strictly foundational in Phase 5:
       // NO license allocation (Phase 6)
       // NO license key generation (Phase 7)
+      if (event.eventType === "ORDER_PAID") {
+        const orderId =
+          (event.payload as any)?.orderId || event.aggregateId;
+        const orderExists = await prisma.order.findUnique({
+          where: { id: orderId },
+          select: { id: true },
+        });
+        if (orderExists) {
+          await issueEntitlementsForOrder(orderId);
+        }
+      }
 
       const finalizeResult = await prisma.outboxEvent.updateMany({
         where: {

@@ -1338,7 +1338,7 @@ async function runAcceptance() {
   });
 
   const variant2 = targetProduct.variants.find(
-    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+    (v: any) => v.id !== targetVariant.id && (v.status === "ACTIVE" || !v.status) && v.prices?.some((p: any) => p.currency === "USD" && (p.isActive ?? true)),
   ) || targetVariant;
 
   const [resCheckoutG24, resPostG24] = await Promise.all([
@@ -1436,7 +1436,7 @@ async function runAcceptance() {
   });
 
   const variantToDel = targetProduct.variants.find(
-    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+    (v: any) => v.id !== targetVariant.id && (v.status === "ACTIVE" || !v.status) && v.prices?.some((p: any) => p.currency === "USD" && (p.isActive ?? true)),
   ) || targetVariant;
 
   const addG25Res = await fetch(`${API_BASE}/cart/items`, {
