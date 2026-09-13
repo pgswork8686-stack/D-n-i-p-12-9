@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from "@nestjs/common";
+import { Controller, Post, Body, Headers } from "@nestjs/common";
 import { PaymentsService } from "./payments.service";
 import { TestPaymentCallbackDto } from "./dto/payments.dto";
 import { TestPaymentCallbackResponse } from "@nexus/contracts";
@@ -9,8 +9,9 @@ export class PaymentsController {
 
   @Post("test-callback")
   async handleTestCallback(
+    @Headers() headers: Record<string, string>,
     @Body() dto: TestPaymentCallbackDto,
   ): Promise<TestPaymentCallbackResponse> {
-    return this.paymentsService.processTestCallback(dto);
+    return this.paymentsService.processTestCallback(dto, headers);
   }
 }

@@ -19,7 +19,8 @@ export default function OrderDetailPage() {
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const getHeaders = () => {
-    const devToken = typeof window !== "undefined" ? localStorage.getItem("dev_token") : null;
+    const devToken =
+      typeof window !== "undefined" ? localStorage.getItem("dev_token") : null;
     return {
       "Content-Type": "application/json",
       ...(devToken ? { Authorization: `Bearer ${devToken}` } : {}),
@@ -49,21 +50,58 @@ export default function OrderDetailPage() {
     fetchOrder();
   }, [orderId]);
 
-  const handleSimulatePayment = async (eventType: "payment.succeeded" | "payment.failed") => {
+  const computeTestSignature = async (
+    externalEventId: string,
+    paymentId: string,
+    eventType: string,
+    secret: string = "nexus_test_webhook_secret_key",
+  ): Promise<string> => {
+    const enc = new TextEncoder();
+    const key = await window.crypto.subtle.importKey(
+      "raw",
+      enc.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const signature = await window.crypto.subtle.sign(
+      "HMAC",
+      key,
+      enc.encode(`${externalEventId}:${paymentId}:${eventType}`),
+    );
+    return Array.from(new Uint8Array(signature))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
+  const handleSimulatePayment = async (
+    eventType: "payment.succeeded" | "payment.failed",
+  ) => {
     if (!order?.payments || order.payments.length === 0) {
       alert("No pending payment found for this order");
       return;
     }
 
-    const pendingPayment = order.payments.find((p: any) => p.status === "PENDING") || order.payments[0];
+    const pendingPayment =
+      order.payments.find((p: any) => p.status === "PENDING") ||
+      order.payments[0];
 
     setActionLoading(true);
     setFeedback(null);
     try {
       const externalEventId = `sim_evt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const signature = await computeTestSignature(
+        externalEventId,
+        pendingPayment.id,
+        eventType,
+      );
+
       const res = await fetch(`${API_URL}/payments/test-callback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-test-signature": signature,
+        },
         body: JSON.stringify({
           paymentId: pendingPayment.id,
           externalEventId,
@@ -99,9 +137,16 @@ export default function OrderDetailPage() {
     return (
       <main className="max-w-4xl mx-auto py-16 px-6 font-sans text-center">
         <Card className="p-8">
-          <h2 className="text-xl font-bold text-red-600">Unable to load order</h2>
-          <p className="text-sm text-gray-500 mt-2">{error || "Order not found"}</p>
-          <Link href="/products" className="inline-block mt-6 text-blue-600 underline">
+          <h2 className="text-xl font-bold text-red-600">
+            Unable to load order
+          </h2>
+          <p className="text-sm text-gray-500 mt-2">
+            {error || "Order not found"}
+          </p>
+          <Link
+            href="/products"
+            className="inline-block mt-6 text-blue-600 underline"
+          >
             ← Back to Products
           </Link>
         </Card>
@@ -157,7 +202,8 @@ export default function OrderDetailPage() {
               🧪 Phase 4 Test Payment Provider Simulator
             </h3>
             <p className="text-xs text-amber-800 mb-4 leading-relaxed">
-              Simulate webhook callbacks to verify authoritative payment state machine and transactional outbox:
+              Simulate webhook callbacks to verify authoritative payment state
+              machine and transactional outbox:
             </p>
             <div className="flex flex-wrap gap-3">
               <Button
@@ -166,7 +212,9 @@ export default function OrderDetailPage() {
                 disabled={actionLoading}
                 className="text-xs bg-green-600 hover:bg-green-700"
               >
-                {actionLoading ? "Processing..." : "Simulate Payment Succeeded (Mark PAID)"}
+                {actionLoading
+                  ? "Processing..."
+                  : "Simulate Payment Succeeded (Mark PAID)"}
               </Button>
               <Button
                 variant="outline"
@@ -187,9 +235,14 @@ export default function OrderDetailPage() {
           </h2>
           <div className="divide-y divide-gray-100">
             {order.items?.map((item: any) => (
-              <div key={item.id} className="py-4 flex justify-between items-center text-sm">
+              <div
+                key={item.id}
+                className="py-4 flex justify-between items-center text-sm"
+              >
                 <div>
-                  <div className="font-semibold text-gray-900">{item.productName}</div>
+                  <div className="font-semibold text-gray-900">
+                    {item.productName}
+                  </div>
                   <div className="text-xs text-gray-500 mt-0.5">
                     Variant: {item.variantName} • SKU: {item.sku}
                   </div>
@@ -203,7 +256,8 @@ export default function OrderDetailPage() {
                     {formatMoney(item.lineTotalAmount, item.currency)}
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
-                    {formatMoney(item.unitAmount, item.currency)} × {item.quantity}
+                    {formatMoney(item.unitAmount, item.currency)} ×{" "}
+                    {item.quantity}
                   </div>
                 </div>
               </div>
@@ -217,7 +271,9 @@ export default function OrderDetailPage() {
             </div>
             <div className="flex justify-between text-sm text-gray-600">
               <span>Discount</span>
-              <span>{formatMoney(order.discountAmount || 0, order.currency)}</span>
+              <span>
+                {formatMoney(order.discountAmount || 0, order.currency)}
+              </span>
             </div>
             <div className="flex justify-between text-lg font-black text-gray-900 pt-2 border-t border-gray-100">
               <span>Total Authoritative Amount</span>
@@ -229,7 +285,9 @@ export default function OrderDetailPage() {
         {/* Payment History */}
         {order.payments && order.payments.length > 0 && (
           <Card className="p-6">
-            <h2 className="text-base font-bold text-gray-900 mb-4">Payment Transactions</h2>
+            <h2 className="text-base font-bold text-gray-900 mb-4">
+              Payment Transactions
+            </h2>
             <div className="space-y-3">
               {order.payments.map((p: any) => (
                 <div

@@ -12,8 +12,7 @@ import {
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { CartService } from "./cart.service";
-import { AddToCartDto, UpdateCartItemDto } from "./dto/cart.dto";
-import { Currency } from "@nexus/database";
+import { AddToCartDto, UpdateCartItemDto, CartQueryDto } from "./dto/cart.dto";
 import { CartDto } from "@nexus/contracts";
 
 @Controller("cart")
@@ -24,10 +23,10 @@ export class CartController {
   @Get()
   async getCart(
     @Req() req: any,
-    @Query("currency") currency?: Currency,
+    @Query() query: CartQueryDto,
   ): Promise<CartDto> {
     const userId = req.user.id;
-    return this.cartService.getCart(userId, currency);
+    return this.cartService.getCart(userId, query?.currency);
   }
 
   @Post("items")
@@ -41,20 +40,25 @@ export class CartController {
     @Req() req: any,
     @Param("itemId") itemId: string,
     @Body() dto: UpdateCartItemDto,
-    @Query("currency") currency?: Currency,
+    @Query() query: CartQueryDto,
   ): Promise<CartDto> {
     const userId = req.user.id;
-    return this.cartService.updateItem(userId, itemId, dto.quantity, currency);
+    return this.cartService.updateItem(
+      userId,
+      itemId,
+      dto.quantity,
+      query?.currency,
+    );
   }
 
   @Delete("items/:itemId")
   async removeItem(
     @Req() req: any,
     @Param("itemId") itemId: string,
-    @Query("currency") currency?: Currency,
+    @Query() query: CartQueryDto,
   ): Promise<CartDto> {
     const userId = req.user.id;
-    return this.cartService.removeItem(userId, itemId, currency);
+    return this.cartService.removeItem(userId, itemId, query?.currency);
   }
 
   @Delete()

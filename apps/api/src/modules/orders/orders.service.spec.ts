@@ -1,5 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from "@nestjs/common";
 import { OrdersService } from "./orders.service";
 import { AuditService } from "../audit/audit.service";
 import {
@@ -34,6 +38,7 @@ jest.mock("@nexus/database", () => {
       cart: {
         findFirst: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
       idempotencyKey: {
         findUnique: jest.fn(),
@@ -56,6 +61,7 @@ describe("OrdersService", () => {
           provide: AuditService,
           useValue: {
             logAction: jest.fn().mockResolvedValue({}),
+            logActionWithClient: jest.fn().mockResolvedValue({}),
           },
         },
       ],
@@ -91,7 +97,9 @@ describe("OrdersService", () => {
               sku: "SKU-ARCHIVED",
               status: VariantStatus.ARCHIVED,
               product: { status: ProductStatus.ACTIVE },
-              prices: [{ currency: Currency.USD, amount: 1000, isActive: true }],
+              prices: [
+                { currency: Currency.USD, amount: 1000, isActive: true },
+              ],
             },
           },
         ],
@@ -126,7 +134,7 @@ describe("OrdersService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it("creates Order, immutable OrderItem snapshots, and Payment atomically", async () => {
+    it("creates Order, immutable OrderItem snapshots, and Payment atomically via CAS cart claim", async () => {
       const mockCart = {
         id: "cart-1",
         userId: "user-1",
@@ -162,6 +170,7 @@ describe("OrdersService", () => {
       };
 
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
 
       const mockCreatedOrder = {
         id: "order-123",
@@ -194,7 +203,9 @@ describe("OrdersService", () => {
         currency: Currency.USD,
         createdAt: new Date(),
       };
-      (prisma.orderItem.create as jest.Mock).mockResolvedValue(mockCreatedOrderItem);
+      (prisma.orderItem.create as jest.Mock).mockResolvedValue(
+        mockCreatedOrderItem,
+      );
 
       const mockPayment = {
         id: "pay-123",
@@ -207,11 +218,18 @@ describe("OrdersService", () => {
         updatedAt: new Date(),
       };
       (prisma.payment.create as jest.Mock).mockResolvedValue(mockPayment);
-      (prisma.cart.update as jest.Mock).mockResolvedValue({});
 
-      const response = await service.checkout("user-1", { currency: Currency.USD });
+      const response = await service.checkout("user-1", {
+        currency: Currency.USD,
+      });
 
-      // 1. Authoritative order created
+      // 1. CAS claim on cart (count must be 1)
+      expect(prisma.cart.updateMany).toHaveBeenCalledWith({
+        where: { id: "cart-1", userId: "user-1", status: "ACTIVE" },
+        data: { status: "CONVERTED" },
+      });
+
+      // 2. Authoritative order created
       expect(prisma.order.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -220,11 +238,12 @@ describe("OrdersService", () => {
             currency: Currency.USD,
             subtotalAmount: 11800,
             totalAmount: 11800,
+            cartId: "cart-1",
           }),
         }),
       );
 
-      // 2. Immutable OrderItem snapshot
+      // 3. Immutable OrderItem snapshot
       expect(prisma.orderItem.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -244,7 +263,7 @@ describe("OrdersService", () => {
         }),
       );
 
-      // 3. Payment created PENDING
+      // 4. Payment created PENDING
       expect(prisma.payment.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -257,14 +276,9 @@ describe("OrdersService", () => {
         }),
       );
 
-      // 4. Cart converted
-      expect(prisma.cart.update).toHaveBeenCalledWith({
-        where: { id: "cart-1" },
-        data: { status: "CONVERTED" },
-      });
-
-      // 5. Audit logged
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      // 5. Transactional Audit logged
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "ORDER_CREATED",
           entity: "Order",
@@ -278,10 +292,82 @@ describe("OrdersService", () => {
       expect(response.payment.status).toBe("PENDING");
       expect(response.testPaymentAction?.paymentId).toBe("pay-123");
     });
+
+    it("throws ConflictException if cart claim CAS loses race (count == 0)", async () => {
+      const mockCart = {
+        id: "cart-1",
+        userId: "user-1",
+        status: "ACTIVE",
+        items: [
+          {
+            id: "ci-1",
+            variantId: "var-1",
+            quantity: 1,
+            variant: {
+              id: "var-1",
+              sku: "SKU-THEME-PRO",
+              status: VariantStatus.ACTIVE,
+              product: { status: ProductStatus.ACTIVE },
+              prices: [
+                { currency: Currency.USD, amount: 5900, isActive: true },
+              ],
+            },
+          },
+        ],
+      };
+
+      (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 0 }); // Lost race!
+
+      await expect(
+        service.checkout("user-1", { currency: Currency.USD }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it("idempotency: fingerprint mismatch with same key throws ConflictException", async () => {
+      const mockCart = {
+        id: "cart-1",
+        userId: "user-1",
+        status: "ACTIVE",
+        items: [
+          {
+            id: "ci-1",
+            variantId: "var-1",
+            quantity: 1,
+            variant: {
+              id: "var-1",
+              sku: "SKU-1",
+              status: VariantStatus.ACTIVE,
+              product: { status: ProductStatus.ACTIVE },
+              prices: [
+                { currency: Currency.USD, amount: 5000, isActive: true },
+              ],
+            },
+          },
+        ],
+      };
+
+      (prisma.cart.findFirst as jest.Mock).mockResolvedValue(mockCart);
+      (prisma.idempotencyKey.findUnique as jest.Mock).mockResolvedValue({
+        id: "idem-1",
+        key: "key-123",
+        userId: "user-1",
+        requestFingerprint: "different_hash_from_old_cart",
+        expiresAt: new Date(Date.now() + 60000),
+        response: {},
+      });
+
+      await expect(
+        service.checkout("user-1", {
+          currency: Currency.USD,
+          idempotencyKey: "key-123",
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 
   describe("customer ownership enforcement", () => {
-    it("customer can only view their own order; throws ForbiddenException for another user's order", async () => {
+    it("customer can only view their own order; returns 404 NotFoundException for another user's order to prevent enumeration", async () => {
       (prisma.order.findUnique as jest.Mock).mockResolvedValue({
         id: "order-customer-2",
         userId: "customer-2", // Belongs to customer-2
@@ -295,10 +381,10 @@ describe("OrdersService", () => {
         updatedAt: new Date(),
       });
 
-      // customer-1 attempts to view customer-2's order
+      // customer-1 attempts to view customer-2's order -> must return 404
       await expect(
         service.getCustomerOrder("customer-1", "order-customer-2"),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(NotFoundException);
     });
 
     it("listCustomerOrders filters strictly by user's own id", async () => {
@@ -320,7 +406,10 @@ describe("OrdersService", () => {
         },
       ]);
 
-      const res = await service.listCustomerOrders("customer-1", { page: 1, limit: 10 });
+      const res = await service.listCustomerOrders("customer-1", {
+        page: 1,
+        limit: 10,
+      });
 
       expect(prisma.order.findMany).toHaveBeenCalledWith(
         expect.objectContaining({

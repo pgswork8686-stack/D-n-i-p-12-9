@@ -1,13 +1,5 @@
-import {
-  Injectable,
-  NotFoundException,
-  Logger,
-} from "@nestjs/common";
-import {
-  prisma,
-  PaymentStatus,
-  OrderStatus,
-} from "@nexus/database";
+import { Injectable, NotFoundException, Logger } from "@nestjs/common";
+import { prisma, PaymentStatus, OrderStatus } from "@nexus/database";
 import { TestPaymentCallbackResponse } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
 import { TestPaymentCallbackDto } from "./dto/payments.dto";
@@ -24,18 +16,24 @@ export class PaymentsService {
 
   /**
    * Processes a test payment webhook/callback.
-   * Enforces strict idempotency and authoritative state transition.
-   * Creates an OutboxEvent in the same atomic database transaction when payment succeeds.
+   * Enforces fail-closed signature verification, strict idempotency, CAS transitions,
+   * terminal state preservation, and transactional outbox emission.
    */
   async processTestCallback(
     dto: TestPaymentCallbackDto,
+    headers?: Record<string, string>,
   ): Promise<TestPaymentCallbackResponse> {
-    // 1. Adapter event verification
-    await this.testProvider.verifyEvent(dto);
+    // 1. Fail-closed provider & signature verification
+    await this.testProvider.verifyEvent(dto, headers);
 
-    // 2. Sequential idempotency check
+    // 2. Sequential idempotency check via compound unique key
     const existingEvent = await prisma.paymentEvent.findUnique({
-      where: { externalEventId: dto.externalEventId },
+      where: {
+        provider_externalEventId: {
+          provider: "TEST",
+          externalEventId: dto.externalEventId,
+        },
+      },
       include: {
         payment: {
           include: { order: true },
@@ -56,7 +54,7 @@ export class PaymentsService {
       };
     }
 
-    // 3. Load payment with order
+    // 3. Load initial payment to check existence
     const payment = await prisma.payment.findUnique({
       where: { id: dto.paymentId },
       include: { order: true },
@@ -66,10 +64,10 @@ export class PaymentsService {
       throw new NotFoundException(`Payment '${dto.paymentId}' not found`);
     }
 
-    // 4. Atomic state transition and outbox emission
+    // 4. Atomic state transition and outbox emission inside transaction
     try {
       return await prisma.$transaction(async (tx) => {
-        // Record PaymentEvent (protected by @@unique([externalEventId]))
+        // Record PaymentEvent (protected by @@unique([provider, externalEventId]))
         await tx.paymentEvent.create({
           data: {
             paymentId: payment.id,
@@ -80,112 +78,188 @@ export class PaymentsService {
           },
         });
 
-        let newPaymentStatus: PaymentStatus = payment.status;
-        let newOrderStatus: OrderStatus = payment.order.status;
+        // Re-read inside transaction to avoid stale dirty reads
+        const txPayment = await tx.payment.findUnique({
+          where: { id: payment.id },
+          include: { order: true },
+        });
 
-        if (dto.eventType === "payment.succeeded") {
-          newPaymentStatus = PaymentStatus.SUCCEEDED;
-          newOrderStatus = OrderStatus.PAID;
-
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: { status: newPaymentStatus },
-          });
-
-          await tx.order.update({
-            where: { id: payment.orderId },
-            data: { status: newOrderStatus },
-          });
-
-          // Insert Transactional Outbox Event
-          await tx.outboxEvent.create({
-            data: {
-              eventType: "ORDER_PAID",
-              aggregateType: "Order",
-              aggregateId: payment.order.id,
-              payload: {
-                orderId: payment.order.id,
-                orderNumber: payment.order.orderNumber,
-                userId: payment.order.userId,
-                totalAmount: payment.order.totalAmount,
-                currency: payment.order.currency,
-                paymentId: payment.id,
-              },
-              status: "PENDING",
-            },
-          });
-
-          await this.auditService.logAction({
-            action: "ORDER_PAID",
-            entity: "Order",
-            entityId: payment.order.id,
-            actorId: payment.order.userId,
-            details: {
-              paymentId: payment.id,
-              externalEventId: dto.externalEventId,
-              totalAmount: payment.order.totalAmount,
-              currency: payment.order.currency,
-            },
-          });
-        } else if (dto.eventType === "payment.failed") {
-          newPaymentStatus = PaymentStatus.FAILED;
-          // Order status is NOT marked PAID
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: { status: newPaymentStatus },
-          });
-
-          await this.auditService.logAction({
-            action: "PAYMENT_FAILED",
-            entity: "Payment",
-            entityId: payment.id,
-            actorId: payment.order.userId,
-            details: {
-              orderId: payment.orderId,
-              externalEventId: dto.externalEventId,
-            },
-          });
-        } else if (dto.eventType === "payment.cancelled") {
-          newPaymentStatus = PaymentStatus.CANCELLED;
-          newOrderStatus = OrderStatus.CANCELLED;
-
-          await tx.payment.update({
-            where: { id: payment.id },
-            data: { status: newPaymentStatus },
-          });
-
-          await tx.order.update({
-            where: { id: payment.orderId },
-            data: { status: newOrderStatus },
-          });
-
-          await this.auditService.logAction({
-            action: "PAYMENT_CANCELLED",
-            entity: "Payment",
-            entityId: payment.id,
-            actorId: payment.order.userId,
-            details: {
-              orderId: payment.orderId,
-              externalEventId: dto.externalEventId,
-            },
-          });
+        if (!txPayment) {
+          throw new NotFoundException(
+            `Payment '${payment.id}' not found in transaction`,
+          );
         }
 
-        this.logger.log(
-          `Payment ${payment.id} transitioned to ${newPaymentStatus}, Order ${payment.orderId} to ${newOrderStatus}`,
-        );
+        let targetPaymentStatus: PaymentStatus = txPayment.status;
+        let targetOrderStatus: OrderStatus = txPayment.order.status;
+
+        // Terminal state preservation:
+        // - SUCCEEDED is terminal: cannot transition to FAILED or CANCELLED
+        // - FAILED/CANCELLED are terminal on this payment attempt: cannot transition to SUCCEEDED
+        // - Order status PAID cannot be reversed to CANCELLED by normal callback
+        if (txPayment.status === PaymentStatus.SUCCEEDED) {
+          this.logger.log(
+            `Payment ${txPayment.id} is already in terminal state SUCCEEDED. Ignoring event ${dto.eventType}`,
+          );
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: "Payment already in terminal state SUCCEEDED",
+          };
+        }
+
+        if (
+          txPayment.status === PaymentStatus.FAILED ||
+          txPayment.status === PaymentStatus.CANCELLED
+        ) {
+          this.logger.log(
+            `Payment ${txPayment.id} is in terminal state ${txPayment.status}. Ignoring transition to ${dto.eventType}`,
+          );
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: `Payment already in terminal state ${txPayment.status}`,
+          };
+        }
+
+        // State machine transitions from PENDING
+        if (dto.eventType === "payment.succeeded") {
+          targetPaymentStatus = PaymentStatus.SUCCEEDED;
+
+          // CAS update payment from PENDING -> SUCCEEDED
+          const payCas = await tx.payment.updateMany({
+            where: {
+              id: txPayment.id,
+              status: PaymentStatus.PENDING,
+            },
+            data: { status: PaymentStatus.SUCCEEDED },
+          });
+
+          if (payCas.count > 0) {
+            // CAS update order from PENDING_PAYMENT -> PAID
+            const orderCas = await tx.order.updateMany({
+              where: {
+                id: txPayment.orderId,
+                status: OrderStatus.PENDING_PAYMENT,
+              },
+              data: { status: OrderStatus.PAID },
+            });
+
+            targetOrderStatus = OrderStatus.PAID;
+
+            // Exactly-once ORDER_PAID outbox event at the business level
+            if (orderCas.count > 0) {
+              await tx.outboxEvent.create({
+                data: {
+                  eventType: "ORDER_PAID",
+                  aggregateType: "Order",
+                  aggregateId: txPayment.order.id,
+                  payload: {
+                    orderId: txPayment.order.id,
+                    orderNumber: txPayment.order.orderNumber,
+                    userId: txPayment.order.userId,
+                    totalAmount: txPayment.order.totalAmount,
+                    currency: txPayment.order.currency,
+                    paymentId: txPayment.id,
+                  },
+                  status: "PENDING",
+                },
+              });
+
+              await this.auditService.logActionWithClient(tx, {
+                action: "ORDER_PAID",
+                entity: "Order",
+                entityId: txPayment.order.id,
+                actorId: txPayment.order.userId,
+                details: {
+                  paymentId: txPayment.id,
+                  externalEventId: dto.externalEventId,
+                  totalAmount: txPayment.order.totalAmount,
+                  currency: txPayment.order.currency,
+                },
+              });
+            }
+          }
+        } else if (dto.eventType === "payment.failed") {
+          targetPaymentStatus = PaymentStatus.FAILED;
+
+          const payCas = await tx.payment.updateMany({
+            where: {
+              id: txPayment.id,
+              status: PaymentStatus.PENDING,
+            },
+            data: { status: PaymentStatus.FAILED },
+          });
+
+          if (payCas.count > 0) {
+            await this.auditService.logActionWithClient(tx, {
+              action: "PAYMENT_FAILED",
+              entity: "Payment",
+              entityId: txPayment.id,
+              actorId: txPayment.order.userId,
+              details: {
+                orderId: txPayment.orderId,
+                externalEventId: dto.externalEventId,
+              },
+            });
+          }
+        } else if (dto.eventType === "payment.cancelled") {
+          targetPaymentStatus = PaymentStatus.CANCELLED;
+
+          const payCas = await tx.payment.updateMany({
+            where: {
+              id: txPayment.id,
+              status: PaymentStatus.PENDING,
+            },
+            data: { status: PaymentStatus.CANCELLED },
+          });
+
+          if (payCas.count > 0) {
+            // Only cancel order if not already PAID
+            await tx.order.updateMany({
+              where: {
+                id: txPayment.orderId,
+                status: OrderStatus.PENDING_PAYMENT,
+              },
+              data: { status: OrderStatus.CANCELLED },
+            });
+
+            targetOrderStatus = OrderStatus.CANCELLED;
+
+            await this.auditService.logActionWithClient(tx, {
+              action: "PAYMENT_CANCELLED",
+              entity: "Payment",
+              entityId: txPayment.id,
+              actorId: txPayment.order.userId,
+              details: {
+                orderId: txPayment.orderId,
+                externalEventId: dto.externalEventId,
+              },
+            });
+          }
+        }
 
         return {
           success: true,
           duplicate: false,
-          paymentStatus: newPaymentStatus,
-          orderStatus: newOrderStatus,
+          paymentStatus: targetPaymentStatus,
+          orderStatus: targetOrderStatus,
           message: "Payment event processed successfully",
         };
       });
     } catch (err: any) {
-      // Catch Prisma P2002 (Unique constraint failed on external_event_id) in concurrent race conditions
-      if (err?.code === "P2002" || err?.message?.includes("external_event_id")) {
+      // Catch Prisma P2002 (Unique constraint failed on provider + externalEventId) in race conditions
+      if (
+        err?.code === "P2002" ||
+        err?.message?.includes(
+          "payment_events_provider_external_event_id_key",
+        ) ||
+        err?.message?.includes("external_event_id")
+      ) {
         this.logger.warn(
           `Concurrent duplicate event race detected and caught: ${dto.externalEventId}`,
         );

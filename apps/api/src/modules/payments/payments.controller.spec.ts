@@ -41,10 +41,11 @@ describe("PaymentsController", () => {
       externalEventId: "evt-ext-123",
       eventType: TestPaymentEventType.SUCCEEDED,
     };
+    const headers = { "x-test-signature": "test_sig_123" };
 
-    const res = await controller.handleTestCallback(dto);
+    const res = await controller.handleTestCallback(headers, dto);
 
-    expect(service.processTestCallback).toHaveBeenCalledWith(dto);
+    expect(service.processTestCallback).toHaveBeenCalledWith(dto, headers);
     expect(res.success).toBe(true);
     expect(res.paymentStatus).toBe("SUCCEEDED");
     expect(res.orderStatus).toBe("PAID");

@@ -17,7 +17,10 @@ export interface PaymentEventVerificationResult {
 export interface PaymentProvider {
   readonly name: string;
 
-  initiatePayment(order: Order, payment: Payment): Promise<PaymentInitiationResult>;
+  initiatePayment(
+    order: Order,
+    payment: Payment,
+  ): Promise<PaymentInitiationResult>;
 
   verifyEvent(
     payload: any,

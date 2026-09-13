@@ -39,7 +39,7 @@ describe("CartController", () => {
     mockCartService.getCart.mockResolvedValue({ id: "cart-1", items: [] });
 
     const req = { user: { id: "user-123" } };
-    const res = await controller.getCart(req, Currency.VND);
+    const res = await controller.getCart(req, { currency: Currency.VND });
 
     expect(service.getCart).toHaveBeenCalledWith("user-123", Currency.VND);
     expect(res.id).toBe("cart-1");
@@ -60,18 +60,32 @@ describe("CartController", () => {
     mockCartService.updateItem.mockResolvedValue({ id: "cart-1" });
 
     const req = { user: { id: "user-123" } };
-    await controller.updateItem(req, "item-1", { quantity: 5 }, Currency.USD);
+    await controller.updateItem(
+      req,
+      "item-1",
+      { quantity: 5 },
+      { currency: Currency.USD },
+    );
 
-    expect(service.updateItem).toHaveBeenCalledWith("user-123", "item-1", 5, Currency.USD);
+    expect(service.updateItem).toHaveBeenCalledWith(
+      "user-123",
+      "item-1",
+      5,
+      Currency.USD,
+    );
   });
 
   it("removeItem passes itemId and currency", async () => {
     mockCartService.removeItem.mockResolvedValue({ id: "cart-1" });
 
     const req = { user: { id: "user-123" } };
-    await controller.removeItem(req, "item-1", Currency.USD);
+    await controller.removeItem(req, "item-1", { currency: Currency.USD });
 
-    expect(service.removeItem).toHaveBeenCalledWith("user-123", "item-1", Currency.USD);
+    expect(service.removeItem).toHaveBeenCalledWith(
+      "user-123",
+      "item-1",
+      Currency.USD,
+    );
   });
 
   it("clearCart passes userId", async () => {

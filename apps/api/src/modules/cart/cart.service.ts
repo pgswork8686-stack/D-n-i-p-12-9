@@ -15,34 +15,54 @@ import {
 import { CartDto, CartItemDto } from "@nexus/contracts";
 import { AddToCartDto } from "./dto/cart.dto";
 
+const MAX_SAFE_AMOUNT = 2147483647; // PostgreSQL Int32 limit
+
 @Injectable()
 export class CartService {
   private readonly logger = new Logger(CartService.name);
 
   /**
    * Retrieves or creates an active cart for the user.
+   * Enforces at most one active cart per user, handling concurrent creation races safely.
    */
   async getOrCreateActiveCart(userId: string): Promise<Cart> {
-    let cart = await prisma.cart.findFirst({
-      where: { userId, status: "ACTIVE" },
-    });
-
-    if (!cart) {
-      cart = await prisma.cart.create({
-        data: {
-          userId,
-          status: "ACTIVE",
-        },
+    try {
+      let cart = await prisma.cart.findFirst({
+        where: { userId, status: "ACTIVE" },
       });
-    }
 
-    return cart;
+      if (!cart) {
+        cart = await prisma.cart.create({
+          data: {
+            userId,
+            status: "ACTIVE",
+          },
+        });
+      }
+
+      return cart;
+    } catch (err: any) {
+      if (
+        err?.code === "P2002" ||
+        err?.message?.includes("cart_user_active_unique")
+      ) {
+        const existing = await prisma.cart.findFirst({
+          where: { userId, status: "ACTIVE" },
+        });
+        if (existing) return existing;
+      }
+      throw err;
+    }
   }
 
   /**
    * Authoritatively computes cart totals and reprices all items against current catalog.
+   * Uses deterministic price selection and enforces safe money bounds.
    */
-  async getCart(userId: string, requestedCurrency: Currency = Currency.USD): Promise<CartDto> {
+  async getCart(
+    userId: string,
+    requestedCurrency: Currency = Currency.USD,
+  ): Promise<CartDto> {
     const cart = await this.getOrCreateActiveCart(userId);
 
     const items = await prisma.cartItem.findMany({
@@ -69,18 +89,52 @@ export class CartService {
     const cartItemsDto: CartItemDto[] = items.map((item) => {
       const variant = item.variant;
       const product = variant.product;
-      const activePrice = variant.prices[0];
+
+      // Deterministic price selection
+      let activePrice = item.priceId
+        ? variant.prices.find((p) => p.id === item.priceId)
+        : null;
+
+      if (!activePrice) {
+        if (variant.prices.length === 1) {
+          activePrice = variant.prices[0];
+        } else if (variant.prices.length > 1) {
+          const oneTime = variant.prices.filter(
+            (p) => p.billingType === "ONE_TIME",
+          );
+          activePrice = oneTime.length === 1 ? oneTime[0] : variant.prices[0];
+        }
+      }
 
       const unitAmount = activePrice ? activePrice.amount : 0;
       const lineTotalAmount = unitAmount * item.quantity;
 
+      if (
+        !Number.isSafeInteger(lineTotalAmount) ||
+        lineTotalAmount > MAX_SAFE_AMOUNT
+      ) {
+        throw new BadRequestException(
+          "Line total exceeds maximum allowable currency bounds",
+        );
+      }
+
       subtotalAmount += lineTotalAmount;
+      if (
+        !Number.isSafeInteger(subtotalAmount) ||
+        subtotalAmount > MAX_SAFE_AMOUNT
+      ) {
+        throw new BadRequestException(
+          "Subtotal exceeds maximum allowable currency bounds",
+        );
+      }
+
       itemCount += item.quantity;
 
       return {
         id: item.id,
         cartId: item.cartId,
         variantId: item.variantId,
+        priceId: item.priceId,
         productId: product.id,
         productName: product.name,
         variantName: variant.name,
@@ -117,8 +171,14 @@ export class CartService {
   async addItem(userId: string, dto: AddToCartDto): Promise<CartDto> {
     const currency = dto.currency || Currency.USD;
 
-    if (dto.quantity < 1) {
-      throw new BadRequestException("Quantity must be at least 1");
+    if (
+      !Number.isInteger(dto.quantity) ||
+      dto.quantity < 1 ||
+      dto.quantity > 999
+    ) {
+      throw new BadRequestException(
+        "Quantity must be an integer between 1 and 999",
+      );
     }
 
     const variant = await prisma.productVariant.findUnique({
@@ -148,7 +208,48 @@ export class CartService {
       );
     }
 
+    // Deterministic price selection / validation
+    let resolvedPriceId: string;
+    if (dto.priceId) {
+      const matched = variant.prices.find((p) => p.id === dto.priceId);
+      if (!matched) {
+        throw new BadRequestException(
+          `Specified priceId '${dto.priceId}' is not active or does not belong to variant '${variant.sku}' in '${currency}'`,
+        );
+      }
+      resolvedPriceId = matched.id;
+    } else {
+      if (variant.prices.length === 1) {
+        resolvedPriceId = variant.prices[0].id;
+      } else {
+        const oneTimePrices = variant.prices.filter(
+          (p) => p.billingType === "ONE_TIME",
+        );
+        if (oneTimePrices.length === 1) {
+          resolvedPriceId = oneTimePrices[0].id;
+        } else {
+          throw new BadRequestException(
+            `Multiple active prices exist for variant '${variant.sku}' in currency '${currency}'. Explicit priceId is required.`,
+          );
+        }
+      }
+    }
+
     const cart = await this.getOrCreateActiveCart(userId);
+
+    const existingItem = await prisma.cartItem.findUnique({
+      where: {
+        cartId_variantId: {
+          cartId: cart.id,
+          variantId: variant.id,
+        },
+      },
+    });
+
+    const newQuantity = (existingItem?.quantity || 0) + dto.quantity;
+    if (newQuantity > 999) {
+      throw new BadRequestException("Total item quantity cannot exceed 999");
+    }
 
     await prisma.cartItem.upsert({
       where: {
@@ -158,11 +259,13 @@ export class CartService {
         },
       },
       update: {
-        quantity: { increment: dto.quantity },
+        quantity: newQuantity,
+        priceId: resolvedPriceId,
       },
       create: {
         cartId: cart.id,
         variantId: variant.id,
+        priceId: resolvedPriceId,
         quantity: dto.quantity,
       },
     });
@@ -196,7 +299,13 @@ export class CartService {
     }
 
     if (cartItem.cartId !== cart.id || cartItem.cart.userId !== userId) {
-      throw new ForbiddenException("Cannot modify items in another user's cart");
+      throw new ForbiddenException(
+        "Cannot modify items in another user's cart",
+      );
+    }
+
+    if (quantity > 999) {
+      throw new BadRequestException("Quantity cannot exceed 999");
     }
 
     if (quantity <= 0) {
@@ -234,7 +343,9 @@ export class CartService {
     }
 
     if (cartItem.cartId !== cart.id || cartItem.cart.userId !== userId) {
-      throw new ForbiddenException("Cannot modify items in another user's cart");
+      throw new ForbiddenException(
+        "Cannot modify items in another user's cart",
+      );
     }
 
     await prisma.cartItem.delete({

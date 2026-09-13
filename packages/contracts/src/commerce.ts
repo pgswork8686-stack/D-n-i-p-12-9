@@ -3,12 +3,14 @@ import { Currency, FulfillmentType, ProductType } from "./catalog";
 export type CartStatus = "ACTIVE" | "CONVERTED" | "ABANDONED";
 export type OrderStatus = "PENDING_PAYMENT" | "PAID" | "CANCELLED";
 export type PaymentStatus = "PENDING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
-export type OutboxEventStatus = "PENDING" | "PROCESSED" | "FAILED";
+export type OutboxEventStatus =
+  "PENDING" | "PROCESSING" | "PROCESSED" | "FAILED";
 
 export interface CartItemDto {
   id: string;
   cartId: string;
   variantId: string;
+  priceId?: string | null;
   productId: string;
   productName: string;
   variantName: string;
@@ -39,6 +41,7 @@ export interface CartDto {
 export interface AddToCartRequest {
   variantId: string;
   quantity: number;
+  priceId?: string;
   currency?: Currency;
 }
 

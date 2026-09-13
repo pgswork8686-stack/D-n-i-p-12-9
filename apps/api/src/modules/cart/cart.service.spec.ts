@@ -1,5 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { CartService } from "./cart.service";
 import {
   prisma,
@@ -117,6 +121,7 @@ describe("CartService", () => {
         },
         prices: [
           {
+            id: "price-1",
             currency: Currency.USD,
             amount: 2900,
             isActive: true,
@@ -124,7 +129,9 @@ describe("CartService", () => {
         ],
       };
 
-      (prisma.productVariant.findUnique as jest.Mock).mockResolvedValue(mockVariant);
+      (prisma.productVariant.findUnique as jest.Mock).mockResolvedValue(
+        mockVariant,
+      );
       (prisma.cart.findFirst as jest.Mock).mockResolvedValue({
         id: "cart-1",
         userId: "user-1",
@@ -132,6 +139,7 @@ describe("CartService", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      (prisma.cartItem.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.cartItem.upsert as jest.Mock).mockResolvedValue({});
       (prisma.cartItem.findMany as jest.Mock).mockResolvedValue([]);
 
@@ -148,10 +156,14 @@ describe("CartService", () => {
             variantId: "var-1",
           },
         },
-        update: { quantity: { increment: 1 } },
+        update: {
+          quantity: 1,
+          priceId: "price-1",
+        },
         create: {
           cartId: "cart-1",
           variantId: "var-1",
+          priceId: "price-1",
           quantity: 1,
         },
       });
