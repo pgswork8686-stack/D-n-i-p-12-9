@@ -14,6 +14,8 @@
     "seed": "ts-node src/seed.ts",
     "seed:system": "ts-node src/seed.ts --system-only",
     "seed:dev": "ts-node src/seed.ts --dev-users",
+    "seed:catalog": "ts-node src/seed.ts --catalog",
+    "seed:local": "ts-node src/seed.ts --local-all",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {

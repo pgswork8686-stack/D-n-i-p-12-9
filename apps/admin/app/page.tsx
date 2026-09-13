@@ -207,6 +207,11 @@ export default function AdminHomePage() {
       </div>
 
       <div className="flex items-center gap-4">
+        <a href="/admin/products">
+          <Button variant="primary" size="sm">
+            📦 Manage Catalog & Products →
+          </Button>
+        </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">
             ← Return to Marketplace

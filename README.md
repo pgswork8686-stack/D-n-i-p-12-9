@@ -46,7 +46,7 @@ docker compose up -d
 pnpm install
 ```
 
-### Bước 4: Khởi tạo Database Schema & Seed RBAC
+### Bước 4: Khởi tạo Database Schema & Seed (Local Flow)
 ```bash
 # 1. Chạy migrations (PostgreSQL):
 pnpm db:migrate
@@ -54,8 +54,19 @@ pnpm db:migrate
 # 2. Seed System RBAC (Production-safe: 8 system roles, 22 permissions, 0 users):
 pnpm db:seed:system
 
-# 3. (Tùy chọn môi trường Dev) Seed 3 tài khoản phát triển mẫu (admin, customer, superadmin):
+# 3. Seed Development Users (Admin, Customer, Superadmin) - STRICTLY GATED:
+# Linux/macOS bash:
 SEED_DEV_USERS=true pnpm db:seed:dev
+
+# Windows PowerShell:
+$env:SEED_DEV_USERS="true"
+pnpm db:seed:dev
+
+# 4. Seed Development Catalog:
+pnpm db:seed:catalog
+
+# HOẶC chạy tắt cho Local Dev (tự động fail nếu NODE_ENV=production):
+pnpm db:seed:local
 ```
 
 ### Bước 5: Chạy toàn bộ ứng dụng ở chế độ dev

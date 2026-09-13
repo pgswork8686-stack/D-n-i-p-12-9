@@ -15,6 +15,9 @@
     "db:seed": "pnpm --filter @nexus/database seed",
     "db:seed:system": "pnpm --filter @nexus/database seed:system",
     "db:seed:dev": "pnpm --filter @nexus/database seed:dev",
+    "db:seed:catalog": "pnpm --filter @nexus/database seed:catalog",
+    "db:seed:local": "pnpm --filter @nexus/database seed:local",
+    "db:seed:all": "pnpm db:seed:system && pnpm db:seed:catalog",
     "worker:smoke": "pnpm --filter @nexus/worker test:smoke",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo clean && rm -rf node_modules"

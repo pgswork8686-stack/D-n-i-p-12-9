@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -71,6 +72,11 @@ export default function WebHomePage() {
       </div>
 
       <div className="flex items-center gap-4">
+        <Link href="/products">
+          <Button variant="primary" size="sm">
+            Explore Digital Catalog →
+          </Button>
+        </Link>
         <a href={PORTAL_URL} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">
             Go to Customer Portal →

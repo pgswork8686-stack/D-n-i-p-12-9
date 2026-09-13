@@ -11,7 +11,7 @@ import {
   HttpStatus,
   BadRequestException,
 } from "@nestjs/common";
-import { Request } from "express";
+import type { Request } from "express";
 import { AuthGuard } from "../auth/auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { RequirePermissions } from "../auth/require-permissions.decorator";
