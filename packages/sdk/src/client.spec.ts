@@ -66,4 +66,63 @@ describe("NexusApiClient", () => {
       expect(url.searchParams.get("sort")).toBe("price_desc");
     });
   });
+
+  describe("commerce endpoints", () => {
+    it("getCart queries /cart with currency parameter", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "cart-1", items: [] }),
+      });
+
+      const res = await client.getCart("VND");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const callUrl = mockFetch.mock.calls[0][0];
+      expect(callUrl).toContain("/cart?currency=VND");
+      expect(res.id).toBe("cart-1");
+    });
+
+    it("checkout sends POST to /checkout", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          order: { id: "ord-1", orderNumber: "ORD-123" },
+          payment: { id: "pay-1" },
+        }),
+      });
+
+      const res = await client.checkout({ currency: "USD" });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [callUrl, options] = mockFetch.mock.calls[0];
+      expect(callUrl).toBe("https://api.example.com/checkout");
+      expect(options.method).toBe("POST");
+      expect(JSON.parse(options.body)).toEqual({ currency: "USD" });
+      expect(res.order.id).toBe("ord-1");
+    });
+
+    it("simulateTestPayment sends callback payload to /payments/test-callback", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          duplicate: false,
+          paymentStatus: "SUCCEEDED",
+          orderStatus: "PAID",
+          message: "Payment event processed successfully",
+        }),
+      });
+
+      const res = await client.simulateTestPayment({
+        paymentId: "pay-1",
+        externalEventId: "evt-123",
+        eventType: "payment.succeeded",
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [callUrl, options] = mockFetch.mock.calls[0];
+      expect(callUrl).toBe("https://api.example.com/payments/test-callback");
+      expect(options.method).toBe("POST");
+      expect(res.orderStatus).toBe("PAID");
+    });
+  });
 });
+
