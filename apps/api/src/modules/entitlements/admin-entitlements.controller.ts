@@ -23,13 +23,13 @@ export class AdminEntitlementsController {
   constructor(private readonly entitlementsService: EntitlementsService) {}
 
   @Get()
-  @RequirePermissions("entitlement.manage")
+  @RequirePermissions("entitlement.read")
   async listAdminEntitlements(@Query() query: AdminEntitlementFilterDto) {
     return this.entitlementsService.listAdminEntitlements(query);
   }
 
   @Get(":id")
-  @RequirePermissions("entitlement.manage")
+  @RequirePermissions("entitlement.read")
   async getAdminEntitlement(@Param("id") id: string) {
     return this.entitlementsService.getAdminEntitlement(id);
   }

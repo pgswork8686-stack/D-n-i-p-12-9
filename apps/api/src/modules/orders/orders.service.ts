@@ -68,6 +68,11 @@ export class OrdersService {
       quantity: item.quantity,
       lineTotalAmount: item.lineTotalAmount,
       currency: item.currency,
+      licensePlanIdAtPurchase: item.licensePlanIdAtPurchase,
+      isLifetime: item.isLifetime,
+      durationDays: item.durationDays,
+      durationMonths: item.durationMonths,
+      maxActivations: item.maxActivations,
       metadata: item.metadata as Record<string, any> | null,
       createdAt: item.createdAt.toISOString(),
     }));
@@ -319,6 +324,7 @@ export class OrdersService {
                 variant: {
                   include: {
                     product: true,
+                    licensePlan: true,
                     prices: {
                       where: {
                         isActive: true,
@@ -463,6 +469,11 @@ export class OrdersService {
             quantity: item.quantity,
             lineTotalAmount,
             currency: dto.currency,
+            licensePlanIdAtPurchase: variant.licensePlan?.id || null,
+            isLifetime: variant.licensePlan?.isLifetime ?? false,
+            durationDays: variant.licensePlan?.durationDays ?? null,
+            durationMonths: variant.licensePlan?.durationMonths ?? null,
+            maxActivations: variant.licensePlan?.maxActivations ?? null,
           };
         });
 

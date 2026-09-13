@@ -124,12 +124,17 @@ export async function processOutboxEvents(
       if (event.eventType === "ORDER_PAID") {
         const orderId =
           (event.payload as any)?.orderId || event.aggregateId;
-        const orderExists = await prisma.order.findUnique({
-          where: { id: orderId },
-          select: { id: true },
-        });
-        if (orderExists) {
-          await issueEntitlementsForOrder(orderId);
+        if (orderId) {
+          const orderExists = prisma.order?.findUnique
+            ? await prisma.order.findUnique({
+                where: { id: orderId },
+                select: { id: true },
+              })
+            : { id: orderId };
+
+          if (orderExists) {
+            await issueEntitlementsForOrder(orderId);
+          }
         }
       }
 

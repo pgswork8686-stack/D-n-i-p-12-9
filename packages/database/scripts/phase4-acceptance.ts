@@ -1,10 +1,50 @@
 import * as crypto from "node:crypto";
+import { spawn, ChildProcess } from "node:child_process";
+import * as path from "node:path";
 import { prisma } from "../src/client";
 import { processOutboxEvents } from "../../../apps/worker/src/outbox-processor";
 
 const API_BASE = process.env.API_URL || "http://localhost:4000";
 const TEST_WEBHOOK_SECRET =
   process.env.TEST_PAYMENT_WEBHOOK_SECRET || "change-me-local-only";
+
+let apiProcess: ChildProcess | null = null;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureApiRunning(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    if (res.ok) {
+      return;
+    }
+  } catch {
+    // Not running
+  }
+
+  console.log("Starting API server child process on port 4000...");
+  apiProcess = spawn("node", [path.resolve(__dirname, "../../../apps/api/dist/main.js")], {
+    stdio: "pipe",
+    env: { ...process.env, PORT: "4000" },
+  });
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < 30000) {
+    await sleep(500);
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) {
+        console.log("API server is ready!");
+        return;
+      }
+    } catch {
+      // Keep waiting
+    }
+  }
+  throw new Error("Timed out waiting for API server to start");
+}
 
 function getTestWebhookSignature(payload: {
   externalEventId: string;
@@ -22,6 +62,8 @@ async function runAcceptance() {
   console.log("==================================================");
   console.log("PHASE 4 — COMMERCE CORE LIVE RUNTIME ACCEPTANCE");
   console.log("==================================================\n");
+
+  await ensureApiRunning();
 
   const customerToken = "dev-customer-token";
   const customer2Token = "dev-no-email:sub_dev_customer_002";
@@ -1857,11 +1899,13 @@ async function runAcceptance() {
 
 runAcceptance()
   .then(async () => {
+    if (apiProcess) apiProcess.kill("SIGTERM");
     await prisma.$disconnect();
     process.exit(0);
   })
   .catch(async (err) => {
     console.error("\n❌ RUNTIME ACCEPTANCE FAILED:", err);
+    if (apiProcess) apiProcess.kill("SIGTERM");
     await prisma.$disconnect();
     process.exit(1);
   });

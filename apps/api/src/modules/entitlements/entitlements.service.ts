@@ -11,6 +11,7 @@ import {
   Entitlement,
   EntitlementStatus,
   OrderStatus,
+  issueEntitlementsForOrder as dbIssueEntitlementsForOrder,
 } from "@nexus/database";
 import { EntitlementDto, PaginatedResponse } from "@nexus/contracts";
 import {
@@ -24,144 +25,27 @@ export class EntitlementsService {
 
   /**
    * Authoritatively issues entitlements for an Order in PAID state.
-   * Exactly-once semantics per OrderItem enforced via unique constraint.
+   * Delegates to the single source of truth in @nexus/database domain engine.
    */
   async issueEntitlementsForOrder(
     orderId: string,
     externalTx?: Prisma.TransactionClient,
   ): Promise<Entitlement[]> {
-    const execute = async (tx: Prisma.TransactionClient) => {
-      // 1. Re-read Order inside transaction
-      const order = await tx.order.findUnique({
-        where: { id: orderId },
-        include: {
-          items: {
-            include: {
-              variant: {
-                include: {
-                  licensePlan: true,
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (!order) {
-        throw new NotFoundException(`Order '${orderId}' not found`);
+    try {
+      const result = await dbIssueEntitlementsForOrder(
+        orderId,
+        externalTx || (prisma as any),
+      );
+      return result.entitlements;
+    } catch (err: any) {
+      if (err.message?.includes("not found")) {
+        throw new NotFoundException(err.message);
       }
-
-      // 2. State validation: MUST be PAID
-      if (order.status !== OrderStatus.PAID) {
-        throw new BadRequestException(
-          `Cannot issue entitlements: Order is in status '${order.status}', expected '${OrderStatus.PAID}'`,
-        );
+      if (err.message?.includes("expected 'PAID'")) {
+        throw new BadRequestException(err.message);
       }
-
-      if (order.items.length === 0) {
-        this.logger.warn(`Order '${orderId}' has no items. Skipping entitlement issuance.`);
-        return [];
-      }
-
-      const issuedEntitlements: Entitlement[] = [];
-
-      for (const item of order.items) {
-        // 3. Expiration policy resolution
-        let expiresAt: Date | null = null;
-        const activatedAt = new Date();
-        const plan = item.variant?.licensePlan;
-
-        if (plan) {
-          if (plan.isLifetime) {
-            expiresAt = null;
-          } else if (plan.durationDays && plan.durationDays > 0) {
-            expiresAt = new Date(
-              activatedAt.getTime() + plan.durationDays * 86400000,
-            );
-          } else if (plan.durationMonths && plan.durationMonths > 0) {
-            const exp = new Date(activatedAt);
-            exp.setMonth(exp.getMonth() + plan.durationMonths);
-            expiresAt = exp;
-          }
-        }
-
-        // 4. Check if entitlement already exists (idempotent at-least-once recovery)
-        const existing = await tx.entitlement.findUnique({
-          where: { orderItemId: item.id },
-        });
-
-        if (existing) {
-          issuedEntitlements.push(existing);
-          continue;
-        }
-
-        // 5. Create missing entitlement
-        try {
-          const entitlement = await tx.entitlement.create({
-            data: {
-              userId: order.userId,
-              orderId: order.id,
-              orderItemId: item.id,
-              productId: item.productId,
-              variantId: item.variantId,
-              productType: item.productType,
-              fulfillmentType: item.fulfillmentType,
-              status: EntitlementStatus.ACTIVE,
-              quantity: item.quantity,
-              activatedAt,
-              expiresAt,
-              metadata: {
-                orderNumber: order.orderNumber,
-                sku: item.sku,
-                variantName: item.variantName,
-                productName: item.productName,
-              },
-            },
-          });
-
-          // 6. Record audit log atomically
-          await tx.auditLog.create({
-            data: {
-              action: "ENTITLEMENT_CREATED",
-              entity: "Entitlement",
-              entityId: entitlement.id,
-              actorId: null,
-              details: {
-                actor: "system",
-                orderId: order.id,
-                orderItemId: item.id,
-                userId: order.userId,
-                sku: item.sku,
-                quantity: item.quantity,
-                status: entitlement.status,
-                expiresAt: expiresAt?.toISOString() || null,
-              },
-            },
-          });
-
-          issuedEntitlements.push(entitlement);
-        } catch (err: any) {
-          // Handle concurrent worker race on unique orderItemId
-          if (err?.code === "P2002") {
-            const raceCreated = await tx.entitlement.findUnique({
-              where: { orderItemId: item.id },
-            });
-            if (raceCreated) {
-              issuedEntitlements.push(raceCreated);
-              continue;
-            }
-          }
-          throw err;
-        }
-      }
-
-      return issuedEntitlements;
-    };
-
-    if (externalTx) {
-      return execute(externalTx);
+      throw err;
     }
-    return prisma.$transaction(async (tx) => execute(tx));
   }
 
   /**

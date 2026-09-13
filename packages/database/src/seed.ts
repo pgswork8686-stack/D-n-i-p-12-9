@@ -63,7 +63,6 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "profile.read",
     "profile.update",
     "order.read",
-    "entitlement.read",
     "license.read",
     "ticket.read",
   ],
