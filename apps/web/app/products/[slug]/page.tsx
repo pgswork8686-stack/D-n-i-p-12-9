@@ -170,14 +170,50 @@ export default function PublicProductDetailPage() {
             )}
 
             <Button variant="primary" className="w-full justify-center text-sm py-2.5">
-              Acquire Digital Asset
+              {getCtaLabel(product.fulfillmentType, product.productType)}
             </Button>
-            <p className="text-xs text-center text-gray-400 mt-3">
-              Instant activation and license provisioning upon order completion.
+            <p className="text-xs text-center text-gray-500 mt-3 leading-relaxed">
+              {getFulfillmentCopy(product.fulfillmentType)}
             </p>
           </Card>
         </div>
       </div>
     </main>
   );
+}
+
+function getFulfillmentCopy(fulfillmentType?: string): string {
+  switch (fulfillmentType) {
+    case "DIGITAL_DOWNLOAD":
+      return "Download access is provided after a valid entitlement is created.";
+    case "INTERNAL_LICENSE":
+      return "License access is provisioned after order and entitlement processing.";
+    case "EXTERNAL_MANAGED":
+      return "Activation is managed after purchase. You may be asked to provide the target domain.";
+    case "MEMBERSHIP_ACCESS":
+      return "Membership access is enabled after successful order processing.";
+    case "MANUAL_SERVICE":
+      return "Our team will contact you to begin service fulfillment.";
+    default:
+      return "Fulfillment access is enabled after successful order and entitlement processing.";
+  }
+}
+
+function getCtaLabel(fulfillmentType?: string, productType?: string): string {
+  switch (fulfillmentType) {
+    case "DIGITAL_DOWNLOAD":
+      return "Download Asset";
+    case "INTERNAL_LICENSE":
+      return "Purchase License";
+    case "EXTERNAL_MANAGED":
+      return "Order Managed License";
+    case "MEMBERSHIP_ACCESS":
+      return "Join Membership";
+    case "MANUAL_SERVICE":
+      return "Request Service";
+    default:
+      if (productType === "SERVICE") return "Request Service";
+      if (productType === "MEMBERSHIP") return "Join Membership";
+      return "Acquire Product";
+  }
 }

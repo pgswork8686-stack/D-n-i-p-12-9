@@ -57,13 +57,39 @@ export class CategoriesService {
   }
 
   async listCategories(includeArchived = false): Promise<Category[]> {
-    return prisma.category.findMany({
+    const categories = await prisma.category.findMany({
       where: includeArchived ? {} : { status: CategoryStatus.ACTIVE },
       include: {
-        children: true,
+        children: includeArchived
+          ? { orderBy: { sortOrder: "asc" } }
+          : {
+              where: { status: CategoryStatus.ACTIVE },
+              orderBy: { sortOrder: "asc" },
+            },
       },
       orderBy: { sortOrder: "asc" },
     });
+
+    if (includeArchived) {
+      return categories;
+    }
+
+    // Recursive tree sanitizer ensuring only ACTIVE categories exist at any depth
+    const sanitizeActiveTree = (items: any[]): any[] => {
+      return items
+        .filter((cat) => cat.status === CategoryStatus.ACTIVE)
+        .map((cat) => {
+          if (cat.children && Array.isArray(cat.children)) {
+            return {
+              ...cat,
+              children: sanitizeActiveTree(cat.children),
+            };
+          }
+          return cat;
+        });
+    };
+
+    return sanitizeActiveTree(categories);
   }
 
   async getCategoryById(id: string): Promise<Category> {
@@ -83,11 +109,21 @@ export class CategoriesService {
     const category = await prisma.category.findUnique({
       where: { slug },
       include: {
-        children: true,
+        children: onlyActive
+          ? {
+              where: { status: CategoryStatus.ACTIVE },
+              orderBy: { sortOrder: "asc" },
+            }
+          : { orderBy: { sortOrder: "asc" } },
       },
     });
     if (!category || (onlyActive && category.status !== CategoryStatus.ACTIVE)) {
       throw new NotFoundException(`Category with slug '${slug}' not found`);
+    }
+    if (onlyActive && (category as any).children && Array.isArray((category as any).children)) {
+      (category as any).children = (category as any).children.filter(
+        (child: any) => child.status === CategoryStatus.ACTIVE,
+      );
     }
     return category;
   }

@@ -250,9 +250,7 @@ export async function seedDevUsers(
   rolesMap: Map<string, string>,
 ): Promise<void> {
   const isProduction = process.env.NODE_ENV === "production";
-  const explicitDevFlag =
-    process.env.SEED_DEV_USERS === "true" ||
-    process.argv.includes("--dev-users");
+  const explicitDevFlag = process.env.SEED_DEV_USERS === "true";
 
   if (isProduction) {
     console.warn("[seed] Refusing to seed development users in production environment (NODE_ENV=production).");
@@ -260,7 +258,7 @@ export async function seedDevUsers(
   }
 
   if (!explicitDevFlag) {
-    console.log("[seed] Skipping development users seed (SEED_DEV_USERS=true or --dev-users flag required).");
+    console.log("[seed] Skipping development users seed (SEED_DEV_USERS=true required).");
     return;
   }
 
@@ -575,14 +573,39 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
  * Runs system RBAC seed first. Then conditionally seeds dev users/catalog if gated conditions are met.
  */
 export async function seed(db: PrismaClient = prisma) {
-  const { rolesMap } = await seedSystemRbac(db);
+  if (process.argv.includes("--local-all")) {
+    if (process.env.NODE_ENV === "production") {
+      console.error("[seed] Refusing to run db:seed:local in production environment (NODE_ENV=production).");
+      process.exit(1);
+    }
+    console.log("[seed] Running local development seed (system + dev users + catalog)...");
+    const { rolesMap } = await seedSystemRbac(db);
+    process.env.SEED_DEV_USERS = "true";
+    await seedDevUsers(db, rolesMap);
+    await seedDevCatalog(db);
+    return;
+  }
+
   if (process.argv.includes("--catalog")) {
     await seedDevCatalog(db);
-  } else if (!process.argv.includes("--system-only")) {
+    return;
+  }
+
+  const { rolesMap } = await seedSystemRbac(db);
+  if (process.argv.includes("--system-only")) {
+    return;
+  }
+
+  if (process.argv.includes("--dev-users")) {
     await seedDevUsers(db, rolesMap);
-    if (process.argv.includes("--with-catalog") || process.env.SEED_CATALOG === "true") {
-      await seedDevCatalog(db);
-    }
+    return;
+  }
+
+  if (process.env.SEED_DEV_USERS === "true") {
+    await seedDevUsers(db, rolesMap);
+  }
+  if (process.argv.includes("--with-catalog") || process.env.SEED_CATALOG === "true") {
+    await seedDevCatalog(db);
   }
 }
 

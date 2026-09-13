@@ -187,5 +187,98 @@ describe("CategoriesService", () => {
       const cat = await service.getCategoryBySlug("active-cat", true);
       expect(cat.id).toBe("cat_active");
     });
+
+    it("filters out ARCHIVED children when onlyActive=true in getCategoryBySlug", async () => {
+      (prisma.category.findUnique as jest.Mock).mockResolvedValueOnce({
+        id: "cat_parent",
+        slug: "parent-cat",
+        status: CategoryStatus.ACTIVE,
+        children: [
+          { id: "child_active", name: "Active Child", status: CategoryStatus.ACTIVE },
+          { id: "child_archived", name: "Archived Child", status: CategoryStatus.ARCHIVED },
+        ],
+      });
+
+      const cat = await service.getCategoryBySlug("parent-cat", true);
+      expect(cat.id).toBe("cat_parent");
+      expect((cat as any).children).toHaveLength(1);
+      expect((cat as any).children[0].id).toBe("child_active");
+    });
+  });
+
+  describe("listCategories tree hierarchy and archived sanitization", () => {
+    it("public listCategories(false) prunes ARCHIVED children under ACTIVE parent", async () => {
+      (prisma.category.findMany as jest.Mock).mockResolvedValueOnce([
+        {
+          id: "parent_1",
+          name: "Parent Category",
+          slug: "parent-category",
+          status: CategoryStatus.ACTIVE,
+          children: [
+            {
+              id: "child_active",
+              name: "Active Child",
+              slug: "active-child",
+              status: CategoryStatus.ACTIVE,
+            },
+            {
+              id: "child_archived",
+              name: "Archived Child",
+              slug: "archived-child",
+              status: CategoryStatus.ARCHIVED,
+            },
+          ],
+        },
+      ]);
+
+      const result = await service.listCategories(false);
+
+      expect(prisma.category.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: CategoryStatus.ACTIVE },
+          include: {
+            children: expect.objectContaining({
+              where: { status: CategoryStatus.ACTIVE },
+            }),
+          },
+        }),
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("parent_1");
+      const children = (result[0] as any).children;
+      expect(children).toHaveLength(1);
+      expect(children[0].id).toBe("child_active");
+      expect(children.some((c: any) => c.id === "child_archived")).toBe(false);
+    });
+
+    it("admin listCategories(true) includes ARCHIVED categories and children", async () => {
+      (prisma.category.findMany as jest.Mock).mockResolvedValueOnce([
+        {
+          id: "parent_1",
+          status: CategoryStatus.ACTIVE,
+          children: [
+            { id: "child_active", status: CategoryStatus.ACTIVE },
+            { id: "child_archived", status: CategoryStatus.ARCHIVED },
+          ],
+        },
+        {
+          id: "parent_archived",
+          status: CategoryStatus.ARCHIVED,
+          children: [],
+        },
+      ]);
+
+      const result = await service.listCategories(true);
+
+      expect(prisma.category.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {},
+        }),
+      );
+
+      expect(result).toHaveLength(2);
+      expect((result[0] as any).children).toHaveLength(2);
+    });
   });
 });

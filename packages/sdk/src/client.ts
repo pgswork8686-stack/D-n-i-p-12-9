@@ -193,6 +193,7 @@ export class NexusApiClient {
     if (params?.limit) searchParams.set("limit", String(params.limit));
     if (params?.productType) searchParams.set("productType", params.productType);
     if (params?.search) searchParams.set("search", params.search);
+    if (params?.currency) searchParams.set("currency", params.currency);
     if (params?.sort) searchParams.set("sort", params.sort);
 
     const queryStr = searchParams.toString();

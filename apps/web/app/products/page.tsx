@@ -179,10 +179,12 @@ export default function PublicProductsCatalogPage() {
               <div className="pt-4 border-t border-gray-100 flex items-center justify-between">
                 <div>
                   <span className="text-xs text-gray-400 block">Starting from</span>
-                  <span className="text-lg font-extrabold text-[#0037b0]">
+                  <span className={`font-extrabold ${p.minPrice ? "text-lg text-[#0037b0]" : "text-sm text-gray-500"}`}>
                     {p.minPrice
-                      ? formatMoney(p.minPrice.amount, p.minPrice.currency)
-                      : "Free"}
+                      ? p.minPrice.amount === 0
+                        ? "Free"
+                        : formatMoney(p.minPrice.amount, p.minPrice.currency)
+                      : `Unavailable in ${currency}`}
                   </span>
                 </div>
                 <Link href={`/products/${p.slug}`}>
