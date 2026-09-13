@@ -2,10 +2,24 @@
 
 Repo chính: `pgswork8686-stack/D-n-i-p-12-9`
 
+## Governance / nguồn chuẩn
+File này là **hiến pháp kiến trúc/domain** của dự án.
+
+Thứ tự triển khai hiện hành không được suy ra từ các PR cũ hoặc các đoạn roadmap lịch sử. Luôn dùng:
+1. `AGENTS.md` — luật làm việc cho agent
+2. `PROJECT_CONTEXT.md` — kiến trúc/domain bất biến
+3. `ROADMAP.md` — thứ tự phase hiện hành
+4. `CURRENT_PHASE.md` — phase/scope được phép làm ngay bây giờ
+5. `docs/phases/<current-phase>.md` — implementation/acceptance contract
+6. `DECISIONS.md` — quyết định kiến trúc/business bền vững
+
+Nếu file này và `ROADMAP.md` khác nhau về **thứ tự phase**, `ROADMAP.md` + `CURRENT_PHASE.md` là nguồn quyết định hiện hành. Nếu khác nhau về **kiến trúc/domain bất biến**, không tự đoán; phải resolve decision trước khi code tiếp.
+
 ## Vai trò
-- Codex: code, test, push branch/PR.
-- ChatGPT: reviewer/architect; rà kiến trúc, business logic, security, test, consistency, đối chiếu spec.
-- Ưu tiên branch + Pull Request, hạn chế push feature trực tiếp vào `main`.
+- Codex / Antigravity: code, test, push branch/PR theo phase spec.
+- ChatGPT: reviewer/architect; rà kiến trúc, business logic, security, test, concurrency, migration, consistency, đối chiếu spec.
+- Ưu tiên branch + Pull Request, không push feature trực tiếp vào `main`.
+- Implementation agent không tự merge phase PR; chỉ merge sau independent review/PASS.
 
 ## Kiến trúc chốt
 ```text
@@ -24,12 +38,14 @@ Cloudflare
 
 Nguyên tắc:
 1. Backend là nguồn quyết định business state duy nhất.
-2. Frontend không tự đổi order/payment/license state.
+2. Frontend không tự đổi order/payment/entitlement/license/allocation state.
 3. n8n không ghi trực tiếp business-critical data vào DB; chỉ orchestration.
-4. Payment success page không được tự đổi order sang `PAID`; chỉ verified signed webhook.
+4. Payment success page không được tự đổi order sang `PAID`; chỉ verified signed provider event.
 5. PostgreSQL là source of truth.
 6. V1 dùng NestJS Modular Monolith, chưa microservice hóa sớm.
-7. File ZIP private chỉ tải qua entitlement check + signed URL ngắn hạn.
+7. File/package private chỉ tải qua entitlement check + signed URL ngắn hạn.
+8. Paid access đi qua Entitlement; không thiết kế shortcut `order → license`.
+9. Preview runtime và distributable package là hai security domain riêng.
 
 ## Stack V1
 - Monorepo: pnpm + Turborepo
@@ -97,6 +113,8 @@ order → order_item → entitlement → fulfillment strategy
 
 Entitlement trả lời: khách có quyền dùng gì, bao lâu, bao nhiêu site, được update/support/download tới khi nào. License key chỉ là một loại fulfillment.
 
+Purchased entitlement terms phải dựa vào immutable purchase/order-item snapshot, không được âm thầm thay đổi theo catalog hiện tại.
+
 ## Elementor / external managed license
 Không coi mỗi khách là một Elementor key riêng. Hệ thống quản quyền khách bằng entitlement + allocation trên một provider account/upstream subscription.
 
@@ -144,7 +162,7 @@ Content:
 Operations:
 `tickets, ticket_messages, notifications, outbox_events, automation_runs, audit_logs, idempotency_keys, system_settings`
 
-## Payment flow
+## Payment flow — target end state
 ```text
 Customer
 → Cart
@@ -157,11 +175,18 @@ Customer
 → DB transaction:
    Payment SUCCEEDED
    Order PAID
-   create Entitlement
    create Outbox Event
+→ Worker consumes ORDER_PAID
+→ create/reconcile Entitlement idempotently
+→ downstream fulfillment
 ```
 
-Side-effects như email, license generation, affiliate commission chạy qua outbox/worker.
+Phased implementation rule:
+- Phase 4 dừng ở Payment/Order + `ORDER_PAID` transactional outbox.
+- Phase 5 mới triển khai Entitlement creation/reconciliation.
+- Không kéo Entitlement vào Commerce chỉ để “hoàn thành flow sớm”.
+
+Side-effects như email, entitlement handoff, license generation, affiliate commission chạy qua outbox/worker phù hợp với từng phase.
 
 ## License nội bộ
 Dự kiến:
@@ -180,11 +205,32 @@ Customer click Download
 → check entitlement
 → check version permission
 → check rate limit
-→ signed R2 URL TTL 2–5 phút
+→ signed R2 URL TTL ngắn
 → log download event
 ```
 
 Không render permanent private ZIP URL.
+
+## Preview Engine
+Mục tiêu: ThemeForest-style `Live Preview` nhưng preview không được trở thành đường dẫn lấy distributable source/package.
+
+Flow kiến trúc:
+```text
+Product Detail
+→ Live Preview
+→ Preview Session
+→ signed short-lived token
+→ Preview Gateway
+→ private/sanitized demo runtime
+```
+
+Hai policy mode dự kiến:
+- `STANDARD`: gateway + isolated demo runtime + WAF/rate limit/noindex/no source maps.
+- `PROTECTED`: remote browser/render streaming cho asset giá trị cao; client chủ yếu nhận rendered output thay vì demo DOM/CSS/JS gốc.
+
+Không hứa “anti-clone 100%”: pixel đã hiển thị vẫn có thể screenshot/AI recreate. Mục tiêu bảo mật là bảo vệ package/source/secret, chặn bypass trực tiếp và tăng chi phí automated scraping.
+
+Chi tiết: `docs/architecture/preview-engine.md`.
 
 ## CMS riêng
 Không phụ thuộc WordPress.
@@ -196,8 +242,10 @@ Hỗ trợ: title, slug, excerpt, block/rich content, featured image, category/t
 
 Public web dùng Next.js SSR/ISR.
 
+CMS/SEO không nằm trên critical path của vertical slice commerce đầu tiên; triển khai theo `ROADMAP.md`.
+
 ## n8n / AI Automation
-V1 ưu tiên AI tạo draft.
+V1 hướng tới AI tạo draft, nhưng chỉ sau các commerce/fulfillment vertical slice ưu tiên trong `ROADMAP.md`.
 
 ```text
 Keyword/topic
@@ -213,7 +261,7 @@ Keyword/topic
 → SCHEDULED/PUBLISHED
 ```
 
-n8n không insert/update trực tiếp `posts` trong DB.
+n8n không insert/update trực tiếp business-critical DB tables; content automation cũng đi qua internal API/service boundary phù hợp.
 
 ## UI Stitch
 Khoảng 32 screens. Không copy/paste 32 HTML file vào production.
@@ -224,22 +272,24 @@ Portal components: PortalShell, Sidebar, Topbar, StatCard, OrderTable, DownloadC
 
 Màn hình cần bổ sung: Product Detail, Customer Dashboard, Standard Checkout, Order Detail, Account Security/2FA, Notification Center, 403/404/500, Empty/Loading/Error states, Admin UI.
 
-## V1 scope
-Ưu tiên: Themes, Plugins, Figma/UI Kits, External managed licenses, Catalog, Checkout, Payment, Entitlement, License/Download, Customer Portal, CMS/SEO, Automation.
+Không cần hoàn thiện toàn bộ 32 screens trước khi vertical slice đầu tiên chạy end-to-end.
 
-Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/software account quá rộng, mobile app, Zalo mini app.
+## V1 scope
+Ưu tiên kiến trúc hỗ trợ: Themes, Plugins, Figma/UI Kits, External managed licenses, Catalog, Checkout, Payment, Entitlement, License/Download, Customer Portal, CMS/SEO, Automation.
+
+Launch scope thực tế được thu hẹp theo `ROADMAP.md`: chứng minh từng vertical slice trước, không launch mọi product type cùng lúc.
+
+Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/software account quá rộng, mobile app, Zalo mini app, Kubernetes/microservices/multi-region.
 
 ## Thứ tự triển khai
-1. Foundation: monorepo, Docker, env/staging, PostgreSQL, Redis, R2, Auth, health checks.
-2. Catalog/Admin: Product, Variant, Price, Product type, Fulfillment strategy, Admin CRUD.
-3. Commerce slice: Cart, Checkout, Order, test payment, Entitlement.
-4. Elementor flow: Product → fake buy → PAID → Entitlement → domain → Allocation PENDING → Admin Confirm → ACTIVE.
-5. Internal License + Download.
-6. Payment production: provider abstraction, signed webhook, idempotency, refund/revoke.
-7. Customer Portal.
-8. CMS + SEO.
-9. n8n Automation.
-10. Growth: affiliate, membership, hosting integration, advanced search.
+**Nguồn chuẩn duy nhất cho thứ tự phase hiện hành: `ROADMAP.md`.**
+
+Tại thời điểm cập nhật governance:
+- DONE: Phase 1 Foundation, Phase 2 Identity/RBAC, Phase 3 Catalog/Admin.
+- CURRENT: Phase 4 Commerce Core.
+- NEXT: Phase 5 Entitlement Engine → Digital Download vertical slice → staging foundation → first production payment → external managed license → internal license → portal completion → preview engine.
+
+Không sửa thứ tự triển khai ở file này mà quên `ROADMAP.md`/`CURRENT_PHASE.md`.
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
@@ -249,18 +299,19 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - Refresh token rotation
 - Secrets không commit Git
 - DB private
-- R2 signed URL
+- R2/private storage signed URL ngắn hạn
 - Upload validation
 - Audit logs
 - Backup + restore test
-- Không log password/access token/provider secret/payment secret
+- Không log password/access token/provider secret/payment secret/private signed URL token
+- Preview runtime không chứa provider master credential hoặc distributable package secret
 
 ## Review rubric
 ```text
 STATUS: PASS / NEED FIX / BLOCKER
 
 BLOCKER: sai kiến trúc, mất dữ liệu, lỗ hổng nghiêm trọng
-HIGH: business logic/security/test quan trọng
+HIGH: business logic/security/concurrency/test quan trọng
 MEDIUM: consistency/maintainability/DX
 LOW: cleanup/cosmetic
 ```
@@ -269,17 +320,30 @@ Checklist review:
 1. Đúng domain boundary?
 2. Business logic nằm backend?
 3. Có bypass entitlement/payment/auth?
-4. Webhook/idempotency an toàn?
-5. Frontend/n8n có ghi DB trực tiếp?
-6. Có public secret/private URL?
-7. Có test happy path + failure path?
+4. Webhook/idempotency/concurrency an toàn?
+5. Frontend/n8n có ghi business-critical DB trực tiếp?
+6. Có public secret/private URL/provider credential?
+7. Có test happy path + failure path + ownership + race nếu cần?
 8. Migration an toàn?
-9. Error handling/logging đủ?
-10. Bám đúng PROJECT_CONTEXT.md?
+9. Error handling/logging đủ và không leak secret?
+10. Bám `AGENTS.md`, `CURRENT_PHASE.md`, phase spec và `DECISIONS.md`?
 
-## Milestone đầu tiên
-Không ưu tiên homepage.
+## Milestone sản phẩm đầu tiên
+Không ưu tiên homepage/CMS hoàn chỉnh.
 
-Milestone 01: **foundation + product/admin + một vertical slice Elementor chạy end-to-end trên test data**.
+Milestone phải chứng minh một lifecycle thật:
+```text
+browse
+→ cart
+→ checkout
+→ payment
+→ order paid
+→ entitlement
+→ fulfillment
+→ logout/login lại
+→ quyền truy cập vẫn đúng
+```
 
-Chỉ mở rộng sau khi milestone này PASS review.
+Vertical slice đầu ưu tiên: **DIGITAL_DOWNLOAD** vì đây là cách ngắn nhất để chứng minh commerce + entitlement + delivery hoàn chỉnh. External managed license/Elementor là vertical slice tiếp theo theo `ROADMAP.md`.
+
+Chỉ mở rộng mạnh sang CMS/AI/affiliate/growth sau khi các vertical slice cốt lõi PASS review.
