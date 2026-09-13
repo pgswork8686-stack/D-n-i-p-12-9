@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import { Test, TestingModule } from "@nestjs/testing";
 import {
   BadRequestException,
@@ -69,6 +70,7 @@ describe("OrdersService", () => {
 
     service = module.get<OrdersService>(OrdersService);
     auditService = module.get<AuditService>(AuditService);
+    (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
   });
 
   describe("checkout & authoritative repricing", () => {
@@ -363,6 +365,36 @@ describe("OrdersService", () => {
           idempotencyKey: "key-123",
         }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it("idempotency: returns committed response for same key without recreating order", async () => {
+      const expectedFingerprint = crypto
+        .createHash("sha256")
+        .update(JSON.stringify({ userId: "user-1", currency: Currency.USD }))
+        .digest("hex");
+
+      const committedResponse = {
+        order: { id: "order-idem", orderNumber: "ORD-IDEM" },
+        payment: { id: "pay-idem", status: "PENDING" },
+      };
+
+      (prisma.idempotencyKey.findUnique as jest.Mock).mockResolvedValue({
+        id: "idem-1",
+        key: "key-idem",
+        userId: "user-1",
+        requestFingerprint: expectedFingerprint,
+        status: "COMMITTED",
+        expiresAt: new Date(Date.now() + 60000),
+        response: committedResponse,
+      });
+
+      const res = await service.checkout("user-1", {
+        currency: Currency.USD,
+        idempotencyKey: "key-idem",
+      });
+
+      expect(res).toEqual(committedResponse);
+      expect(prisma.order.create).not.toHaveBeenCalled();
     });
   });
 

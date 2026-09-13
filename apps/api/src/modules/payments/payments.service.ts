@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  Logger,
+} from "@nestjs/common";
 import { prisma, PaymentStatus, OrderStatus } from "@nexus/database";
 import { TestPaymentCallbackResponse } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
@@ -90,9 +95,6 @@ export class PaymentsService {
           );
         }
 
-        let targetPaymentStatus: PaymentStatus = txPayment.status;
-        let targetOrderStatus: OrderStatus = txPayment.order.status;
-
         // Terminal state preservation:
         // - SUCCEEDED is terminal: cannot transition to FAILED or CANCELLED
         // - FAILED/CANCELLED are terminal on this payment attempt: cannot transition to SUCCEEDED
@@ -128,8 +130,6 @@ export class PaymentsService {
 
         // State machine transitions from PENDING
         if (dto.eventType === "payment.succeeded") {
-          targetPaymentStatus = PaymentStatus.SUCCEEDED;
-
           // CAS update payment from PENDING -> SUCCEEDED
           const payCas = await tx.payment.updateMany({
             where: {
@@ -139,54 +139,76 @@ export class PaymentsService {
             data: { status: PaymentStatus.SUCCEEDED },
           });
 
-          if (payCas.count > 0) {
-            // CAS update order from PENDING_PAYMENT -> PAID
-            const orderCas = await tx.order.updateMany({
-              where: {
-                id: txPayment.orderId,
-                status: OrderStatus.PENDING_PAYMENT,
-              },
-              data: { status: OrderStatus.PAID },
+          if (payCas.count === 0) {
+            // Concurrent event won the race! Re-read current actual state from DB
+            const currentPayment = await tx.payment.findUniqueOrThrow({
+              where: { id: txPayment.id },
+              include: { order: true },
             });
-
-            targetOrderStatus = OrderStatus.PAID;
-
-            // Exactly-once ORDER_PAID outbox event at the business level
-            if (orderCas.count > 0) {
-              await tx.outboxEvent.create({
-                data: {
-                  eventType: "ORDER_PAID",
-                  aggregateType: "Order",
-                  aggregateId: txPayment.order.id,
-                  payload: {
-                    orderId: txPayment.order.id,
-                    orderNumber: txPayment.order.orderNumber,
-                    userId: txPayment.order.userId,
-                    totalAmount: txPayment.order.totalAmount,
-                    currency: txPayment.order.currency,
-                    paymentId: txPayment.id,
-                  },
-                  status: "PENDING",
-                },
-              });
-
-              await this.auditService.logActionWithClient(tx, {
-                action: "ORDER_PAID",
-                entity: "Order",
-                entityId: txPayment.order.id,
-                actorId: txPayment.order.userId,
-                details: {
-                  paymentId: txPayment.id,
-                  externalEventId: dto.externalEventId,
-                  totalAmount: txPayment.order.totalAmount,
-                  currency: txPayment.order.currency,
-                },
-              });
-            }
+            return {
+              success: true,
+              duplicate: false,
+              paymentStatus: currentPayment.status,
+              orderStatus: currentPayment.order.status,
+              message: `Payment already in state ${currentPayment.status}`,
+            };
           }
-        } else if (dto.eventType === "payment.failed") {
-          targetPaymentStatus = PaymentStatus.FAILED;
 
+          // Payment CAS won! Now CAS update Order from PENDING_PAYMENT -> PAID
+          const orderCas = await tx.order.updateMany({
+            where: {
+              id: txPayment.orderId,
+              status: OrderStatus.PENDING_PAYMENT,
+            },
+            data: { status: OrderStatus.PAID },
+          });
+
+          if (orderCas.count === 0) {
+            // Invariant violation: payment was pending but order cannot be marked PAID
+            throw new ConflictException(
+              "Order is not in pending payment state; cannot transition to PAID",
+            );
+          }
+
+          // Exactly-once ORDER_PAID outbox event at the business level
+          await tx.outboxEvent.create({
+            data: {
+              eventType: "ORDER_PAID",
+              aggregateType: "Order",
+              aggregateId: txPayment.order.id,
+              payload: {
+                orderId: txPayment.order.id,
+                orderNumber: txPayment.order.orderNumber,
+                userId: txPayment.order.userId,
+                totalAmount: txPayment.order.totalAmount,
+                currency: txPayment.order.currency,
+                paymentId: txPayment.id,
+              },
+              status: "PENDING",
+            },
+          });
+
+          await this.auditService.logActionWithClient(tx, {
+            action: "ORDER_PAID",
+            entity: "Order",
+            entityId: txPayment.order.id,
+            actorId: txPayment.order.userId,
+            details: {
+              paymentId: txPayment.id,
+              externalEventId: dto.externalEventId,
+              totalAmount: txPayment.order.totalAmount,
+              currency: txPayment.order.currency,
+            },
+          });
+
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: PaymentStatus.SUCCEEDED,
+            orderStatus: OrderStatus.PAID,
+            message: "Payment event processed successfully",
+          };
+        } else if (dto.eventType === "payment.failed") {
           const payCas = await tx.payment.updateMany({
             where: {
               id: txPayment.id,
@@ -195,21 +217,39 @@ export class PaymentsService {
             data: { status: PaymentStatus.FAILED },
           });
 
-          if (payCas.count > 0) {
-            await this.auditService.logActionWithClient(tx, {
-              action: "PAYMENT_FAILED",
-              entity: "Payment",
-              entityId: txPayment.id,
-              actorId: txPayment.order.userId,
-              details: {
-                orderId: txPayment.orderId,
-                externalEventId: dto.externalEventId,
-              },
+          if (payCas.count === 0) {
+            const currentPayment = await tx.payment.findUniqueOrThrow({
+              where: { id: txPayment.id },
+              include: { order: true },
             });
+            return {
+              success: true,
+              duplicate: false,
+              paymentStatus: currentPayment.status,
+              orderStatus: currentPayment.order.status,
+              message: `Payment already in state ${currentPayment.status}`,
+            };
           }
-        } else if (dto.eventType === "payment.cancelled") {
-          targetPaymentStatus = PaymentStatus.CANCELLED;
 
+          await this.auditService.logActionWithClient(tx, {
+            action: "PAYMENT_FAILED",
+            entity: "Payment",
+            entityId: txPayment.id,
+            actorId: txPayment.order.userId,
+            details: {
+              orderId: txPayment.orderId,
+              externalEventId: dto.externalEventId,
+            },
+          });
+
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: PaymentStatus.FAILED,
+            orderStatus: txPayment.order.status,
+            message: "Payment event marked as failed",
+          };
+        } else if (dto.eventType === "payment.cancelled") {
           const payCas = await tx.payment.updateMany({
             where: {
               id: txPayment.id,
@@ -218,37 +258,59 @@ export class PaymentsService {
             data: { status: PaymentStatus.CANCELLED },
           });
 
-          if (payCas.count > 0) {
-            // Only cancel order if not already PAID
-            await tx.order.updateMany({
-              where: {
-                id: txPayment.orderId,
-                status: OrderStatus.PENDING_PAYMENT,
-              },
-              data: { status: OrderStatus.CANCELLED },
+          if (payCas.count === 0) {
+            const currentPayment = await tx.payment.findUniqueOrThrow({
+              where: { id: txPayment.id },
+              include: { order: true },
             });
-
-            targetOrderStatus = OrderStatus.CANCELLED;
-
-            await this.auditService.logActionWithClient(tx, {
-              action: "PAYMENT_CANCELLED",
-              entity: "Payment",
-              entityId: txPayment.id,
-              actorId: txPayment.order.userId,
-              details: {
-                orderId: txPayment.orderId,
-                externalEventId: dto.externalEventId,
-              },
-            });
+            return {
+              success: true,
+              duplicate: false,
+              paymentStatus: currentPayment.status,
+              orderStatus: currentPayment.order.status,
+              message: `Payment already in state ${currentPayment.status}`,
+            };
           }
+
+          // Only cancel order if not already PAID
+          await tx.order.updateMany({
+            where: {
+              id: txPayment.orderId,
+              status: OrderStatus.PENDING_PAYMENT,
+            },
+            data: { status: OrderStatus.CANCELLED },
+          });
+
+          const currentOrder = await tx.order.findUniqueOrThrow({
+            where: { id: txPayment.orderId },
+          });
+
+          await this.auditService.logActionWithClient(tx, {
+            action: "PAYMENT_CANCELLED",
+            entity: "Payment",
+            entityId: txPayment.id,
+            actorId: txPayment.order.userId,
+            details: {
+              orderId: txPayment.orderId,
+              externalEventId: dto.externalEventId,
+            },
+          });
+
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: PaymentStatus.CANCELLED,
+            orderStatus: currentOrder.status,
+            message: "Payment event marked as cancelled",
+          };
         }
 
         return {
           success: true,
           duplicate: false,
-          paymentStatus: targetPaymentStatus,
-          orderStatus: targetOrderStatus,
-          message: "Payment event processed successfully",
+          paymentStatus: txPayment.status,
+          orderStatus: txPayment.order.status,
+          message: `Unrecognized event type '${dto.eventType}'`,
         };
       });
     } catch (err: any) {

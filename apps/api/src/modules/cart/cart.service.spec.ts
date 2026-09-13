@@ -19,8 +19,10 @@ jest.mock("@nexus/database", () => {
   return {
     ...actual,
     prisma: {
+      $transaction: jest.fn((cb) => cb(prisma)),
       cart: {
         findFirst: jest.fn(),
+        findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
       },
@@ -139,6 +141,11 @@ describe("CartService", () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      (prisma.cart.findUnique as jest.Mock).mockResolvedValue({
+        id: "cart-1",
+        userId: "user-1",
+        status: "ACTIVE",
+      });
       (prisma.cartItem.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.cartItem.upsert as jest.Mock).mockResolvedValue({});
       (prisma.cartItem.findMany as jest.Mock).mockResolvedValue([]);
@@ -151,14 +158,14 @@ describe("CartService", () => {
 
       expect(prisma.cartItem.upsert).toHaveBeenCalledWith({
         where: {
-          cartId_variantId: {
+          cartId_variantId_priceId: {
             cartId: "cart-1",
             variantId: "var-1",
+            priceId: "price-1",
           },
         },
         update: {
           quantity: 1,
-          priceId: "price-1",
         },
         create: {
           cartId: "cart-1",
@@ -238,6 +245,7 @@ describe("CartService", () => {
         cart: {
           id: "user2-cart",
           userId: "user-2", // Belongs to user-2!
+          status: "ACTIVE",
         },
       });
 
@@ -259,6 +267,7 @@ describe("CartService", () => {
         cart: {
           id: "user2-cart",
           userId: "user-2",
+          status: "ACTIVE",
         },
       });
 

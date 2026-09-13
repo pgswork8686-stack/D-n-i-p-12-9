@@ -102,20 +102,67 @@ export class OrdersService {
   }
 
   /**
+   * Bounded polling helper for same-key concurrent checkouts.
+   * Polls until the leader commits the transaction and populates the response.
+   */
+  private async pollIdempotencyResponse(
+    userId: string,
+    key: string,
+    requestFingerprint: string,
+    maxWaitMs: number = 4000,
+    intervalMs: number = 25,
+  ): Promise<CheckoutResponse> {
+    const startTime = Date.now();
+    while (Date.now() - startTime < maxWaitMs) {
+      const record = await prisma.idempotencyKey.findUnique({
+        where: {
+          scope_userId_key: {
+            scope: "checkout",
+            userId,
+            key,
+          },
+        },
+      });
+
+      if (!record) {
+        throw new ConflictException(
+          "Concurrent checkout failed or was cancelled. Please retry.",
+        );
+      }
+
+      if (record.requestFingerprint !== requestFingerprint) {
+        throw new ConflictException(
+          "Idempotency key reused with different request payload",
+        );
+      }
+
+      if (record.response && record.status === "COMMITTED") {
+        return record.response as unknown as CheckoutResponse;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    throw new ConflictException(
+      "Checkout is in progress, please try again shortly",
+    );
+  }
+
+  /**
    * Authoritative checkout:
-   * 1. Validates user's active cart.
-   * 2. Idempotency check scoped to (scope, userId, key) with request fingerprint matching.
-   * 3. Authoritatively computes totals in integer minor units with deterministic pricing & bounds.
-   * 4. In an atomic transaction:
+   * 1. Scoped idempotency reservation (status: IN_PROGRESS) to serialize concurrent requests.
+   * 2. Atomic transaction:
+   *    - Finds active cart.
    *    - Claims cart via CAS (status: ACTIVE -> CONVERTED, affected rows == 1).
+   *    - Validates live item snapshots and strict price constraints (no fallback!).
+   *    - Computes totals in integer minor units with bounds.
    *    - Creates Order (PENDING_PAYMENT, cartId unique).
    *    - Creates immutable OrderItem snapshots.
    *    - Creates Payment (PENDING).
-   *    - Stores idempotency response.
+   *    - Updates idempotency record (COMMITTED + response).
    *    - Writes transactional audit log.
    */
   async checkout(userId: string, dto: CheckoutDto): Promise<CheckoutResponse> {
-    // 1. Scoped idempotency check (before active cart query to allow safe replay of converted cart)
     const requestFingerprint = crypto
       .createHash("sha256")
       .update(JSON.stringify({ userId, currency: dto.currency }))
@@ -143,159 +190,95 @@ export class OrdersService {
           );
         }
 
-        if (existingKey.response) {
+        if (existingKey.response && existingKey.status === "COMMITTED") {
           this.logger.log(
             `Idempotent checkout hit for key '${dto.idempotencyKey}'`,
           );
           return existingKey.response as unknown as CheckoutResponse;
         }
+
+        // Leader is currently executing -> poll for committed response
+        return this.pollIdempotencyResponse(
+          userId,
+          dto.idempotencyKey,
+          requestFingerprint,
+        );
+      }
+
+      // Key does not exist yet -> reserve IN_PROGRESS
+      try {
+        await prisma.idempotencyKey.create({
+          data: {
+            key: dto.idempotencyKey,
+            scope: "checkout",
+            userId,
+            requestFingerprint,
+            status: "IN_PROGRESS",
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        });
+      } catch (err: any) {
+        if (
+          err?.code === "P2002" ||
+          err?.message?.includes("idempotency_keys")
+        ) {
+          // Another concurrent request beat us to create the key -> poll
+          return this.pollIdempotencyResponse(
+            userId,
+            dto.idempotencyKey,
+            requestFingerprint,
+          );
+        }
+        throw err;
       }
     }
 
-    // 2. Query user's active cart
-    const cart = await prisma.cart.findFirst({
-      where: { userId, status: "ACTIVE" },
-      include: {
-        items: {
+    try {
+      const orderNumber = this.generateOrderNumber();
+
+      const result = await prisma.$transaction(async (tx) => {
+        // 1. Locate active cart inside transaction
+        const cart = await tx.cart.findFirst({
+          where: { userId, status: "ACTIVE" },
           include: {
-            variant: {
+            items: {
               include: {
-                product: true,
-                prices: {
-                  where: {
-                    currency: dto.currency,
-                    isActive: true,
+                price: true,
+                variant: {
+                  include: {
+                    product: true,
+                    prices: {
+                      where: {
+                        currency: dto.currency,
+                        isActive: true,
+                      },
+                    },
                   },
                 },
               },
+              orderBy: { createdAt: "asc" },
             },
           },
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
+        });
 
-    if (!cart) {
-      const convertedCart = await prisma.cart.findFirst({
-        where: { userId, status: "CONVERTED" },
-        orderBy: { updatedAt: "desc" },
-      });
-      if (convertedCart) {
-        throw new ConflictException(
-          "Cart has already been checked out or is no longer active",
-        );
-      }
-      throw new BadRequestException("Cannot checkout: Cart is empty");
-    }
-
-    if (cart.items.length === 0) {
-      throw new BadRequestException("Cannot checkout: Cart is empty");
-    }
-
-    // Authoritative validation and deterministic price selection of every item
-    let subtotalAmount = 0;
-    const itemsSnapshotData = cart.items.map((item) => {
-      const variant = item.variant;
-      if (!variant || variant.status !== VariantStatus.ACTIVE) {
-        throw new BadRequestException(
-          `Cannot checkout: Variant '${variant?.sku || item.variantId}' is not active`,
-        );
-      }
-      if (!variant.product || variant.product.status !== ProductStatus.ACTIVE) {
-        throw new BadRequestException(
-          `Cannot checkout: Product '${variant.product?.slug || variant.productId}' is not active`,
-        );
-      }
-      if (!variant.prices || variant.prices.length === 0) {
-        throw new BadRequestException(
-          `Cannot checkout: Variant '${variant.sku}' has no active price in currency '${dto.currency}'`,
-        );
-      }
-
-      // Deterministic price resolution
-      let activePrice = item.priceId
-        ? variant.prices.find((p) => p.id === item.priceId)
-        : null;
-
-      if (!activePrice) {
-        if (variant.prices.length === 1) {
-          activePrice = variant.prices[0];
-        } else {
-          const oneTime = variant.prices.filter(
-            (p) => p.billingType === "ONE_TIME",
-          );
-          if (oneTime.length === 1) {
-            activePrice = oneTime[0];
-          } else {
-            throw new BadRequestException(
-              `Cannot checkout: Multiple active prices exist for variant '${variant.sku}' in currency '${dto.currency}'. Explicit priceId is required.`,
+        if (!cart) {
+          const convertedCart = await tx.cart.findFirst({
+            where: { userId, status: "CONVERTED" },
+            orderBy: { updatedAt: "desc" },
+          });
+          if (convertedCart) {
+            throw new ConflictException(
+              "Cart has already been checked out or is no longer active",
             );
           }
+          throw new BadRequestException("Cannot checkout: Cart is empty");
         }
-      }
 
-      const unitAmount = activePrice.amount;
-      if (
-        unitAmount < 0 ||
-        !Number.isSafeInteger(unitAmount) ||
-        unitAmount > MAX_SAFE_AMOUNT
-      ) {
-        throw new BadRequestException("Unit price exceeds allowable bounds");
-      }
+        if (cart.items.length === 0) {
+          throw new BadRequestException("Cannot checkout: Cart is empty");
+        }
 
-      if (
-        !Number.isInteger(item.quantity) ||
-        item.quantity < 1 ||
-        item.quantity > 999
-      ) {
-        throw new BadRequestException(
-          "Quantity must be an integer between 1 and 999",
-        );
-      }
-
-      const lineTotalAmount = unitAmount * item.quantity;
-      if (
-        !Number.isSafeInteger(lineTotalAmount) ||
-        lineTotalAmount > MAX_SAFE_AMOUNT
-      ) {
-        throw new BadRequestException(
-          "Line total amount exceeds allowable bounds",
-        );
-      }
-
-      subtotalAmount += lineTotalAmount;
-      if (
-        !Number.isSafeInteger(subtotalAmount) ||
-        subtotalAmount > MAX_SAFE_AMOUNT
-      ) {
-        throw new BadRequestException(
-          "Order subtotal exceeds allowable bounds",
-        );
-      }
-
-      return {
-        productId: variant.product.id,
-        variantId: variant.id,
-        productName: variant.product.name,
-        variantName: variant.name,
-        sku: variant.sku,
-        productType: variant.product.productType,
-        fulfillmentType: variant.product.fulfillmentType,
-        unitAmount,
-        quantity: item.quantity,
-        lineTotalAmount,
-        currency: dto.currency,
-      };
-    });
-
-    const discountAmount = 0;
-    const totalAmount = subtotalAmount - discountAmount;
-    const orderNumber = this.generateOrderNumber();
-
-    // Atomic transaction: CAS claim cart, create order, snapshots, payment, idempotency record, audit
-    try {
-      const result = await prisma.$transaction(async (tx) => {
-        // Atomic CAS claim cart: only exactly one checkout request can claim an ACTIVE cart
+        // 2. CAS claim cart
         const claimResult = await tx.cart.updateMany({
           where: {
             id: cart.id,
@@ -312,6 +295,116 @@ export class OrdersService {
             "Cart has already been checked out or is no longer active",
           );
         }
+
+        // 3. Strict item and price validation inside transaction snapshot
+        let subtotalAmount = 0;
+        const itemsSnapshotData = cart.items.map((item) => {
+          const variant = item.variant;
+          if (!variant || variant.status !== VariantStatus.ACTIVE) {
+            throw new BadRequestException(
+              `Cannot checkout: Variant '${variant?.sku || item.variantId}' is not active`,
+            );
+          }
+          if (
+            !variant.product ||
+            variant.product.status !== ProductStatus.ACTIVE
+          ) {
+            throw new BadRequestException(
+              `Cannot checkout: Product '${variant.product?.slug || variant.productId}' is not active`,
+            );
+          }
+
+          // Authoritative price resolution: item.price relation takes precedence
+          let price = item.price;
+          if (!price && item.priceId && variant.prices) {
+            price = variant.prices.find((p) => p.id === item.priceId) as any;
+          }
+          if (!price && variant.prices && variant.prices.length === 1) {
+            price = variant.prices[0] as any;
+          }
+
+          if (!price) {
+            throw new BadRequestException(
+              `Cannot checkout: Price for variant '${variant.sku}' was not found`,
+            );
+          }
+
+          if (!price.isActive) {
+            throw new BadRequestException(
+              `Cannot checkout: Price '${price.id}' for variant '${variant.sku}' is no longer active`,
+            );
+          }
+
+          if (price.currency !== dto.currency) {
+            throw new BadRequestException(
+              `Cannot checkout: Price currency '${price.currency}' does not match requested currency '${dto.currency}'`,
+            );
+          }
+
+          if (price.variantId && price.variantId !== variant.id) {
+            throw new BadRequestException(
+              `Cannot checkout: Price '${price.id}' does not belong to variant '${variant.sku}'`,
+            );
+          }
+
+          const unitAmount = price.amount;
+          if (
+            unitAmount < 0 ||
+            !Number.isSafeInteger(unitAmount) ||
+            unitAmount > MAX_SAFE_AMOUNT
+          ) {
+            throw new BadRequestException(
+              "Unit price exceeds allowable bounds",
+            );
+          }
+
+          if (
+            !Number.isInteger(item.quantity) ||
+            item.quantity < 1 ||
+            item.quantity > 999
+          ) {
+            throw new BadRequestException(
+              "Quantity must be an integer between 1 and 999",
+            );
+          }
+
+          const lineTotalAmount = unitAmount * item.quantity;
+          if (
+            !Number.isSafeInteger(lineTotalAmount) ||
+            lineTotalAmount > MAX_SAFE_AMOUNT
+          ) {
+            throw new BadRequestException(
+              "Line total amount exceeds allowable bounds",
+            );
+          }
+
+          subtotalAmount += lineTotalAmount;
+          if (
+            !Number.isSafeInteger(subtotalAmount) ||
+            subtotalAmount > MAX_SAFE_AMOUNT
+          ) {
+            throw new BadRequestException(
+              "Order subtotal exceeds allowable bounds",
+            );
+          }
+
+          return {
+            productId: variant.product.id,
+            variantId: variant.id,
+            productName: variant.product.name,
+            variantName: variant.name,
+            sku: variant.sku,
+            productType: variant.product.productType,
+            fulfillmentType: variant.product.fulfillmentType,
+            unitAmount,
+            quantity: item.quantity,
+            lineTotalAmount,
+            currency: dto.currency,
+          };
+        });
+
+        const discountAmount = 0;
+        const totalAmount = subtotalAmount - discountAmount;
 
         // Create Order (Order.cartId is unique in DB)
         const order = await tx.order.create({
@@ -380,7 +473,7 @@ export class OrdersService {
         };
 
         if (dto.idempotencyKey) {
-          await tx.idempotencyKey.upsert({
+          await tx.idempotencyKey.update({
             where: {
               scope_userId_key: {
                 scope: "checkout",
@@ -388,17 +481,9 @@ export class OrdersService {
                 key: dto.idempotencyKey,
               },
             },
-            update: {
+            data: {
+              status: "COMMITTED",
               response: response as any,
-              requestFingerprint,
-            },
-            create: {
-              key: dto.idempotencyKey,
-              scope: "checkout",
-              userId,
-              requestFingerprint,
-              response: response as any,
-              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
             },
           });
         }
@@ -426,6 +511,24 @@ export class OrdersService {
 
       return result;
     } catch (err: any) {
+      if (dto.idempotencyKey) {
+        try {
+          await prisma.idempotencyKey.deleteMany({
+            where: {
+              scope: "checkout",
+              userId,
+              key: dto.idempotencyKey,
+              status: "IN_PROGRESS",
+            },
+          });
+        } catch (cleanupErr) {
+          this.logger.error(
+            "Failed to clean up in-progress idempotency reservation",
+            cleanupErr,
+          );
+        }
+      }
+
       if (
         err?.code === "P2002" &&
         err?.message?.includes("orders_cart_id_key")

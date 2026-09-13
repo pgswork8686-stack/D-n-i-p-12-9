@@ -77,6 +77,7 @@ describe("Commerce Round 2 Comprehensive Regressions", () => {
 
     ordersService = module.get<OrdersService>(OrdersService);
     cartService = module.get<CartService>(CartService);
+    (prisma.cart.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
   });
 
   describe("Deterministic Price Selection (Option B)", () => {

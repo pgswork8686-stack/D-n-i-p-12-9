@@ -39,6 +39,7 @@ export interface CartDto {
 }
 
 export interface AddToCartRequest {
+  cartId?: string;
   variantId: string;
   quantity: number;
   priceId?: string;

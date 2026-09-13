@@ -54,7 +54,8 @@ export default function OrderDetailPage() {
     externalEventId: string,
     paymentId: string,
     eventType: string,
-    secret: string = "nexus_test_webhook_secret_key",
+    secret: string = process.env.NEXT_PUBLIC_TEST_PAYMENT_WEBHOOK_SECRET ||
+      "change-me-local-only",
   ): Promise<string> => {
     const enc = new TextEncoder();
     const key = await window.crypto.subtle.importKey(

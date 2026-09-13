@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
   Logger,
 } from "@nestjs/common";
 import {
@@ -68,6 +69,7 @@ export class CartService {
     const items = await prisma.cartItem.findMany({
       where: { cartId: cart.id },
       include: {
+        price: true,
         variant: {
           include: {
             product: true,
@@ -90,20 +92,14 @@ export class CartService {
       const variant = item.variant;
       const product = variant.product;
 
-      // Deterministic price selection
-      let activePrice = item.priceId
-        ? variant.prices.find((p) => p.id === item.priceId)
-        : null;
-
-      if (!activePrice) {
-        if (variant.prices.length === 1) {
-          activePrice = variant.prices[0];
-        } else if (variant.prices.length > 1) {
-          const oneTime = variant.prices.filter(
-            (p) => p.billingType === "ONE_TIME",
-          );
-          activePrice = oneTime.length === 1 ? oneTime[0] : variant.prices[0];
-        }
+      // Deterministic price resolution from item.price relation or fallback to variant prices
+      let activePrice: any = item.price;
+      if (!activePrice && item.priceId && variant?.prices) {
+        activePrice =
+          variant.prices.find((p: any) => p.id === item.priceId) || null;
+      }
+      if (!activePrice && variant?.prices && variant.prices.length > 0) {
+        activePrice = variant.prices[0];
       }
 
       const unitAmount = activePrice ? activePrice.amount : 0;
@@ -144,7 +140,7 @@ export class CartService {
         quantity: item.quantity,
         unitAmount,
         lineTotalAmount,
-        currency: requestedCurrency,
+        currency: activePrice ? activePrice.currency : requestedCurrency,
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.updatedAt.toISOString(),
       };
@@ -167,6 +163,7 @@ export class CartService {
   /**
    * Adds an item to the user's active cart.
    * Validates Product is ACTIVE, Variant is ACTIVE, and active price exists for requested currency.
+   * Prevents mutation on converted or inactive cart via transaction check.
    */
   async addItem(userId: string, dto: AddToCartDto): Promise<CartDto> {
     const currency = dto.currency || Currency.USD;
@@ -235,43 +232,71 @@ export class CartService {
       }
     }
 
-    const cart = await this.getOrCreateActiveCart(userId);
+    const targetCart = dto.cartId
+      ? await prisma.cart.findUnique({ where: { id: dto.cartId } })
+      : await this.getOrCreateActiveCart(userId);
 
-    const existingItem = await prisma.cartItem.findUnique({
-      where: {
-        cartId_variantId: {
-          cartId: cart.id,
-          variantId: variant.id,
-        },
-      },
-    });
-
-    const newQuantity = (existingItem?.quantity || 0) + dto.quantity;
-    if (newQuantity > 999) {
-      throw new BadRequestException("Total item quantity cannot exceed 999");
+    if (!targetCart) {
+      throw new NotFoundException("Cart not found");
+    }
+    if (targetCart.userId !== userId) {
+      throw new ForbiddenException(
+        "Cannot modify items in another user's cart",
+      );
+    }
+    if (targetCart.status !== "ACTIVE") {
+      throw new ConflictException(
+        "Cart has already been checked out or is no longer active",
+      );
     }
 
-    await prisma.cartItem.upsert({
-      where: {
-        cartId_variantId: {
-          cartId: cart.id,
-          variantId: variant.id,
+    await prisma.$transaction(async (tx) => {
+      const currentCart = await tx.cart.findUnique({
+        where: { id: targetCart.id },
+      });
+      if (!currentCart || currentCart.status !== "ACTIVE") {
+        throw new ConflictException(
+          "Cart has already been checked out or is no longer active",
+        );
+      }
+
+      const existingItem = await tx.cartItem.findUnique({
+        where: {
+          cartId_variantId_priceId: {
+            cartId: targetCart.id,
+            variantId: variant.id,
+            priceId: resolvedPriceId,
+          },
         },
-      },
-      update: {
-        quantity: newQuantity,
-        priceId: resolvedPriceId,
-      },
-      create: {
-        cartId: cart.id,
-        variantId: variant.id,
-        priceId: resolvedPriceId,
-        quantity: dto.quantity,
-      },
+      });
+
+      const newQuantity = (existingItem?.quantity || 0) + dto.quantity;
+      if (newQuantity > 999) {
+        throw new BadRequestException("Total item quantity cannot exceed 999");
+      }
+
+      await tx.cartItem.upsert({
+        where: {
+          cartId_variantId_priceId: {
+            cartId: targetCart.id,
+            variantId: variant.id,
+            priceId: resolvedPriceId,
+          },
+        },
+        update: {
+          quantity: newQuantity,
+        },
+        create: {
+          cartId: targetCart.id,
+          variantId: variant.id,
+          priceId: resolvedPriceId,
+          quantity: dto.quantity,
+        },
+      });
     });
 
     this.logger.log(
-      `User ${userId} added variant ${variant.sku} (qty: ${dto.quantity}) to cart ${cart.id}`,
+      `User ${userId} added variant ${variant.sku} (price: ${resolvedPriceId}, qty: ${dto.quantity}) to cart ${targetCart.id}`,
     );
 
     return this.getCart(userId, currency);
@@ -279,7 +304,7 @@ export class CartService {
 
   /**
    * Updates an item's quantity in the user's active cart.
-   * Enforces customer ownership.
+   * Enforces customer ownership and prevents modifying items of converted carts.
    */
   async updateItem(
     userId: string,
@@ -287,69 +312,81 @@ export class CartService {
     quantity: number,
     currency: Currency = Currency.USD,
   ): Promise<CartDto> {
-    const cart = await this.getOrCreateActiveCart(userId);
+    await prisma.$transaction(async (tx) => {
+      const cartItem = await tx.cartItem.findUnique({
+        where: { id: itemId },
+        include: { cart: true },
+      });
 
-    const cartItem = await prisma.cartItem.findUnique({
-      where: { id: itemId },
-      include: { cart: true },
+      if (!cartItem) {
+        throw new NotFoundException(`Cart item '${itemId}' not found`);
+      }
+
+      if (cartItem.cart.userId !== userId) {
+        throw new ForbiddenException(
+          "Cannot modify items in another user's cart",
+        );
+      }
+
+      if (cartItem.cart.status !== "ACTIVE") {
+        throw new ConflictException(
+          "Cart has already been checked out or is no longer active",
+        );
+      }
+
+      if (quantity > 999) {
+        throw new BadRequestException("Quantity cannot exceed 999");
+      }
+
+      if (quantity <= 0) {
+        await tx.cartItem.delete({
+          where: { id: itemId },
+        });
+      } else {
+        await tx.cartItem.update({
+          where: { id: itemId },
+          data: { quantity },
+        });
+      }
     });
-
-    if (!cartItem) {
-      throw new NotFoundException(`Cart item '${itemId}' not found`);
-    }
-
-    if (cartItem.cartId !== cart.id || cartItem.cart.userId !== userId) {
-      throw new ForbiddenException(
-        "Cannot modify items in another user's cart",
-      );
-    }
-
-    if (quantity > 999) {
-      throw new BadRequestException("Quantity cannot exceed 999");
-    }
-
-    if (quantity <= 0) {
-      await prisma.cartItem.delete({
-        where: { id: itemId },
-      });
-    } else {
-      await prisma.cartItem.update({
-        where: { id: itemId },
-        data: { quantity },
-      });
-    }
 
     return this.getCart(userId, currency);
   }
 
   /**
    * Removes an item from the user's active cart.
-   * Enforces customer ownership.
+   * Enforces customer ownership and prevents modifying items of converted carts.
    */
   async removeItem(
     userId: string,
     itemId: string,
     currency: Currency = Currency.USD,
   ): Promise<CartDto> {
-    const cart = await this.getOrCreateActiveCart(userId);
+    await prisma.$transaction(async (tx) => {
+      const cartItem = await tx.cartItem.findUnique({
+        where: { id: itemId },
+        include: { cart: true },
+      });
 
-    const cartItem = await prisma.cartItem.findUnique({
-      where: { id: itemId },
-      include: { cart: true },
-    });
+      if (!cartItem) {
+        throw new NotFoundException(`Cart item '${itemId}' not found`);
+      }
 
-    if (!cartItem) {
-      throw new NotFoundException(`Cart item '${itemId}' not found`);
-    }
+      if (cartItem.cart.userId !== userId) {
+        throw new ForbiddenException(
+          "Cannot modify items in another user's cart",
+        );
+      }
 
-    if (cartItem.cartId !== cart.id || cartItem.cart.userId !== userId) {
-      throw new ForbiddenException(
-        "Cannot modify items in another user's cart",
-      );
-    }
+      if (cartItem.cart.status !== "ACTIVE") {
+        throw new ConflictException(
+          "Cart has already been checked out or is no longer active",
+        );
+      }
 
-    await prisma.cartItem.delete({
-      where: { id: itemId },
+      await tx.cartItem.delete({
+        where: { id: itemId },
+      });
     });
 
     return this.getCart(userId, currency);
@@ -359,10 +396,17 @@ export class CartService {
    * Clears all items from the user's active cart.
    */
   async clearCart(userId: string): Promise<{ success: boolean }> {
-    const cart = await this.getOrCreateActiveCart(userId);
+    await prisma.$transaction(async (tx) => {
+      const cart = await tx.cart.findFirst({
+        where: { userId, status: "ACTIVE" },
+      });
+      if (!cart) {
+        return;
+      }
 
-    await prisma.cartItem.deleteMany({
-      where: { cartId: cart.id },
+      await tx.cartItem.deleteMany({
+        where: { cartId: cart.id },
+      });
     });
 
     return { success: true };

@@ -13,7 +13,7 @@ jest.mock("@nexus/database", () => {
       $queryRaw: jest.fn(),
       outboxEvent: {
         findMany: jest.fn(),
-        update: jest.fn(),
+        updateMany: jest.fn(),
       },
     },
   };
@@ -39,19 +39,12 @@ describe("OutboxProcessor", () => {
 
     (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-1" }]);
     (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
-    (prisma.outboxEvent.update as jest.Mock).mockResolvedValue({
-      id: "evt-1",
-      eventType: "ORDER_PAID",
-      aggregateType: "Order",
-      aggregateId: "order-123",
-      status: "PROCESSED",
-      processedAt: new Date(),
-    });
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     const result = await processOutboxEvents({ workerId: "worker-1" });
 
-    expect(prisma.outboxEvent.update).toHaveBeenCalledWith({
-      where: { id: "evt-1" },
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-1", status: "PROCESSING", lockOwner: "worker-1" },
       data: expect.objectContaining({
         status: "PROCESSED",
         processedAt: expect.any(Date),
@@ -78,28 +71,23 @@ describe("OutboxProcessor", () => {
     (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-retry" }]);
     (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
 
-    // Simulate failure on first update
-    (prisma.outboxEvent.update as jest.Mock)
+    // Simulate failure on first updateMany
+    (prisma.outboxEvent.updateMany as jest.Mock)
       .mockRejectedValueOnce(new Error("Downstream dispatch failed"))
-      .mockResolvedValueOnce({
-        id: "evt-retry",
-        eventType: "ORDER_PAID",
-        aggregateId: "order-retry",
-        status: "PENDING",
-        retryCount: 2,
-      });
+      .mockResolvedValueOnce({ count: 1 });
 
     const result = await processOutboxEvents({
       workerId: "worker-1",
       maxRetries: 5,
     });
 
-    expect(prisma.outboxEvent.update).toHaveBeenCalledWith({
-      where: { id: "evt-retry" },
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-retry", status: "PROCESSING", lockOwner: "worker-1" },
       data: expect.objectContaining({
         status: "PENDING",
         retryCount: 2,
         error: "Downstream dispatch failed",
+        nextAttemptAt: expect.any(Date),
       }),
     });
 
@@ -122,23 +110,17 @@ describe("OutboxProcessor", () => {
     (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-max" }]);
     (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
 
-    (prisma.outboxEvent.update as jest.Mock)
+    (prisma.outboxEvent.updateMany as jest.Mock)
       .mockRejectedValueOnce(new Error("Fatal crash"))
-      .mockResolvedValueOnce({
-        id: "evt-max",
-        eventType: "ORDER_PAID",
-        aggregateId: "order-max",
-        status: "FAILED",
-        retryCount: 5,
-      });
+      .mockResolvedValueOnce({ count: 1 });
 
     const result = await processOutboxEvents({
       workerId: "worker-1",
       maxRetries: 5,
     });
 
-    expect(prisma.outboxEvent.update).toHaveBeenCalledWith({
-      where: { id: "evt-max" },
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-max", status: "PROCESSING", lockOwner: "worker-1" },
       data: expect.objectContaining({
         status: "FAILED",
         retryCount: 5,
@@ -147,5 +129,29 @@ describe("OutboxProcessor", () => {
     });
 
     expect(result.results[0].status).toBe("FAILED");
+  });
+
+  it("skips finalization if worker lease was lost (updateMany count === 0)", async () => {
+    const mockEvents = [
+      {
+        id: "evt-stale",
+        eventType: "ORDER_PAID",
+        aggregateType: "Order",
+        aggregateId: "order-stale",
+        status: "PROCESSING",
+        retryCount: 0,
+        payload: { orderId: "order-stale" },
+      },
+    ];
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-stale" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
+    // Lease expired and was reclaimed by another worker -> count is 0
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+    const result = await processOutboxEvents({ workerId: "worker-stale" });
+
+    expect(result.processedCount).toBe(0);
+    expect(result.results.length).toBe(0);
   });
 });

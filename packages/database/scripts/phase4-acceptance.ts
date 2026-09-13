@@ -4,7 +4,7 @@ import { processOutboxEvents } from "../../../apps/worker/src/outbox-processor";
 
 const API_BASE = process.env.API_URL || "http://localhost:4000";
 const TEST_WEBHOOK_SECRET =
-  process.env.TEST_PAYMENT_WEBHOOK_SECRET || "nexus_test_webhook_secret_key";
+  process.env.TEST_PAYMENT_WEBHOOK_SECRET || "change-me-local-only";
 
 function getTestWebhookSignature(payload: {
   externalEventId: string;
@@ -676,8 +676,581 @@ async function runAcceptance() {
     "✓ Multi-worker outbox SKIP LOCKED verified (concurrent, non-colliding processing).",
   );
 
+  // ----------------------------------------------------
+  // Gate 16: Same-Key Concurrent Checkout (10 concurrent requests)
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 16] Same-Key Concurrent Checkout: 10 concurrent requests with identical key...",
+  );
+  // Prepare active cart
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+
+  const sameKey = `gate16-concurrent-${Date.now()}`;
+  const concurrentCheckouts = await Promise.all(
+    Array.from({ length: 10 }, () =>
+      fetch(`${API_BASE}/checkout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${customerToken}`,
+        },
+        body: JSON.stringify({ currency: "USD", idempotencyKey: sameKey }),
+      }),
+    ),
+  );
+
+  const statuses = concurrentCheckouts.map((r) => r.status);
+  console.log(
+    `  10 concurrent checkout response statuses: ${statuses.join(", ")}`,
+  );
+  const allOk = concurrentCheckouts.every((r) => r.ok);
+  if (!allOk) {
+    const errorBodies = await Promise.all(
+      concurrentCheckouts.map((r) => r.text()),
+    );
+    throw new Error(
+      `Gate 16 failed: not all concurrent checkouts succeeded (200/201). Responses: ${errorBodies.join(" | ")}`,
+    );
+  }
+
+  const checkoutBodies: any[] = await Promise.all(
+    concurrentCheckouts.map((r) => r.json()),
+  );
+  const firstOrder = checkoutBodies[0].order;
+  const firstPayment = checkoutBodies[0].payment;
+
+  for (let i = 1; i < checkoutBodies.length; i++) {
+    const b = checkoutBodies[i];
+    if (b.order.id !== firstOrder.id || b.payment.id !== firstPayment.id) {
+      throw new Error(
+        `Gate 16 failed: Inconsistent response among concurrent same-key requests! Expected order ${firstOrder.id} and payment ${firstPayment.id}, but got order ${b.order.id} and payment ${b.payment.id}`,
+      );
+    }
+  }
+
+  // Verify in database: exactly 1 order with this cartId/orderNumber
+  const matchingOrders = await prisma.order.findMany({
+    where: { id: firstOrder.id },
+  });
+  if (matchingOrders.length !== 1) {
+    throw new Error(
+      `Gate 16: Expected exactly 1 order in DB, found ${matchingOrders.length}`,
+    );
+  }
+  const matchingPayments = await prisma.payment.findMany({
+    where: { id: firstPayment.id },
+  });
+  if (matchingPayments.length !== 1) {
+    throw new Error(
+      `Gate 16: Expected exactly 1 payment in DB, found ${matchingPayments.length}`,
+    );
+  }
+  console.log(
+    `✓ Gate 16 passed: All 10 concurrent requests returned identical Order ${firstOrder.id} (${firstOrder.orderNumber}) and Payment ${firstPayment.id}.`,
+  );
+
+  // ----------------------------------------------------
+  // Gate 17: Distinct Price Offers for Same Variant (Monthly vs Yearly)
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 17] Distinct price offers for same variant: CartItem key on (cartId, variantId, priceId)...",
+  );
+  let annualPrice = await prisma.productPrice.findFirst({
+    where: {
+      variantId: targetVariant.id,
+      currency: "USD",
+      billingType: "RECURRING",
+      billingInterval: "YEARLY",
+      isActive: true,
+    },
+  });
+  if (!annualPrice) {
+    annualPrice = await prisma.productPrice.create({
+      data: {
+        variantId: targetVariant.id,
+        currency: "USD",
+        amount: 9900,
+        billingType: "RECURRING",
+        billingInterval: "YEARLY",
+        isActive: true,
+      },
+    });
+  }
+
+  const defaultPrice = await prisma.productPrice.findFirst({
+    where: {
+      variantId: targetVariant.id,
+      currency: "USD",
+      id: { not: annualPrice.id },
+      isActive: true,
+    },
+  });
+  if (!defaultPrice) {
+    throw new Error("Could not find default price for target variant");
+  }
+
+  // Clear customer cart
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+
+  // Add line 1: default price
+  const add1Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      priceId: defaultPrice.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  if (!add1Res.ok)
+    throw new Error(`Add item 1 failed: ${await add1Res.text()}`);
+
+  // Add line 2: annual price
+  const add2Res = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      priceId: annualPrice.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  if (!add2Res.ok)
+    throw new Error(`Add item 2 failed: ${await add2Res.text()}`);
+
+  const distinctCartRes = await fetch(`${API_BASE}/cart?currency=USD`, {
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  const distinctCart: any = await distinctCartRes.json();
+  if (distinctCart.items.length !== 2) {
+    throw new Error(
+      `Gate 17 failed: Expected 2 distinct items in cart, but found ${distinctCart.items.length}`,
+    );
+  }
+  const priceIdsInCart = distinctCart.items.map((it: any) => it.priceId);
+  if (
+    !priceIdsInCart.includes(defaultPrice.id) ||
+    !priceIdsInCart.includes(annualPrice.id)
+  ) {
+    throw new Error(
+      "Gate 17 failed: Expected both price IDs to be present in distinct cart lines",
+    );
+  }
+  console.log(
+    `✓ Gate 17 passed: Cart contains 2 distinct lines for the same variant with different price offers ($${defaultPrice.amount / 100} and $${annualPrice.amount / 100}).`,
+  );
+
+  // ----------------------------------------------------
+  // Gate 18: Inactive Selected Price: Checkout Must Reject with 400 Bad Request
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 18] Inactive selected price: Checkout must reject (400 Bad Request) without silent fallback...",
+  );
+  await prisma.productPrice.update({
+    where: { id: annualPrice.id },
+    data: { isActive: false },
+  });
+
+  try {
+    const inactiveCheckoutRes = await fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${customerToken}`,
+      },
+      body: JSON.stringify({ currency: "USD" }),
+    });
+
+    console.log(
+      `  Checkout with inactive price status: ${inactiveCheckoutRes.status}`,
+    );
+    if (inactiveCheckoutRes.status !== 400) {
+      const resp = await inactiveCheckoutRes.text();
+      throw new Error(
+        `Gate 18 failed: Expected 400 Bad Request for checkout with inactive price, got ${inactiveCheckoutRes.status}: ${resp}`,
+      );
+    }
+    const errObj: any = await inactiveCheckoutRes.json();
+    console.log(`  Expected 400 error message: ${errObj.message}`);
+    console.log(
+      "✓ Gate 18 passed: Checkout rejected when selected price is inactive (no silent fallback).",
+    );
+  } finally {
+    await prisma.productPrice.update({
+      where: { id: annualPrice.id },
+      data: { isActive: true },
+    });
+  }
+
+  // ----------------------------------------------------
+  // Gate 19: Converted Cart Mutation: Converted Cart Rejects Mutation (409 Conflict)
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 19] Checkout vs Cart Mutation: Mutating converted cart or items must fail with 409 Conflict...",
+  );
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  const prepareRes = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      priceId: defaultPrice.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  const cartBeforeCheckout: any = await prepareRes.json();
+  const convertedItemId = cartBeforeCheckout.items[0].id;
+  const convertedCartId = cartBeforeCheckout.id;
+
+  const covCheckoutRes = await fetch(`${API_BASE}/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({ currency: "USD" }),
+  });
+  if (!covCheckoutRes.ok) {
+    throw new Error(`Checkout failed: ${await covCheckoutRes.text()}`);
+  }
+
+  // Attempt 1: PATCH converted cart item quantity -> 409
+  const patchRes = await fetch(`${API_BASE}/cart/items/${convertedItemId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({ quantity: 5 }),
+  });
+  console.log(`  Patch item in converted cart status: ${patchRes.status}`);
+  if (patchRes.status !== 409) {
+    throw new Error(
+      `Gate 19 failed: Expected 409 on PATCH item of converted cart, got ${patchRes.status}`,
+    );
+  }
+
+  // Attempt 2: DELETE converted cart item -> 409
+  const deleteItemRes = await fetch(
+    `${API_BASE}/cart/items/${convertedItemId}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${customerToken}` },
+    },
+  );
+  console.log(`  Delete item in converted cart status: ${deleteItemRes.status}`);
+  if (deleteItemRes.status !== 409) {
+    throw new Error(
+      `Gate 19 failed: Expected 409 on DELETE item of converted cart, got ${deleteItemRes.status}`,
+    );
+  }
+
+  // Attempt 3: POST item with explicit converted cartId -> 409
+  const postConvertedRes = await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      cartId: convertedCartId,
+      variantId: targetVariant.id,
+      priceId: defaultPrice.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  console.log(
+    `  Add item to converted cartId status: ${postConvertedRes.status}`,
+  );
+  if (postConvertedRes.status !== 409) {
+    throw new Error(
+      `Gate 19 failed: Expected 409 on POST to converted cartId, got ${postConvertedRes.status}`,
+    );
+  }
+  console.log(
+    "✓ Gate 19 passed: Converted cart and its items are strictly immutable (409 Conflict).",
+  );
+
+  // ----------------------------------------------------
+  // Gate 20: Concurrent Duplicate Success Callbacks: Exactly 1 ORDER_PAID Outbox Event
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 20] Concurrent Duplicate Success Webhooks: Exactly 1 ORDER_PAID outbox event created...",
+  );
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  const ckRes20 = await fetch(`${API_BASE}/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({ currency: "USD" }),
+  });
+  const ckData20: any = await ckRes20.json();
+  const paymentId20 = ckData20.payment.id;
+  const orderId20 = ckData20.order.id;
+
+  const payloadA = {
+    paymentId: paymentId20,
+    externalEventId: `evt-succ-A-${Date.now()}`,
+    eventType: "payment.succeeded" as const,
+  };
+  const payloadB = {
+    paymentId: paymentId20,
+    externalEventId: `evt-succ-B-${Date.now()}`,
+    eventType: "payment.succeeded" as const,
+  };
+
+  const [cbResA, cbResB] = await Promise.all([
+    fetch(`${API_BASE}/payments/test-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-signature": getTestWebhookSignature(payloadA),
+      },
+      body: JSON.stringify(payloadA),
+    }),
+    fetch(`${API_BASE}/payments/test-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-signature": getTestWebhookSignature(payloadB),
+      },
+      body: JSON.stringify(payloadB),
+    }),
+  ]);
+
+  if (!cbResA.ok || !cbResB.ok) {
+    throw new Error(
+      `Gate 20 failed: Both concurrent webhooks should be accepted (200 OK), got ${cbResA.status} and ${cbResB.status}`,
+    );
+  }
+
+  const paidOutboxEvents = await prisma.outboxEvent.findMany({
+    where: {
+      aggregateId: orderId20,
+      eventType: "ORDER_PAID",
+    },
+  });
+  console.log(`  ORDER_PAID outbox events count: ${paidOutboxEvents.length}`);
+  if (paidOutboxEvents.length !== 1) {
+    throw new Error(
+      `Gate 20 failed: Expected exactly 1 ORDER_PAID outbox event, found ${paidOutboxEvents.length}`,
+    );
+  }
+  console.log(
+    "✓ Gate 20 passed: Exactly 1 ORDER_PAID event written despite 2 concurrent success webhooks with different event IDs.",
+  );
+
+  // ----------------------------------------------------
+  // Gate 21: Concurrent Success vs Cancel: Terminal State Consistency & Real DB Status Returned
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 21] Concurrent Success vs Cancel: Strict state consistency and real DB status on loser...",
+  );
+  await fetch(`${API_BASE}/cart`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${customerToken}` },
+  });
+  await fetch(`${API_BASE}/cart/items`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({
+      variantId: targetVariant.id,
+      quantity: 1,
+      currency: "USD",
+    }),
+  });
+  const ckRes21 = await fetch(`${API_BASE}/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customerToken}`,
+    },
+    body: JSON.stringify({ currency: "USD" }),
+  });
+  const ckData21: any = await ckRes21.json();
+  const paymentId21 = ckData21.payment.id;
+  const orderId21 = ckData21.order.id;
+
+  const payloadSucc = {
+    paymentId: paymentId21,
+    externalEventId: `evt-race-succ-${Date.now()}`,
+    eventType: "payment.succeeded" as const,
+  };
+  const payloadCanc = {
+    paymentId: paymentId21,
+    externalEventId: `evt-race-canc-${Date.now()}`,
+    eventType: "payment.cancelled" as const,
+  };
+
+  const [raceSuccRes, raceCancRes] = await Promise.all([
+    fetch(`${API_BASE}/payments/test-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-signature": getTestWebhookSignature(payloadSucc),
+      },
+      body: JSON.stringify(payloadSucc),
+    }),
+    fetch(`${API_BASE}/payments/test-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-signature": getTestWebhookSignature(payloadCanc),
+      },
+      body: JSON.stringify(payloadCanc),
+    }),
+  ]);
+
+  const succBody: any = await raceSuccRes.json();
+  const cancBody: any = await raceCancRes.json();
+
+  const dbOrder21 = await prisma.order.findUnique({ where: { id: orderId21 } });
+  const dbPayment21 = await prisma.payment.findUnique({
+    where: { id: paymentId21 },
+  });
+
+  console.log(
+    `  Database state: Order=${dbOrder21?.status}, Payment=${dbPayment21?.status}`,
+  );
+  console.log(`  Success callback response: ${JSON.stringify(succBody)}`);
+  console.log(`  Cancel callback response: ${JSON.stringify(cancBody)}`);
+
+  const isValidPair =
+    (dbOrder21?.status === "PAID" && dbPayment21?.status === "SUCCEEDED") ||
+    (dbOrder21?.status === "CANCELLED" && dbPayment21?.status === "CANCELLED");
+
+  if (!isValidPair) {
+    throw new Error(
+      `Gate 21 failed: Database ended in inconsistent state: Order=${dbOrder21?.status}, Payment=${dbPayment21?.status}`,
+    );
+  }
+
+  if (
+    succBody.paymentStatus !== dbPayment21?.status ||
+    cancBody.paymentStatus !== dbPayment21?.status
+  ) {
+    throw new Error(
+      `Gate 21 failed: Callback response did not return actual database paymentStatus. Expected ${dbPayment21?.status}`,
+    );
+  }
+  console.log(
+    "✓ Gate 21 passed: Terminal state is consistent and CAS loser returns actual DB status.",
+  );
+
+  // ----------------------------------------------------
+  // Gate 22: Outbox Stale Lease Worker Ownership
+  // ----------------------------------------------------
+  console.log(
+    "\n[Gate 22] Outbox Stale Lease: Stale worker cannot finalize reclaimed event...",
+  );
+  const staleEvent = await prisma.outboxEvent.create({
+    data: {
+      aggregateType: "Order",
+      aggregateId: `stale-order-${Date.now()}`,
+      eventType: "ORDER_PAID",
+      payload: { test: "lease" },
+      status: "PROCESSING",
+      lockOwner: "worker-stale-old",
+      lockedAt: new Date(Date.now() - 3600 * 1000),
+    },
+  });
+
+  const activeWorkerRun = await processOutboxEvents({
+    batchSize: 10,
+    workerId: "worker-active-new",
+  });
+  console.log(
+    `  Active worker processed: ${activeWorkerRun.processedCount} events`,
+  );
+
+  const updatedEvent = await prisma.outboxEvent.findUnique({
+    where: { id: staleEvent.id },
+  });
+  if (updatedEvent?.status !== "PROCESSED") {
+    throw new Error(
+      `Gate 22 failed: Active worker did not claim or process stale event. Current status=${updatedEvent?.status}`,
+    );
+  }
+
+  const staleWorkerAttempt = await prisma.outboxEvent.updateMany({
+    where: {
+      id: staleEvent.id,
+      status: "PROCESSING",
+      lockOwner: "worker-stale-old",
+    },
+    data: {
+      status: "PROCESSED",
+    },
+  });
+
+  console.log(
+    `  Stale worker finalize attempt affected rows: ${staleWorkerAttempt.count}`,
+  );
+  if (staleWorkerAttempt.count !== 0) {
+    throw new Error(
+      "Gate 22 failed: Stale worker was able to update event after lease was reclaimed!",
+    );
+  }
+  console.log(
+    "✓ Gate 22 passed: Lease ownership CAS prevented stale worker from finalizing reclaimed event.",
+  );
+
   console.log("\n==================================================");
-  console.log("ALL 15 LIVE RUNTIME ACCEPTANCE GATES PASSED!");
+  console.log("ALL 22 LIVE RUNTIME ACCEPTANCE GATES PASSED!");
   console.log("==================================================");
 }
 

@@ -2,6 +2,10 @@ import { IsString, IsInt, Min, Max, IsOptional, IsEnum } from "class-validator";
 import { Currency } from "@nexus/database";
 
 export class AddToCartDto {
+  @IsOptional()
+  @IsString()
+  cartId?: string;
+
   @IsString()
   variantId!: string;
 

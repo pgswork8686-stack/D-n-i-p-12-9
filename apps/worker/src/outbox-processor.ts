@@ -43,7 +43,7 @@ export async function processOutboxEvents(
         SELECT id
         FROM outbox_events
         WHERE (
-          status = 'PENDING'::"OutboxEventStatus"
+          (status = 'PENDING'::"OutboxEventStatus" AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()))
           OR (status = 'PROCESSING'::"OutboxEventStatus" AND locked_at < NOW() - (${leaseTimeoutMinutes} || ' minutes')::interval)
         )
         ORDER BY created_at ASC
@@ -60,13 +60,27 @@ export async function processOutboxEvents(
       WHERE outbox_events.id = claimable.id
       RETURNING outbox_events.id;
     `;
-  } catch (_rawErr) {
-    // Fallback for mocked environments or tests without raw SQL support
-    const fallbackEvents = await prisma.outboxEvent.findMany({
-      where: { status: OutboxEventStatus.PENDING },
-      take: batchSize,
-    });
-    claimedRows = fallbackEvents.map((e) => ({ id: e.id }));
+  } catch (rawErr: any) {
+    if (process.env.NODE_ENV === "test") {
+      // Fallback only for mocked test environments
+      const fallbackEvents = await prisma.outboxEvent.findMany({
+        where: { status: OutboxEventStatus.PENDING },
+        take: batchSize,
+      });
+      claimedRows = fallbackEvents.map((e) => ({ id: e.id }));
+    } else {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          service: "worker",
+          event: "outbox_claim_failed",
+          workerId,
+          error: rawErr?.message || String(rawErr),
+          timestamp: new Date().toISOString(),
+        }),
+      );
+      throw rawErr;
+    }
   }
 
   if (!claimedRows || claimedRows.length === 0) {
@@ -107,8 +121,12 @@ export async function processOutboxEvents(
       // NO license allocation (Phase 6)
       // NO license key generation (Phase 7)
 
-      const updated = await prisma.outboxEvent.update({
-        where: { id: event.id },
+      const finalizeResult = await prisma.outboxEvent.updateMany({
+        where: {
+          id: event.id,
+          status: OutboxEventStatus.PROCESSING,
+          lockOwner: workerId,
+        },
         data: {
           status: OutboxEventStatus.PROCESSED,
           processedAt: new Date(),
@@ -118,25 +136,41 @@ export async function processOutboxEvents(
         },
       });
 
+      if (finalizeResult.count === 0) {
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            service: "worker",
+            event: "outbox_lease_lost",
+            eventId: event.id,
+            workerId,
+            message:
+              "Failed to finalize: lease expired and was reclaimed by another worker",
+            timestamp: new Date().toISOString(),
+          }),
+        );
+        continue;
+      }
+
       console.log(
         JSON.stringify({
           level: "info",
           service: "worker",
           event: "outbox_event_processed",
-          eventId: updated.id,
-          eventType: updated.eventType,
-          aggregateType: updated.aggregateType,
-          aggregateId: updated.aggregateId,
+          eventId: event.id,
+          eventType: event.eventType,
+          aggregateType: event.aggregateType,
+          aggregateId: event.aggregateId,
           workerId,
-          timestamp: updated.processedAt?.toISOString(),
+          timestamp: new Date().toISOString(),
         }),
       );
 
       results.push({
-        id: updated.id,
-        eventType: updated.eventType,
-        aggregateId: updated.aggregateId,
-        status: updated.status,
+        id: event.id,
+        eventType: event.eventType,
+        aggregateId: event.aggregateId,
+        status: OutboxEventStatus.PROCESSED,
       });
     } catch (err: any) {
       const errorMsg = err?.message || String(err);
@@ -145,6 +179,12 @@ export async function processOutboxEvents(
       const nextStatus = isTerminal
         ? OutboxEventStatus.FAILED
         : OutboxEventStatus.PENDING;
+      const backoffDelayMs = isTerminal
+        ? 0
+        : Math.min(1000 * Math.pow(2, newRetryCount), 60000);
+      const nextAttemptAt = isTerminal
+        ? null
+        : new Date(Date.now() + backoffDelayMs);
 
       console.error(
         JSON.stringify({
@@ -157,27 +197,35 @@ export async function processOutboxEvents(
           error: errorMsg,
           retryCount: newRetryCount,
           status: nextStatus,
+          nextAttemptAt: nextAttemptAt?.toISOString(),
           timestamp: new Date().toISOString(),
         }),
       );
 
-      const failedUpdate = await prisma.outboxEvent.update({
-        where: { id: event.id },
+      const failResult = await prisma.outboxEvent.updateMany({
+        where: {
+          id: event.id,
+          status: OutboxEventStatus.PROCESSING,
+          lockOwner: workerId,
+        },
         data: {
           status: nextStatus,
           retryCount: newRetryCount,
           error: errorMsg,
           lockOwner: null,
           lockedAt: null,
+          nextAttemptAt,
         },
       });
 
-      results.push({
-        id: failedUpdate.id,
-        eventType: failedUpdate.eventType,
-        aggregateId: failedUpdate.aggregateId,
-        status: failedUpdate.status,
-      });
+      if (failResult.count > 0) {
+        results.push({
+          id: event.id,
+          eventType: event.eventType,
+          aggregateId: event.aggregateId,
+          status: nextStatus,
+        });
+      }
     }
   }
 

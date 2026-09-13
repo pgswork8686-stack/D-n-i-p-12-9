@@ -13,9 +13,13 @@ import {
 
 export function computeTestWebhookSignature(
   payload: { externalEventId: string; paymentId: string; eventType: string },
-  secret: string = process.env.TEST_PAYMENT_WEBHOOK_SECRET ||
-    "nexus_test_webhook_secret_key",
+  secret: string = process.env.TEST_PAYMENT_WEBHOOK_SECRET || "",
 ): string {
+  if (!secret) {
+    throw new Error(
+      "TEST_PAYMENT_WEBHOOK_SECRET is required to compute test signature",
+    );
+  }
   const content = `${payload.externalEventId}:${payload.paymentId}:${payload.eventType}`;
   return crypto.createHmac("sha256", secret).update(content).digest("hex");
 }
@@ -46,15 +50,19 @@ export class TestPaymentProvider implements PaymentProvider {
       throw new ForbiddenException("Test payment provider is unavailable");
     }
 
+    const secret = process.env.TEST_PAYMENT_WEBHOOK_SECRET;
+    if (!secret || secret.trim() === "") {
+      throw new ForbiddenException(
+        "TEST_PAYMENT_WEBHOOK_SECRET must be explicitly configured when test payment provider is enabled",
+      );
+    }
+
     const signature =
       headers?.["x-test-signature"] || headers?.["X-Test-Signature"];
     if (!signature) {
       throw new UnauthorizedException("Missing x-test-signature header");
     }
 
-    const secret =
-      process.env.TEST_PAYMENT_WEBHOOK_SECRET ||
-      "nexus_test_webhook_secret_key";
     const expectedSignature = computeTestWebhookSignature(payload, secret);
 
     const sigBuffer = Buffer.from(signature, "utf8");
