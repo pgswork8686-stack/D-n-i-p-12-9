@@ -82,12 +82,23 @@ export interface RequestDeactivationParams {
   actorId: string;
   isCustomer?: boolean;
   reason?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface AdminConfirmDeactivatedParams {
   allocationId: string;
   actorId: string;
   notes?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface AdminCreateProviderAccountParams {
+  actorId: string;
+  providerId: string;
+  name: string;
+  totalCapacity: number;
+  externalReference?: string | null;
+  status?: ProviderAccountStatus;
   metadata?: Record<string, any>;
 }
 
@@ -128,7 +139,13 @@ export async function requestDomainAllocation(
     assertSafeMetadata(params.metadata);
   }
 
-  const normalized = normalizeDomain(params.domain);
+  let normalized: string;
+  try {
+    normalized = normalizeDomain(params.domain);
+  } catch (err: any) {
+    throw new AllocationEngineError(err.message || "Invalid domain format", 400);
+  }
+
   const providerCode = params.providerCode || "ELEMENTOR";
 
   return db.$transaction(async (tx) => {
@@ -282,20 +299,20 @@ export async function requestDomainAllocation(
       );
     }
 
-    // 10. Create allocation in PENDING status
+    // 10. Create allocation in PENDING status (canonical normalized domain only)
     const allocation = await tx.licenseAllocation.create({
       data: {
         entitlementId: entitlement.id,
         providerId: provider.id,
         userId: params.userId,
-        domain: params.domain.trim(),
+        domain: normalized,
         normalizedDomain: normalized,
         status: AllocationStatus.PENDING,
         metadata: params.metadata || {},
       },
     });
 
-    // 11. Record transactional audit log
+    // 11. Record transactional audit log (canonical normalized domain only)
     await tx.auditLog.create({
       data: {
         action: "ALLOCATION_REQUESTED",
@@ -304,7 +321,7 @@ export async function requestDomainAllocation(
         actorId: params.userId,
         details: {
           entitlementId: entitlement.id,
-          domain: params.domain.trim(),
+          domain: normalized,
           normalizedDomain: normalized,
           providerCode,
           providerId: provider.id,
@@ -544,6 +561,10 @@ export async function adminRejectAllocation(
   params: AdminRejectAllocationParams,
   db: PrismaClient = prisma,
 ) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
   return db.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{
       id: string;
@@ -611,6 +632,10 @@ export async function requestAllocationDeactivation(
   params: RequestDeactivationParams,
   db: PrismaClient = prisma,
 ) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
   return db.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{
       id: string;
@@ -690,6 +715,10 @@ export async function adminConfirmDeactivated(
   params: AdminConfirmDeactivatedParams,
   db: PrismaClient = prisma,
 ) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
   return db.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{
       id: string;
@@ -718,6 +747,29 @@ export async function adminConfirmDeactivated(
       );
     }
 
+    // Lock ProviderAccount row FOR UPDATE if associated to prevent races with concurrent PATCH/update
+    let lockedAccount: {
+      id: string;
+      status: ProviderAccountStatus;
+      total_capacity: number;
+    } | null = null;
+
+    if (allocation.provider_account_id) {
+      const accountRows = await tx.$queryRaw<Array<{
+        id: string;
+        status: ProviderAccountStatus;
+        total_capacity: number;
+      }>>`
+        SELECT id, status, total_capacity
+        FROM provider_accounts
+        WHERE id = ${allocation.provider_account_id}
+        FOR UPDATE
+      `;
+      if (accountRows && accountRows.length > 0) {
+        lockedAccount = accountRows[0];
+      }
+    }
+
     const updatedMetadata = {
       ...(typeof allocation.metadata === "object" && allocation.metadata !== null
         ? allocation.metadata
@@ -736,26 +788,30 @@ export async function adminConfirmDeactivated(
       },
     });
 
-    // If provider account was EXHAUSTED, restore to ACTIVE if capacity is now available
-    if (allocation.provider_account_id) {
-      const account = await tx.providerAccount.findUnique({
-        where: { id: allocation.provider_account_id },
+    // Derive account status using CURRENT locked account data
+    if (lockedAccount) {
+      const remainingConsumed = await tx.licenseAllocation.count({
+        where: {
+          providerAccountId: lockedAccount.id,
+          status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
+        },
       });
 
-      if (account && account.status === ProviderAccountStatus.EXHAUSTED) {
-        const remainingConsumed = await tx.licenseAllocation.count({
-          where: {
-            providerAccountId: account.id,
-            status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
-          },
-        });
+      let nextStatus: ProviderAccountStatus;
+      if (lockedAccount.status === ProviderAccountStatus.SUSPENDED) {
+        // Explicit SUSPENDED override must NEVER be overwritten by ACTIVE
+        nextStatus = ProviderAccountStatus.SUSPENDED;
+      } else if (remainingConsumed >= lockedAccount.total_capacity) {
+        nextStatus = ProviderAccountStatus.EXHAUSTED;
+      } else {
+        nextStatus = ProviderAccountStatus.ACTIVE;
+      }
 
-        if (remainingConsumed < account.totalCapacity) {
-          await tx.providerAccount.update({
-            where: { id: account.id },
-            data: { status: ProviderAccountStatus.ACTIVE },
-          });
-        }
+      if (nextStatus !== lockedAccount.status) {
+        await tx.providerAccount.update({
+          where: { id: lockedAccount.id },
+          data: { status: nextStatus },
+        });
       }
     }
 
@@ -849,6 +905,88 @@ export async function reconcileExternalAllocations(
 }
 
 /**
+ * Admin creates provider account with atomic audit logging.
+ * Concurrency & Integrity Invariants:
+ * - metadata is recursively inspected for forbidden secrets.
+ * - totalCapacity must be a positive integer.
+ * - Initial status cannot be EXHAUSTED when consumed seats is 0.
+ * - Creates ProviderAccount and PROVIDER_ACCOUNT_CREATED audit log inside the same transaction.
+ * - Full rollback on any failure.
+ */
+export async function adminCreateProviderAccount(
+  params: AdminCreateProviderAccountParams,
+  db: PrismaClient = prisma,
+) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
+  if (!params.name || !params.name.trim()) {
+    throw new AllocationEngineError("Provider account name is required", 400);
+  }
+
+  if (!Number.isInteger(params.totalCapacity) || params.totalCapacity <= 0) {
+    throw new AllocationEngineError("totalCapacity must be a positive integer", 400);
+  }
+
+  if (params.status === ProviderAccountStatus.EXHAUSTED) {
+    throw new AllocationEngineError(
+      "Cannot create a new provider account with EXHAUSTED status when consumed seats is 0",
+      400,
+    );
+  }
+
+  const initialStatus =
+    params.status === ProviderAccountStatus.SUSPENDED
+      ? ProviderAccountStatus.SUSPENDED
+      : ProviderAccountStatus.ACTIVE;
+
+  return db.$transaction(async (tx) => {
+    const provider = await tx.licenseProvider.findUnique({
+      where: { id: params.providerId },
+    });
+
+    if (!provider || provider.status !== "ACTIVE") {
+      throw new AllocationEngineError("License provider not found or inactive", 400);
+    }
+
+    const account = await tx.providerAccount.create({
+      data: {
+        providerId: provider.id,
+        name: params.name.trim(),
+        totalCapacity: params.totalCapacity,
+        externalReference: params.externalReference || null,
+        status: initialStatus,
+        metadata: params.metadata || {},
+      },
+    });
+
+    // Whitelisted audit log inside the SAME atomic transaction
+    await tx.auditLog.create({
+      data: {
+        action: "PROVIDER_ACCOUNT_CREATED",
+        entity: "ProviderAccount",
+        entityId: account.id,
+        actorId: params.actorId,
+        details: {
+          providerId: provider.id,
+          name: account.name,
+          totalCapacity: account.totalCapacity,
+          status: account.status,
+        },
+      },
+    });
+
+    return {
+      account,
+      activeCount: 0,
+      consumedCount: 0,
+      availableCapacity: account.totalCapacity,
+    };
+  });
+}
+
+/**
  * Admin updates provider account.
  * Concurrency-safe: locks ProviderAccount row FOR UPDATE.
  * Enforces: totalCapacity cannot be reduced below current consumed seats (ACTIVE + DEACTIVATION_PENDING).
@@ -872,9 +1010,8 @@ export async function adminUpdateProviderAccount(
       external_reference: string | null;
       total_capacity: number;
       status: ProviderAccountStatus;
-      metadata: any;
     }>>`
-      SELECT id, provider_id, name, external_reference, total_capacity, status, metadata
+      SELECT id, provider_id, name, external_reference, total_capacity, status
       FROM provider_accounts
       WHERE id = ${params.providerAccountId}
       FOR UPDATE
@@ -886,13 +1023,21 @@ export async function adminUpdateProviderAccount(
 
     const account = lockedRows[0];
 
-    // 2. Count current consumed allocations (ACTIVE + DEACTIVATION_PENDING)
-    const consumedCount = await tx.licenseAllocation.count({
-      where: {
-        providerAccountId: account.id,
-        status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
-      },
-    });
+    // 2. Count current consumed allocations (ACTIVE + DEACTIVATION_PENDING) and active allocations
+    const [consumedCount, activeCount] = await Promise.all([
+      tx.licenseAllocation.count({
+        where: {
+          providerAccountId: account.id,
+          status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
+        },
+      }),
+      tx.licenseAllocation.count({
+        where: {
+          providerAccountId: account.id,
+          status: AllocationStatus.ACTIVE,
+        },
+      }),
+    ]);
 
     const newCapacity =
       params.totalCapacity !== undefined ? params.totalCapacity : account.total_capacity;
@@ -959,6 +1104,7 @@ export async function adminUpdateProviderAccount(
 
     return {
       account: updated,
+      activeCount,
       consumedCount,
       availableCapacity: Math.max(0, updated.totalCapacity - consumedCount),
     };

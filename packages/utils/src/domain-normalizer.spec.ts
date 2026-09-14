@@ -27,7 +27,7 @@ describe("Domain Normalizer", () => {
 
     it("strips ports, paths, queries, and fragments", () => {
       expect(normalizeDomain("https://example.com:8443/some/path?param=1#section")).toBe("example.com");
-      expect(normalizeDomain("http://user:pass@www.example.com:8080/")).toBe("example.com");
+      expect(normalizeDomain("https://example.com/path?token=VerySecretToken#private")).toBe("example.com");
     });
 
     it("strips trailing dots and whitespace", () => {
@@ -90,6 +90,21 @@ describe("Domain Normalizer", () => {
       expect(() => normalizeDomain("exam ple.com")).toThrow("Invalid domain");
       expect(() => normalizeDomain("-example.com")).toThrow("invalid characters or starts/ends with a hyphen");
       expect(() => normalizeDomain("example-.com")).toThrow("invalid characters or starts/ends with a hyphen");
+    });
+
+    it("rejects URL credentials in userinfo (username and password)", () => {
+      expect(() => normalizeDomain("http://user:pass@www.example.com:8080/")).toThrow(
+        "URL credentials (username/password) are not permitted",
+      );
+      expect(() => normalizeDomain("https://admin:SuperSecretPassword@example.com/path")).toThrow(
+        "URL credentials (username/password) are not permitted",
+      );
+      expect(() => normalizeDomain("https://user@example.com")).toThrow(
+        "URL credentials (username/password) are not permitted",
+      );
+      expect(() => normalizeDomain("user:pass@example.com")).toThrow(
+        "URL credentials (username/password) are not permitted",
+      );
     });
   });
 

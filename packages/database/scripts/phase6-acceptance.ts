@@ -7,6 +7,7 @@ import {
   ProductType,
   FulfillmentType,
   reconcileExternalAllocations,
+  adminCreateProviderAccount,
 } from "../src/index";
 
 const API_BASE = process.env.API_URL || "http://localhost:4000";
@@ -124,7 +125,7 @@ async function apiPatch(endpoint: string, body: any, token?: string) {
 
 async function runPhase6Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 6 — ELEMENTOR EXTERNAL LICENSE LIVE ACCEPTANCE (30 GATES)");
+  console.log("PHASE 6 — ELEMENTOR EXTERNAL LICENSE LIVE ACCEPTANCE (35 GATES)");
   console.log("==================================================");
 
   // [Gate 1] Health & Worker Runtime
@@ -720,10 +721,10 @@ async function runPhase6Acceptance() {
     throw new Error(`Gate 23 failed: allocation A not in DEACTIVATION_PENDING: ${JSON.stringify(deactARes.data)}`);
   }
 
-  // Check provider account: consumed must still be 2, available 0, status EXHAUSTED
+  // Check provider account: consumed must still be 2, active 1, available 0, status EXHAUSTED
   const checkPa23 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
-  if (checkPa23.activeAllocationsCount !== 2 || checkPa23.availableCapacity !== 0 || checkPa23.status !== "EXHAUSTED") {
-    throw new Error(`Gate 23 failed: expected consumed=2, available=0, status=EXHAUSTED. Got: ${JSON.stringify(checkPa23)}`);
+  if (checkPa23.consumedAllocationsCount !== 2 || checkPa23.activeAllocationsCount !== 1 || checkPa23.availableCapacity !== 0 || checkPa23.status !== "EXHAUSTED") {
+    throw new Error(`Gate 23 failed: expected consumed=2, active=1, available=0, status=EXHAUSTED. Got: ${JSON.stringify(checkPa23)}`);
   }
 
   // Attempting to activate C must fail with 409 capacity exhausted
@@ -749,10 +750,10 @@ async function runPhase6Acceptance() {
     throw new Error(`Gate 24 failed: allocation A not DEACTIVATED: ${JSON.stringify(confDeactARes.data)}`);
   }
 
-  // Check provider account: consumed is now 1, available is 1, status is ACTIVE
+  // Check provider account: consumed is now 1, active is 1, available is 1, status is ACTIVE
   const checkPa24 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
-  if (checkPa24.activeAllocationsCount !== 1 || checkPa24.availableCapacity !== 1 || checkPa24.status !== "ACTIVE") {
-    throw new Error(`Gate 24 failed: expected consumed=1, available=1, status=ACTIVE. Got: ${JSON.stringify(checkPa24)}`);
+  if (checkPa24.consumedAllocationsCount !== 1 || checkPa24.activeAllocationsCount !== 1 || checkPa24.availableCapacity !== 1 || checkPa24.status !== "ACTIVE") {
+    throw new Error(`Gate 24 failed: expected consumed=1, active=1, available=1, status=ACTIVE. Got: ${JSON.stringify(checkPa24)}`);
   }
 
   // Now activation of C must succeed!
@@ -766,8 +767,8 @@ async function runPhase6Acceptance() {
   }
 
   const finalPa24 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
-  if (finalPa24.activeAllocationsCount !== 2 || finalPa24.availableCapacity !== 0 || finalPa24.status !== "EXHAUSTED") {
-    throw new Error(`Gate 24 failed: expected consumed=2, available=0, status=EXHAUSTED. Got: ${JSON.stringify(finalPa24)}`);
+  if (finalPa24.consumedAllocationsCount !== 2 || finalPa24.activeAllocationsCount !== 2 || finalPa24.availableCapacity !== 0 || finalPa24.status !== "EXHAUSTED") {
+    throw new Error(`Gate 24 failed: expected consumed=2, active=2, available=0, status=EXHAUSTED. Got: ${JSON.stringify(finalPa24)}`);
   }
   console.log("✓ Gate 24 passed: Confirming DEACTIVATED released provider capacity (consumed 1, available 1, account restored to ACTIVE) and allowed new activation");
 
@@ -998,8 +999,263 @@ async function runPhase6Acceptance() {
   }
   console.log("✓ Gate 30 passed: Full verification complete: zero submitted secrets found in database, audit logs, or API responses");
 
+  // [Gate 31] True live race: Confirm-deactivated vs Provider SUSPEND
+  console.log("\n[Gate 31] Testing true live race: Confirm-deactivated vs Provider SUSPEND...");
+  const pa31Res = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Elementor Suspend Race ${runId}`,
+      totalCapacity: 2,
+    },
+    adminToken,
+  );
+  const pa31 = pa31Res.data;
+
+  const ent31 = await createTestEntitlement({ userId: customer1Id, maxActivations: 2 });
+  const alloc31A = (await apiPost(`/entitlements/${ent31.id}/allocations`, { domain: `race31-a-${runId}.com` }, customer1Token)).data;
+  const alloc31B = (await apiPost(`/entitlements/${ent31.id}/allocations`, { domain: `race31-b-${runId}.com` }, customer1Token)).data;
+
+  // Activate both allocations -> consumed=2, capacity=2 -> EXHAUSTED
+  await apiPost(`/admin/license-allocations/${alloc31A.id}/activate`, { providerAccountId: pa31.id }, adminToken);
+  await apiPost(`/admin/license-allocations/${alloc31B.id}/activate`, { providerAccountId: pa31.id }, adminToken);
+
+  const pa31Exhausted = (await apiGet(`/admin/provider-accounts/${pa31.id}`, adminToken)).data;
+  if (pa31Exhausted.status !== "EXHAUSTED") {
+    throw new Error(`Gate 31 failed: expected account status EXHAUSTED, got ${pa31Exhausted.status}`);
+  }
+
+  // Request deactivation on Allocation A -> status: DEACTIVATION_PENDING
+  await apiPost(`/entitlements/${ent31.id}/allocations/${alloc31A.id}/request-deactivation`, {}, customer1Token);
+
+  // Concurrently: Admin confirms deactivation on A vs Admin suspends Provider Account
+  const [confirmRes31, suspendRes31] = await Promise.all([
+    apiPost(`/admin/license-allocations/${alloc31A.id}/confirm-deactivated`, {}, adminToken),
+    apiPatch(`/admin/provider-accounts/${pa31.id}`, { status: "SUSPENDED" }, adminToken),
+  ]);
+
+  if (!confirmRes31.ok) {
+    throw new Error(`Gate 31 failed: confirm-deactivated failed: ${JSON.stringify(confirmRes31.data)}`);
+  }
+  if (!suspendRes31.ok) {
+    throw new Error(`Gate 31 failed: suspend provider account failed: ${JSON.stringify(suspendRes31.data)}`);
+  }
+
+  // Verify final state in DB
+  const finalPa31 = await prisma.providerAccount.findUniqueOrThrow({ where: { id: pa31.id } });
+  const finalAlloc31A = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: alloc31A.id } });
+
+  if (finalAlloc31A.status !== "DEACTIVATED") {
+    throw new Error(`Gate 31 failed: allocation A expected DEACTIVATED, got ${finalAlloc31A.status}`);
+  }
+  if (finalPa31.status !== "SUSPENDED") {
+    throw new Error(`Gate 31 failed: provider account expected SUSPENDED, got ${finalPa31.status} (SUSPENDED was overwritten by ACTIVE!)`);
+  }
+
+  const remainingConsumed31 = await prisma.licenseAllocation.count({
+    where: {
+      providerAccountId: pa31.id,
+      status: { in: ["ACTIVE", "DEACTIVATION_PENDING"] },
+    },
+  });
+  if (remainingConsumed31 > finalPa31.totalCapacity) {
+    throw new Error(`Gate 31 failed: remaining consumed (${remainingConsumed31}) > capacity (${finalPa31.totalCapacity})`);
+  }
+  console.log(`✓ Gate 31 passed: Live race serialized: allocation transitioned to DEACTIVATED, SUSPENDED status strictly preserved (never overwritten by ACTIVE)`);
+
+  // [Gate 32] Domain with userinfo/password URL rejected & no secrets persisted
+  console.log("\n[Gate 32] Testing rejection of domain with URL credentials (username/password)...");
+  const credentialSecret = `SuperSecretPassword_${runId}`;
+  const userinfoDomain = `https://admin:${credentialSecret}@example-site-${runId}.com/path`;
+
+  const userinfoRes = await apiPost(
+    `/entitlements/${entCust1.id}/allocations`,
+    { domain: userinfoDomain },
+    customer1Token,
+  );
+  if (userinfoRes.status !== 400) {
+    throw new Error(`Gate 32 failed: URL with credentials expected 400 Bad Request, got ${userinfoRes.status}`);
+  }
+
+  // Verify credentialSecret does not appear anywhere
+  const dbAllocationsJson = JSON.stringify(await prisma.licenseAllocation.findMany());
+  if (dbAllocationsJson.includes(credentialSecret)) {
+    throw new Error(`Gate 32 failed: secret '${credentialSecret}' found in license_allocations table!`);
+  }
+
+  const dbAuditJson = JSON.stringify(await prisma.auditLog.findMany());
+  if (dbAuditJson.includes(credentialSecret)) {
+    throw new Error(`Gate 32 failed: secret '${credentialSecret}' found in audit_logs table!`);
+  }
+
+  const respJson32 = JSON.stringify(userinfoRes.data);
+  if (respJson32.includes(credentialSecret)) {
+    throw new Error(`Gate 32 failed: secret '${credentialSecret}' exposed in API error response!`);
+  }
+  console.log("✓ Gate 32 passed: URL with credentials rejected with 400 Bad Request; zero secrets in DB, audit logs, or error responses");
+
+  // [Gate 33] Query/fragment secret stripped -> DB/audit/API contain only canonical hostname
+  console.log("\n[Gate 33] Testing query/fragment secret stripping (canonical storage only)...");
+  const querySecret = `VerySecretToken_${runId}`;
+  const dirtyDomain = `https://example-canonical-${runId}.com/path?token=${querySecret}#private`;
+  const canonicalExpected = `example-canonical-${runId}.com`;
+
+  const dirtyRes = await apiPost(
+    `/entitlements/${entCust1.id}/allocations`,
+    { domain: dirtyDomain },
+    customer1Token,
+  );
+  if (!dirtyRes.ok) {
+    throw new Error(`Gate 33 failed: expected valid domain to be accepted, got ${dirtyRes.status}: ${JSON.stringify(dirtyRes.data)}`);
+  }
+
+  const dirtyAlloc = dirtyRes.data;
+  if (dirtyAlloc.domain !== canonicalExpected || dirtyAlloc.normalizedDomain !== canonicalExpected) {
+    throw new Error(`Gate 33 failed: stored domain '${dirtyAlloc.domain}' does not equal canonical '${canonicalExpected}'`);
+  }
+
+  // Verify querySecret is NOT in DB record
+  const allocFromDb33 = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: dirtyAlloc.id } });
+  if (JSON.stringify(allocFromDb33).includes(querySecret)) {
+    throw new Error(`Gate 33 failed: secret '${querySecret}' found in license_allocations row!`);
+  }
+
+  // Verify querySecret is NOT in audit log
+  const auditLogs33 = await prisma.auditLog.findMany({ where: { entityId: dirtyAlloc.id } });
+  if (JSON.stringify(auditLogs33).includes(querySecret)) {
+    throw new Error(`Gate 33 failed: secret '${querySecret}' found in audit_logs!`);
+  }
+
+  // Verify querySecret is NOT in customer or admin API responses
+  const custAllocList = await apiGet(`/entitlements/${entCust1.id}/allocations`, customer1Token);
+  if (JSON.stringify(custAllocList.data).includes(querySecret)) {
+    throw new Error(`Gate 33 failed: secret '${querySecret}' found in customer allocations API response!`);
+  }
+
+  const adminAllocDetail = await apiGet(`/admin/license-allocations/${dirtyAlloc.id}`, adminToken);
+  if (JSON.stringify(adminAllocDetail.data).includes(querySecret)) {
+    throw new Error(`Gate 33 failed: secret '${querySecret}' found in admin allocation API response!`);
+  }
+  console.log(`✓ Gate 33 passed: Canonical storage verified (domain='${canonicalExpected}'); path/query/fragment stripped; zero secrets in DB, audit, or APIs`);
+
+  // [Gate 34] Provider account create + audit failure rollback & status policy
+  console.log("\n[Gate 34] Testing provider account creation audit failure rollback & status policy...");
+  // 1. Arbitrary EXHAUSTED creation when consumed=0 is rejected
+  const exhaustedRes = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Exhausted Create Attempt ${runId}`,
+      totalCapacity: 5,
+      status: "EXHAUSTED",
+    },
+    adminToken,
+  );
+  if (exhaustedRes.status !== 400) {
+    throw new Error(`Gate 34 failed: creating account with EXHAUSTED status expected 400, got ${exhaustedRes.status}`);
+  }
+
+  // 2. Transactional rollback when audit fails
+  const rollbackAccountName = `Rollback Test PA ${runId}`;
+  let auditFailed = false;
+  try {
+    const mockTxDb: any = {
+      $transaction: async (fn: any) => {
+        return prisma.$transaction(async (tx) => {
+          const proxyTx = new Proxy(tx, {
+            get(target, prop) {
+              if (prop === "auditLog") {
+                return {
+                  create: async () => {
+                    throw new Error("Simulated audit write failure for rollback test");
+                  },
+                };
+              }
+              return (target as any)[prop];
+            },
+          });
+          return fn(proxyTx);
+        });
+      },
+    };
+
+    await adminCreateProviderAccount(
+      {
+        actorId: "admin-1",
+        providerId: provider.id,
+        name: rollbackAccountName,
+        totalCapacity: 10,
+      },
+      mockTxDb,
+    );
+  } catch (err: any) {
+    if (err.message.includes("Simulated audit write failure")) {
+      auditFailed = true;
+    }
+  }
+
+  if (!auditFailed) {
+    throw new Error("Gate 34 failed: expected simulated audit failure to throw");
+  }
+
+  const accountInDb = await prisma.providerAccount.findFirst({
+    where: { name: rollbackAccountName },
+  });
+  if (accountInDb) {
+    throw new Error("Gate 34 failed: ProviderAccount was committed despite audit log failure!");
+  }
+  console.log("✓ Gate 34 passed: Provider account creation with EXHAUSTED rejected; audit failure triggered full transactional rollback (account not persisted)");
+
+  // [Gate 35] activeAllocationsCount != consumedAllocationsCount when DEACTIVATION_PENDING exists
+  console.log("\n[Gate 35] Testing distinct activeAllocationsCount vs consumedAllocationsCount metrics...");
+  const pa35Res = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Metrics Distinction Test ${runId}`,
+      totalCapacity: 5,
+    },
+    adminToken,
+  );
+  const pa35 = pa35Res.data;
+
+  const ent35 = await createTestEntitlement({ userId: customer1Id, maxActivations: 2 });
+  const alloc35A = (await apiPost(`/entitlements/${ent35.id}/allocations`, { domain: `metrics-a-${runId}.com` }, customer1Token)).data;
+  const alloc35B = (await apiPost(`/entitlements/${ent35.id}/allocations`, { domain: `metrics-b-${runId}.com` }, customer1Token)).data;
+
+  // Activate both allocations under pa35
+  await apiPost(`/admin/license-allocations/${alloc35A.id}/activate`, { providerAccountId: pa35.id }, adminToken);
+  await apiPost(`/admin/license-allocations/${alloc35B.id}/activate`, { providerAccountId: pa35.id }, adminToken);
+
+  // Transition alloc35A to DEACTIVATION_PENDING
+  await apiPost(`/entitlements/${ent35.id}/allocations/${alloc35A.id}/request-deactivation`, {}, customer1Token);
+
+  // Now: 1 ACTIVE (alloc35B), 1 DEACTIVATION_PENDING (alloc35A)
+  // Check GET /admin/provider-accounts/:id
+  const pa35Detail = (await apiGet(`/admin/provider-accounts/${pa35.id}`, adminToken)).data;
+  if (pa35Detail.activeAllocationsCount !== 1) {
+    throw new Error(`Gate 35 failed: expected activeAllocationsCount=1, got ${pa35Detail.activeAllocationsCount}`);
+  }
+  if (pa35Detail.consumedAllocationsCount !== 2) {
+    throw new Error(`Gate 35 failed: expected consumedAllocationsCount=2, got ${pa35Detail.consumedAllocationsCount}`);
+  }
+  if (pa35Detail.availableCapacity !== 3) {
+    throw new Error(`Gate 35 failed: expected availableCapacity=3 (5 - 2), got ${pa35Detail.availableCapacity}`);
+  }
+
+  // Check GET /admin/provider-accounts list
+  const pa35List = (await apiGet(`/admin/provider-accounts?providerId=${provider.id}`, adminToken)).data;
+  const pa35InList = pa35List.find((p: any) => p.id === pa35.id);
+  if (!pa35InList) {
+    throw new Error("Gate 35 failed: created account not found in list response");
+  }
+  if (pa35InList.activeAllocationsCount !== 1 || pa35InList.consumedAllocationsCount !== 2 || pa35InList.availableCapacity !== 3) {
+    throw new Error(`Gate 35 failed: list item metrics mismatch: ${JSON.stringify(pa35InList)}`);
+  }
+  console.log(`✓ Gate 35 passed: Metrics distinct and accurate: activeAllocationsCount=1, consumedAllocationsCount=2, availableCapacity=3 (totalCapacity=5)`);
+
   console.log("\n==================================================");
-  console.log("ALL 30 PHASE 6 LIVE RUNTIME GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 35 PHASE 6 LIVE RUNTIME GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 
   stopChildProcesses();

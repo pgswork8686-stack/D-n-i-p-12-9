@@ -13,6 +13,7 @@ import {
   adminRejectAllocation,
   requestAllocationDeactivation,
   adminConfirmDeactivated,
+  adminCreateProviderAccount,
   adminUpdateProviderAccount,
   AllocationEngineError,
   prisma,
@@ -27,6 +28,7 @@ jest.mock("@nexus/database", () => {
     adminRejectAllocation: jest.fn(),
     requestAllocationDeactivation: jest.fn(),
     adminConfirmDeactivated: jest.fn(),
+    adminCreateProviderAccount: jest.fn(),
     adminUpdateProviderAccount: jest.fn(),
     prisma: {
       licenseProvider: {
@@ -283,7 +285,44 @@ describe("AllocationsService", () => {
   });
 
   describe("provider accounts & security", () => {
+    it("delegates adminCreateProviderAccount to domain engine and maps result", async () => {
+      (adminCreateProviderAccount as jest.Mock).mockResolvedValue({
+        account: {
+          id: "pa-1",
+          providerId: "prov-1",
+          name: "Test PA",
+          externalReference: null,
+          totalCapacity: 5,
+          status: "ACTIVE",
+          metadata: {},
+          createdAt: new Date("2026-09-14T00:00:00.000Z"),
+          updatedAt: new Date("2026-09-14T00:00:00.000Z"),
+        },
+        activeCount: 0,
+        consumedCount: 0,
+        availableCapacity: 5,
+      });
+
+      const result = await service.adminCreateProviderAccount(
+        {
+          providerId: "prov-1",
+          name: "Test PA",
+          totalCapacity: 5,
+        },
+        "admin-1",
+      );
+
+      expect(result.id).toBe("pa-1");
+      expect(result.activeAllocationsCount).toBe(0);
+      expect(result.consumedAllocationsCount).toBe(0);
+      expect(result.availableCapacity).toBe(5);
+    });
+
     it("rejects provider account creation with secret in metadata", async () => {
+      (adminCreateProviderAccount as jest.Mock).mockImplementation(() => {
+        throw new AllocationEngineError("Metadata contains forbidden secret-like key 'apiToken'", 400);
+      });
+
       await expect(
         service.adminCreateProviderAccount(
           {
@@ -298,6 +337,10 @@ describe("AllocationsService", () => {
     });
 
     it("rejects provider account creation with nested password in metadata", async () => {
+      (adminCreateProviderAccount as jest.Mock).mockImplementation(() => {
+        throw new AllocationEngineError("Metadata contains forbidden secret-like key 'password'", 400);
+      });
+
       await expect(
         service.adminCreateProviderAccount(
           {
@@ -311,7 +354,7 @@ describe("AllocationsService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it("delegates adminUpdateProviderAccount to domain engine and maps result", async () => {
+    it("delegates adminUpdateProviderAccount to domain engine and maps result with distinct active and consumed counts", async () => {
       (adminUpdateProviderAccount as jest.Mock).mockResolvedValue({
         account: {
           id: "pa-1",
@@ -324,8 +367,9 @@ describe("AllocationsService", () => {
           createdAt: new Date("2026-09-14T00:00:00.000Z"),
           updatedAt: new Date("2026-09-14T01:00:00.000Z"),
         },
-        consumedCount: 3,
-        availableCapacity: 7,
+        activeCount: 1,
+        consumedCount: 2,
+        availableCapacity: 8,
       });
 
       const result = await service.adminUpdateProviderAccount(
@@ -336,8 +380,34 @@ describe("AllocationsService", () => {
 
       expect(result.id).toBe("pa-1");
       expect(result.totalCapacity).toBe(10);
-      expect(result.activeAllocationsCount).toBe(3);
-      expect(result.availableCapacity).toBe(7);
+      expect(result.activeAllocationsCount).toBe(1);
+      expect(result.consumedAllocationsCount).toBe(2);
+      expect(result.availableCapacity).toBe(8);
+    });
+
+    it("maps distinct activeAllocationsCount vs consumedAllocationsCount in adminGetProviderAccount", async () => {
+      (prisma.providerAccount.findUnique as jest.Mock).mockResolvedValue({
+        id: "pa-1",
+        providerId: "prov-1",
+        name: "Test Account",
+        externalReference: "REF-1",
+        totalCapacity: 5,
+        status: "ACTIVE",
+        metadata: null,
+        createdAt: new Date("2026-09-14T00:00:00.000Z"),
+        updatedAt: new Date("2026-09-14T00:00:00.000Z"),
+      });
+
+      (prisma.licenseAllocation.count as jest.Mock)
+        .mockResolvedValueOnce(1) // activeCount
+        .mockResolvedValueOnce(2); // consumedCount
+
+      const result = await service.adminGetProviderAccount("pa-1");
+
+      expect(result.id).toBe("pa-1");
+      expect(result.activeAllocationsCount).toBe(1);
+      expect(result.consumedAllocationsCount).toBe(2);
+      expect(result.availableCapacity).toBe(3);
     });
   });
 });

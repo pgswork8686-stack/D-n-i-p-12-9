@@ -14,6 +14,7 @@ import {
   adminRejectAllocation as engineRejectAllocation,
   requestAllocationDeactivation as engineRequestDeactivation,
   adminConfirmDeactivated as engineConfirmDeactivated,
+  adminCreateProviderAccount,
   adminUpdateProviderAccount,
   assertSafeMetadata,
   PROVIDER_CAPACITY_CONSUMING_STATUSES,
@@ -243,20 +244,40 @@ export class AllocationsService {
 
     const accounts = await prisma.providerAccount.findMany({
       where: whereClause,
-      include: {
-        _count: {
-          select: {
-            allocations: {
-              where: { status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES } },
-            },
-          },
-        },
-      },
       orderBy: { createdAt: "desc" },
     });
 
+    if (accounts.length === 0) {
+      return [];
+    }
+
+    const accountIds = accounts.map((a) => a.id);
+
+    const [activeCounts, consumedCounts] = await Promise.all([
+      prisma.licenseAllocation.groupBy({
+        by: ["providerAccountId"],
+        where: {
+          providerAccountId: { in: accountIds },
+          status: AllocationStatus.ACTIVE,
+        },
+        _count: { id: true },
+      }),
+      prisma.licenseAllocation.groupBy({
+        by: ["providerAccountId"],
+        where: {
+          providerAccountId: { in: accountIds },
+          status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
+        },
+        _count: { id: true },
+      }),
+    ]);
+
+    const activeMap = new Map(activeCounts.map((c) => [c.providerAccountId, c._count.id]));
+    const consumedMap = new Map(consumedCounts.map((c) => [c.providerAccountId, c._count.id]));
+
     return accounts.map((acc) => {
-      const consumedCount = acc._count.allocations;
+      const activeCount = activeMap.get(acc.id) || 0;
+      const consumedCount = consumedMap.get(acc.id) || 0;
       const available = Math.max(0, acc.totalCapacity - consumedCount);
       return {
         id: acc.id,
@@ -264,7 +285,7 @@ export class AllocationsService {
         name: acc.name,
         externalReference: acc.externalReference,
         totalCapacity: acc.totalCapacity,
-        activeAllocationsCount: consumedCount,
+        activeAllocationsCount: activeCount,
         consumedAllocationsCount: consumedCount,
         availableCapacity: available,
         status: acc.status,
@@ -280,56 +301,29 @@ export class AllocationsService {
     actorId: string,
   ): Promise<ProviderAccountDto> {
     try {
-      if (dto.metadata !== undefined && dto.metadata !== null) {
-        assertSafeMetadata(dto.metadata);
-      }
-
-      const provider = await prisma.licenseProvider.findUnique({
-        where: { id: dto.providerId },
-      });
-
-      if (!provider) {
-        throw new NotFoundException("License provider not found");
-      }
-
-      const account = await prisma.providerAccount.create({
-        data: {
-          providerId: dto.providerId,
-          name: dto.name,
-          totalCapacity: dto.totalCapacity,
-          externalReference: dto.externalReference || null,
-          status: dto.status || ProviderAccountStatus.ACTIVE,
-          metadata: dto.metadata || {},
-        },
-      });
-
-      // Whitelisted audit log only - never log arbitrary metadata
-      await this.auditService.logAction({
-        action: "PROVIDER_ACCOUNT_CREATED",
-        entity: "ProviderAccount",
-        entityId: account.id,
+      const result = await adminCreateProviderAccount({
         actorId,
-        details: {
-          providerId: dto.providerId,
-          name: dto.name,
-          totalCapacity: dto.totalCapacity,
-          status: account.status,
-        },
+        providerId: dto.providerId,
+        name: dto.name,
+        totalCapacity: dto.totalCapacity,
+        externalReference: dto.externalReference,
+        status: dto.status,
+        metadata: dto.metadata,
       });
 
       return {
-        id: account.id,
-        providerId: account.providerId,
-        name: account.name,
-        externalReference: account.externalReference,
-        totalCapacity: account.totalCapacity,
-        activeAllocationsCount: 0,
-        consumedAllocationsCount: 0,
-        availableCapacity: account.totalCapacity,
-        status: account.status,
-        metadata: (account.metadata as any) || null,
-        createdAt: account.createdAt.toISOString(),
-        updatedAt: account.updatedAt.toISOString(),
+        id: result.account.id,
+        providerId: result.account.providerId,
+        name: result.account.name,
+        externalReference: result.account.externalReference,
+        totalCapacity: result.account.totalCapacity,
+        activeAllocationsCount: result.activeCount,
+        consumedAllocationsCount: result.consumedCount,
+        availableCapacity: result.availableCapacity,
+        status: result.account.status,
+        metadata: (result.account.metadata as any) || null,
+        createdAt: result.account.createdAt.toISOString(),
+        updatedAt: result.account.updatedAt.toISOString(),
       };
     } catch (err) {
       this.handleEngineError(err);
@@ -339,22 +333,27 @@ export class AllocationsService {
   async adminGetProviderAccount(id: string): Promise<ProviderAccountDto> {
     const account = await prisma.providerAccount.findUnique({
       where: { id },
-      include: {
-        _count: {
-          select: {
-            allocations: {
-              where: { status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES } },
-            },
-          },
-        },
-      },
     });
 
     if (!account) {
       throw new NotFoundException("Provider account not found");
     }
 
-    const consumedCount = account._count.allocations;
+    const [activeCount, consumedCount] = await Promise.all([
+      prisma.licenseAllocation.count({
+        where: {
+          providerAccountId: id,
+          status: AllocationStatus.ACTIVE,
+        },
+      }),
+      prisma.licenseAllocation.count({
+        where: {
+          providerAccountId: id,
+          status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
+        },
+      }),
+    ]);
+
     const available = Math.max(0, account.totalCapacity - consumedCount);
 
     return {
@@ -363,7 +362,7 @@ export class AllocationsService {
       name: account.name,
       externalReference: account.externalReference,
       totalCapacity: account.totalCapacity,
-      activeAllocationsCount: consumedCount,
+      activeAllocationsCount: activeCount,
       consumedAllocationsCount: consumedCount,
       availableCapacity: available,
       status: account.status,
@@ -395,7 +394,7 @@ export class AllocationsService {
         name: result.account.name,
         externalReference: result.account.externalReference,
         totalCapacity: result.account.totalCapacity,
-        activeAllocationsCount: result.consumedCount,
+        activeAllocationsCount: result.activeCount,
         consumedAllocationsCount: result.consumedCount,
         availableCapacity: result.availableCapacity,
         status: result.account.status,

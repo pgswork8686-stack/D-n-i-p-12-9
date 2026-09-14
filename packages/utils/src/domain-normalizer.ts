@@ -60,6 +60,11 @@ export function normalizeDomain(rawInput: string | null | undefined): string {
     throw new Error(`Invalid domain format: unable to parse '${trimmed}'`);
   }
 
+  // Reject URL credentials (username or password in userinfo)
+  if (parsed.username || parsed.password) {
+    throw new Error("URL credentials (username/password) are not permitted in domain names");
+  }
+
   let hostname = parsed.hostname;
   if (!hostname || hostname.trim() === "") {
     throw new Error("Invalid domain: missing hostname");
