@@ -183,7 +183,7 @@ Side-effects như email, license generation, affiliate commission chạy qua out
 ## License nội bộ (Phase 7 Implemented)
 Kiến trúc Internal License Engine:
 - Mã bản quyền chuẩn định dạng `NXS-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX` (128-bit cryptographic entropy).
-- Khóa lưu trữ an toàn: Plaintext key chỉ trả về 1 lần duy nhất cho khách hàng sở hữu tại `POST /licenses/:id/reveal`. Database chỉ lưu ciphertext mã hóa bằng AES-256-GCM (`encryptedKey`, IV, auth tag) và `keyHash` (SHA-256) cho tra cứu nhanh không khả nghịch. Khóa plaintext tuyệt đối KHÔNG bao giờ xuất hiện trong audit logs hay error payloads.
+- Khóa lưu trữ an toàn: Plaintext key được tra cứu lặp lại an toàn bởi khách hàng sở hữu qua xác thực quyền sở hữu tại `POST /licenses/:id/reveal`. Database chỉ lưu ciphertext mã hóa bằng AES-256-GCM (`encryptedKey`, IV, auth tag) và `keyHash` (SHA-256) cho tra cứu nhanh không khả nghịch. Khóa plaintext tuyệt đối KHÔNG bao giờ xuất hiện trong audit logs hay error payloads.
 - Endpoints:
   - `POST /v1/licenses/activate`: Kích hoạt domain, kiểm tra sức chứa `maxActivations`, chuẩn hóa canonical domain (loại bỏ protocol, trailing slash, port, query params), idempotent cho cùng domain. Chống race condition kích hoạt đồng thời vượt quá số ghế.
   - `POST /v1/licenses/validate`: Thẩm định trạng thái license và domain theo thời gian thực. Chống vét cạn (anti-enumeration): mọi trạng thái không hợp lệ (key sai, domain sai, entitlement hết hạn/bị thu hồi) đều trả về `{ valid: false }` với HTTP 200 không tiết lộ nguyên nhân.
@@ -198,26 +198,32 @@ Kiến trúc Internal License Engine:
 ## Download & Version Engine (Phase 8 Implemented)
 Kiến trúc quản lý phiên bản phần mềm & cấp quyền tải an toàn:
 - Quản lý phiên bản chuẩn SemVer 2.0.0 (`major.minor.patch[-prerelease][+build]`): Thẩm định định dạng, chuẩn hóa, phân tách metadata, so sánh và sắp xếp phiên bản chính xác qua `@nexus/utils/semver`.
+- Mô hình dữ liệu & File chính (Primary Package):
+  - Bảng `ProductVersionFile`: Trường `isPrimary Boolean @default(false)` kèm partial unique index PostgreSQL `CREATE UNIQUE INDEX "product_version_files_version_primary_unique" ON "product_version_files"("product_version_id") WHERE is_primary = true;`. Đối với sản phẩm `INTERNAL_LICENSE`, phiên bản bắt buộc phải có đúng 1 file chính đã được xác thực trước khi chuyển trạng thái `PUBLISHED`.
+  - Bảng `DownloadGrant`: Bản ghi cấp quyền tải chuẩn nghiệp vụ lưu vết `userId`, `entitlementId`, `licenseId`, `productVersionId`, `fileId`, `channel`, `ipAddress`, `expiresAt`. Được ghi nhận nguyên tử trong giao dịch PostgreSQL cùng với `DownloadEvent` và `AuditLog`, bảo đảm tính tuyến tính (`SELECT ... FOR UPDATE` trên `entitlements` và `internal_licenses`), ngăn chặn triệt để race condition giữa việc thu hồi Entitlement / License và việc cấp URL tải (`grant.issuedAt <= entitlement.revokedAt`).
 - Object Storage riêng tư: MinIO (local development) / Cloudflare R2 (production) qua S3-compatible abstraction.
   - Tuyệt đối KHÔNG có URL công khai hoặc URL vĩnh viễn cho tài sản số.
-  - Chữ ký tải file (Signed URLs) là tạm thời với TTL giới hạn nghiêm ngặt từ 120s–300s (mặc định 180s).
-  - Khóa lưu trữ backend tự sinh (`products/{productId}/versions/{version}/{uuid}.zip`), header `Content-Disposition: attachment; filename="safe-filename.zip"` chuẩn RFC 6266.
+  - Quyền sở hữu file lưu trữ thuộc về backend: Admin upload file trực tiếp qua API multipart (`POST /admin/product-versions/:id/files/upload`), backend tự sinh `storageKey` (`products/{productId}/versions/{version}/{uuid}-{filename}`), tính toán SHA-256 và sizeBytes, upload lên bucket và xác thực tự động. Không cho phép client chỉ định `storageKey` tùy ý.
+  - Chữ ký tải file (Signed URLs) là tạm thời với TTL được kẹp chặt từ 120s–300s (mặc định 180s) qua hàm `resolveDownloadTtl(configuredTtl)`.
+  - Header tải xuống an toàn: `Content-Disposition: attachment; filename="safe-filename.zip"` chuẩn RFC 6266.
+  - Fail-closed khi khởi động môi trường production nếu thiếu bất kỳ biến cấu hình Storage nào (`STORAGE_PROVIDER`, `STORAGE_ENDPOINT`, `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`).
 - Toàn vẹn dữ liệu:
-  - Xác thực streaming SHA-256 checksum và kích thước `sizeBytes` đối chiếu trực tiếp với storage trước khi file được chuyển sang trạng thái `VERIFIED` và phiên bản sang `PUBLISHED`.
+  - Xác thực streaming SHA-256 checksum và kích thước `sizeBytes` đối chiếu trực tiếp với storage trước khi file được chuyển sang trạng thái `VERIFIED`.
+  - Kiểm tra tái toàn vẹn trước khi phát hành (Pre-publish reverification): Trước khi phiên bản chuyển sang `PUBLISHED`, engine đọc lại toàn bộ file từ S3 storage để xác minh đối tượng còn tồn tại, không bị thay đổi dung lượng hay checksum trên storage.
   - Bất biến (Immutability): Phiên bản và file đã `PUBLISHED` là bất biến. Mọi thao tác cập nhật/xóa sau khi phát hành đều bị chặn (HTTP 409). Thao tác phát hành sử dụng atomic CAS (`DRAFT` -> `PUBLISHED`) ghi nhận đúng 1 audit log duy nhất.
-- Kênh tải khách hàng (`POST /v1/downloads/request`):
-  - Kiểm tra xác thực (AuthGuard), quyền sở hữu Entitlement, trạng thái `ACTIVE` và chưa hết hạn `expiresAt`.
-  - Hỗ trợ cả `DIGITAL_DOWNLOAD` và `INTERNAL_LICENSE`.
+- Kênh tải khách hàng (`POST /v1/downloads/request`, channel `CUSTOMER_PORTAL`):
+  - Preflight validation: Thẩm định quyền sở hữu Entitlement trước khi chạm Redis để chống spam key rate limit rác.
+  - Kiểm tra xác thực (AuthGuard), quyền sở hữu Entitlement, trạng thái `ACTIVE` và chưa hết hạn `expiresAt`. Hỗ trợ cả `DIGITAL_DOWNLOAD` và `INTERNAL_LICENSE`.
   - Kiểm tra cửa sổ cập nhật: `releasedAt <= updatesUntil`. Nếu `updatesUntil === null`, khách hàng được tải mọi bản phát hành mới nhất khi Entitlement còn hoạt động. Nếu hết hạn cập nhật (`updatesUntil < now`), khách hàng vẫn giữ quyền tải vĩnh viễn các phiên bản được phát hành trong thời gian bản quyền còn hiệu lực (`releasedAt <= updatesUntil`).
-- Giới hạn tần suất tải (Rate Limiting):
-  - Redis Lua script nguyên tử: Tối đa 10 lượt tải trong cửa sổ trượt 600 giây trên mỗi Entitlement.
-  - Nguyên tắc Fail-closed: Nếu Redis gặp sự cố, hệ thống trả về HTTP 503 (Service Unavailable), không mở cổng tải không giới hạn.
-- Kênh cập nhật tự động / WordPress Updater (`POST /v1/updates/check`):
-  - Xác thực qua license key và domain đã chuẩn hóa.
-  - Kiểm tra quyền sở hữu và cửa sổ cập nhật, trả về phiên bản mới nhất mà khách hàng ĐỦ ĐIỀU KIỆN nhận.
+- Kênh cập nhật tự động / WordPress Updater (`POST /v1/updates/check` & `POST /v1/updates/download`, channel `LICENSE_UPDATER`):
+  - Xác thực qua license key và domain đã chuẩn hóa, kiểm tra Entitlement và license `ACTIVE`.
+  - Tự động phân giải file chính (`isPrimary: true`), khóa hàng hai tầng (`internal_licenses FOR UPDATE` -> `entitlements FOR UPDATE`) ngăn ngừa race condition thu hồi.
   - Chống vét cạn: license không hợp lệ hoặc không có quyền trả về payload rỗng `{ updateAvailable: false }` thay vì lộ thông tin nội bộ.
+- Giới hạn tần suất tải (Atomic Sliding Window Rate Limiting):
+  - Redis ZSET sliding-window Lua script nguyên tử: Tối đa 10 lượt tải trong cửa sổ trượt 600 giây trên mỗi Entitlement (kênh khách hàng) hoặc mỗi Entitlement + Domain (kênh updater).
+  - Nguyên tắc Fail-closed: Nếu Redis gặp sự cố, hệ thống trả về HTTP 503 (Service Unavailable), không mở cổng tải không giới hạn và không ghi nhận DownloadGrant/Event rác.
 - Bảo mật thông tin:
-  - Signed URLs và tham số chữ ký lưu trữ (`X-Amz-Signature`, `X-Amz-Credential`, v.v.) tuyệt đối KHÔNG bao giờ được ghi vào database, bảng `DownloadEvent`, hay `AuditLog`.
+  - Signed URLs và tham số chữ ký lưu trữ (`X-Amz-Signature`, `X-Amz-Credential`, v.v.) tuyệt đối KHÔNG bao giờ được ghi vào database, bảng `DownloadEvent`, `DownloadGrant`, hay `AuditLog`.
 
 ## CMS riêng
 Không phụ thuộc WordPress.

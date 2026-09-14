@@ -6,7 +6,10 @@ import {
   Body,
   UseGuards,
   Req,
+  UseInterceptors,
+  UploadedFile,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { AuthGuard } from "../auth/auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { RequirePermissions } from "../auth/require-permissions.decorator";
@@ -14,6 +17,7 @@ import { DownloadsService } from "./downloads.service";
 import {
   CreateProductVersionDto,
   AddVersionFileDto,
+  UploadVersionFileDto,
 } from "./dto/downloads.dto";
 
 @Controller("admin")
@@ -53,6 +57,24 @@ export class AdminVersionsController {
   ) {
     const actorId = req.user.id;
     return this.downloadsService.addFile(id, dto, actorId);
+  }
+
+  @Post("product-versions/:id/files/upload")
+  @RequirePermissions("product.write")
+  @UseInterceptors(FileInterceptor("file"))
+  async uploadFile(
+    @Param("id") id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadVersionFileDto,
+    @Req() req: any,
+  ) {
+    const actorId = req.user.id;
+    return this.downloadsService.uploadFile(
+      id,
+      file,
+      dto.isPrimary ?? false,
+      actorId,
+    );
   }
 
   @Post("product-versions/:id/publish")

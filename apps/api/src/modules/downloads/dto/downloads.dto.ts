@@ -1,11 +1,11 @@
 import {
+  IsBoolean,
   IsString,
   IsNotEmpty,
   IsOptional,
   IsUUID,
-  IsNumber,
-  IsPositive,
 } from "class-validator";
+import { Transform } from "class-transformer";
 import {
   CreateProductVersionRequest,
   AddVersionFileRequest,
@@ -32,18 +32,16 @@ export class AddVersionFileDto implements AddVersionFileRequest {
   @IsOptional()
   contentType?: string;
 
-  @IsString()
+  @IsBoolean()
   @IsOptional()
-  storageKey?: string;
+  isPrimary?: boolean;
+}
 
-  @IsNumber()
-  @IsPositive()
+export class UploadVersionFileDto {
+  @IsBoolean()
   @IsOptional()
-  sizeBytes?: number;
-
-  @IsString()
-  @IsOptional()
-  sha256?: string;
+  @Transform(({ value }) => value === "true" || value === true || value === 1 || value === "1")
+  isPrimary?: boolean;
 }
 
 export class RequestDownloadDto implements RequestDownloadRequest {

@@ -7,26 +7,30 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
+import * as crypto from "crypto";
 import {
   DOWNLOAD_RATE_LIMIT_MAX,
   DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS,
 } from "@nexus/contracts";
 
-const RATE_LIMIT_LUA_SCRIPT = `
+const SLIDING_WINDOW_LUA_SCRIPT = `
 local key = KEYS[1]
-local limit = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
+local now = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local maxRequests = tonumber(ARGV[3])
+local member = ARGV[4]
 
-local current = redis.call('INCR', key)
-if current == 1 then
-  redis.call('EXPIRE', key, window)
+local clearBefore = now - windowMs
+redis.call('ZREMRANGEBYSCORE', key, '-inf', clearBefore)
+local currentCount = redis.call('ZCARD', key)
+
+if currentCount >= maxRequests then
+  return {0, currentCount}
 end
 
-if current > limit then
-  return {0, current}
-else
-  return {1, current}
-end
+redis.call('ZADD', key, now, member)
+redis.call('PEXPIRE', key, windowMs)
+return {1, currentCount + 1}
 `;
 
 @Injectable()
@@ -62,9 +66,37 @@ export class DownloadRateLimiter implements OnModuleDestroy {
   }
 
   /**
-   * Evaluates atomic rate limit for customer download request.
-   * Throws 429 Too Many Requests if rate limit exceeded.
-   * Throws 503 Service Unavailable if Redis is down/unreachable (fails closed).
+   * Evaluates atomic sliding-window rate limit for customer download request.
+   * Key: ratelimit:download:customer:${entitlementId}:${userId}
+   * Fails closed (503) if Redis is unavailable.
+   */
+  async checkAndConsumeCustomerRateLimit(
+    userId: string,
+    entitlementId: string,
+    customLimit?: number,
+    customWindow?: number,
+  ): Promise<void> {
+    const key = `ratelimit:download:customer:${entitlementId}:${userId}`;
+    await this.evaluateSlidingWindow(key, customLimit, customWindow);
+  }
+
+  /**
+   * Evaluates atomic sliding-window rate limit for software updater requests.
+   * Key: ratelimit:download:updater:${entitlementId}:${normalizedDomain}
+   * Fails closed (503) if Redis is unavailable.
+   */
+  async checkAndConsumeUpdaterRateLimit(
+    entitlementId: string,
+    normalizedDomain: string,
+    customLimit?: number,
+    customWindow?: number,
+  ): Promise<void> {
+    const key = `ratelimit:download:updater:${entitlementId}:${normalizedDomain}`;
+    await this.evaluateSlidingWindow(key, customLimit, customWindow);
+  }
+
+  /**
+   * Generic backwards-compatible customer download rate limit check.
    */
   async checkAndConsumeRateLimit(
     userId: string,
@@ -72,23 +104,40 @@ export class DownloadRateLimiter implements OnModuleDestroy {
     customLimit?: number,
     customWindow?: number,
   ): Promise<void> {
+    await this.checkAndConsumeCustomerRateLimit(
+      userId,
+      entitlementId,
+      customLimit,
+      customWindow,
+    );
+  }
+
+  private async evaluateSlidingWindow(
+    key: string,
+    customLimit?: number,
+    customWindowSeconds?: number,
+  ): Promise<void> {
     const limit = customLimit ?? this.defaultLimit;
-    const windowSeconds = customWindow ?? this.defaultWindowSeconds;
-    const key = `ratelimit:download:${userId}:${entitlementId}`;
+    const windowSeconds = customWindowSeconds ?? this.defaultWindowSeconds;
+    const windowMs = windowSeconds * 1000;
+    const now = Date.now();
+    const member = `${now}-${crypto.randomUUID()}`;
 
     try {
       const result = (await this.redisClient.eval(
-        RATE_LIMIT_LUA_SCRIPT,
+        SLIDING_WINDOW_LUA_SCRIPT,
         1,
         key,
+        now,
+        windowMs,
         limit,
-        windowSeconds,
+        member,
       )) as [number, number];
 
       const [allowed, current] = result;
       if (allowed === 0) {
         this.logger.warn(
-          `[RateLimit] Download limit exceeded for user=${userId}, entitlement=${entitlementId}. Current=${current}, limit=${limit}`,
+          `[RateLimit] Download limit exceeded for key=${key}. Current=${current}, limit=${limit}`,
         );
         throw new HttpException(
           "Too many download requests. Rate limit exceeded, please try again later.",
@@ -100,7 +149,7 @@ export class DownloadRateLimiter implements OnModuleDestroy {
         throw err;
       }
       this.logger.error(
-        `[RateLimit] Redis rate limit authority unavailable: ${err?.message || err}`,
+        `[RateLimit] Redis rate limit authority unavailable for key=${key}: ${err?.message || err}`,
       );
       // Invariant: fail closed for signed URL issuance with safe 503
       throw new HttpException(

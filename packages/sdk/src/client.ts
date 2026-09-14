@@ -1059,6 +1059,35 @@ export class NexusApiClient {
     return (await res.json()) as ProductVersionFileDto;
   }
 
+  async uploadVersionFile(
+    versionId: string,
+    fileBuffer: Buffer | Uint8Array,
+    fileName: string,
+    isPrimary?: boolean,
+    contentType = "application/zip",
+  ): Promise<ProductVersionFileDto> {
+    const formData = new FormData();
+    const blob = new Blob([fileBuffer as any], { type: contentType });
+    formData.append("file", blob, fileName);
+    if (isPrimary !== undefined) {
+      formData.append("isPrimary", String(isPrimary));
+    }
+
+    const headers = this.buildHeaders();
+    delete headers["Content-Type"];
+
+    const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}/files/upload`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Upload version file failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionFileDto;
+  }
+
   async publishProductVersion(versionId: string): Promise<PublishVersionResponse> {
     const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}/publish`, {
       method: "POST",

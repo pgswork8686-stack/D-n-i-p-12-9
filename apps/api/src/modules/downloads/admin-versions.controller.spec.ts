@@ -65,11 +65,17 @@ describe("AdminVersionsController", () => {
     expect(mockService.addFile).toHaveBeenCalledWith("v-1", { fileName: "plugin.zip" }, "admin-1");
   });
 
-  it("publishes product version", async () => {
-    mockService.publishVersion.mockResolvedValue({ success: true });
+  it("uploads file to product version", async () => {
+    mockService.uploadFile = jest.fn().mockResolvedValue({ id: "f-upload" });
     const req = { user: { id: "admin-1" } };
-    const res = await controller.publishVersion("v-1", req);
-    expect(res.success).toBe(true);
-    expect(mockService.publishVersion).toHaveBeenCalledWith("v-1", "admin-1");
+    const dummyFile = {
+      originalname: "plugin.zip",
+      buffer: Buffer.from("test"),
+      mimetype: "application/zip",
+      size: 4,
+    } as any;
+    const res = await controller.uploadFile("v-1", dummyFile, { isPrimary: true }, req);
+    expect(res.id).toBe("f-upload");
+    expect(mockService.uploadFile).toHaveBeenCalledWith("v-1", dummyFile, true, "admin-1");
   });
 });

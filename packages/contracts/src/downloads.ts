@@ -8,6 +8,20 @@ export const DOWNLOAD_SIGNED_URL_MAX_TTL = 300;
 export const DOWNLOAD_RATE_LIMIT_MAX = 10;
 export const DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS = 600; // 10 minutes
 
+export function resolveDownloadTtl(configuredTtl?: number | string | null): number {
+  if (configuredTtl === undefined || configuredTtl === null || configuredTtl === "") {
+    return DOWNLOAD_SIGNED_URL_DEFAULT_TTL;
+  }
+  const parsed = typeof configuredTtl === "number" ? configuredTtl : parseInt(configuredTtl, 10);
+  if (isNaN(parsed) || !isFinite(parsed)) {
+    return DOWNLOAD_SIGNED_URL_DEFAULT_TTL;
+  }
+  return Math.max(
+    DOWNLOAD_SIGNED_URL_MIN_TTL,
+    Math.min(DOWNLOAD_SIGNED_URL_MAX_TTL, Math.floor(parsed))
+  );
+}
+
 export interface ProductVersionDto {
   id: string;
   productId: string;
@@ -28,9 +42,23 @@ export interface ProductVersionFileDto {
   contentType: string;
   sizeBytes: number;
   sha256: string;
+  isPrimary: boolean;
   verifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DownloadGrantDto {
+  id: string;
+  userId: string | null;
+  entitlementId: string;
+  productVersionId: string;
+  fileId: string;
+  channel: DownloadChannel;
+  licenseId: string | null;
+  normalizedDomain: string | null;
+  issuedAt: string;
+  expiresAt: string;
 }
 
 export interface CreateProductVersionRequest {
@@ -41,9 +69,7 @@ export interface CreateProductVersionRequest {
 export interface AddVersionFileRequest {
   fileName: string;
   contentType?: string;
-  storageKey?: string;
-  sizeBytes?: number;
-  sha256?: string;
+  isPrimary?: boolean;
 }
 
 export interface PublishVersionResponse {

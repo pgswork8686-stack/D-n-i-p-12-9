@@ -19,7 +19,8 @@ import {
   encryptLicenseKey,
 } from "@nexus/utils";
 
-const API_BASE = process.env.API_URL || "http://localhost:4000";
+const TEST_PORT = process.env.API_PORT || process.env.PORT || "4005";
+const API_BASE = `http://localhost:${TEST_PORT}`;
 const TEST_ENCRYPTION_KEY =
   process.env.LICENSE_KEY_ENCRYPTION_KEY ||
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -42,15 +43,17 @@ async function ensureApiRunning(): Promise<void> {
     // Not running
   }
 
-  console.log("  Starting API server child process on port 4000...");
+  console.log(`  Starting API server child process on port ${TEST_PORT}...`);
   apiProcess = spawn(
     "node",
     [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
     {
+      cwd: path.resolve(__dirname, "../../.."),
       stdio: "pipe",
       env: {
         ...process.env,
-        PORT: "4000",
+        PORT: TEST_PORT,
+        API_URL: API_BASE,
         LICENSE_KEY_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
       },
     },
@@ -78,6 +81,7 @@ async function ensureWorkerRunning(): Promise<void> {
     "node",
     [path.resolve(__dirname, "../../../apps/worker/dist/index.js")],
     {
+      cwd: path.resolve(__dirname, "../../.."),
       stdio: "pipe",
       env: {
         ...process.env,

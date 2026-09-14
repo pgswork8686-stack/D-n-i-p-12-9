@@ -20,9 +20,7 @@ import {
   SignedDownloadUrlOptions,
 } from "./storage.interface";
 import {
-  DOWNLOAD_SIGNED_URL_DEFAULT_TTL,
-  DOWNLOAD_SIGNED_URL_MIN_TTL,
-  DOWNLOAD_SIGNED_URL_MAX_TTL,
+  resolveDownloadTtl,
 } from "@nexus/contracts";
 
 @Injectable()
@@ -33,27 +31,41 @@ export class S3CompatibleStorageService implements IStorageService {
   private provider: string;
 
   constructor(private configService: ConfigService) {
-    this.provider = this.configService
-      .get<string>("STORAGE_PROVIDER", "minio")
-      .toLowerCase();
+    const isProduction =
+      this.configService.get<string>("NODE_ENV") === "production";
 
-    const endpoint = this.configService.get<string>(
-      "STORAGE_ENDPOINT",
-      "http://localhost:9000",
-    );
-    const accessKeyId = this.configService.get<string>(
-      "STORAGE_ACCESS_KEY",
-      "minioadmin",
-    );
-    const secretAccessKey = this.configService.get<string>(
-      "STORAGE_SECRET_KEY",
-      "minioadmin",
-    );
-    const region = this.configService.get<string>("STORAGE_REGION", "auto");
-    this.bucket = this.configService.get<string>(
-      "STORAGE_BUCKET",
-      "marketplace-dev",
-    );
+    if (isProduction) {
+      const requiredVars = [
+        "STORAGE_PROVIDER",
+        "STORAGE_ENDPOINT",
+        "STORAGE_BUCKET",
+        "STORAGE_ACCESS_KEY",
+        "STORAGE_SECRET_KEY",
+      ];
+      for (const varName of requiredVars) {
+        const val = this.configService.get<string>(varName);
+        if (!val || val.trim() === "") {
+          throw new Error(
+            `[Storage] Production configuration missing required environment variable: ${varName}`,
+          );
+        }
+      }
+    }
+
+    this.provider = (
+      this.configService.get<string>("STORAGE_PROVIDER") || "minio"
+    ).toLowerCase();
+
+    const endpoint =
+      this.configService.get<string>("STORAGE_ENDPOINT") ||
+      "http://localhost:9000";
+    const accessKeyId =
+      this.configService.get<string>("STORAGE_ACCESS_KEY") || "minioadmin";
+    const secretAccessKey =
+      this.configService.get<string>("STORAGE_SECRET_KEY") || "minioadmin";
+    const region = this.configService.get<string>("STORAGE_REGION") || "auto";
+    this.bucket =
+      this.configService.get<string>("STORAGE_BUCKET") || "marketplace-dev";
 
     // MinIO and local endpoints need forcePathStyle: true
     // Cloudflare R2 / AWS S3 can use virtual hosted or path style
@@ -116,7 +128,7 @@ export class S3CompatibleStorageService implements IStorageService {
 
   async getSignedDownloadUrl(
     key: string,
-    ttlSeconds = DOWNLOAD_SIGNED_URL_DEFAULT_TTL,
+    ttlSeconds?: number,
   ): Promise<string> {
     return this.createSignedDownloadUrl(key, { ttlSeconds });
   }
@@ -125,13 +137,7 @@ export class S3CompatibleStorageService implements IStorageService {
     key: string,
     options?: SignedDownloadUrlOptions,
   ): Promise<string> {
-    let ttl = options?.ttlSeconds ?? DOWNLOAD_SIGNED_URL_DEFAULT_TTL;
-    if (ttl < DOWNLOAD_SIGNED_URL_MIN_TTL) {
-      ttl = DOWNLOAD_SIGNED_URL_MIN_TTL;
-    }
-    if (ttl > DOWNLOAD_SIGNED_URL_MAX_TTL) {
-      ttl = DOWNLOAD_SIGNED_URL_MAX_TTL;
-    }
+    const ttl = resolveDownloadTtl(options?.ttlSeconds);
 
     let responseContentDisposition: string | undefined;
     if (options?.filename) {

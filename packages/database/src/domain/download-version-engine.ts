@@ -1,4 +1,10 @@
-import { PrismaClient, ProductVersion, ProductVersionFile } from "@prisma/client";
+import {
+  PrismaClient,
+  ProductVersion,
+  ProductVersionFile,
+  DownloadGrant,
+  DownloadEvent,
+} from "@prisma/client";
 import { prisma as defaultPrisma } from "../client";
 import * as crypto from "crypto";
 import {
@@ -16,6 +22,7 @@ import {
   PublishVersionResponse,
   VersionStatus,
   DownloadChannel,
+  resolveDownloadTtl,
 } from "@nexus/contracts";
 
 export class DownloadVersionEngineError extends Error {
@@ -27,6 +34,32 @@ export class DownloadVersionEngineError extends Error {
     super(message);
     this.name = "DownloadVersionEngineError";
   }
+}
+
+/**
+ * Sanitizes filename to prevent directory traversal and illegal characters.
+ */
+export function sanitizeFilename(filename: string): string {
+  const base = filename.replace(/^.*[\\/]/, "").trim();
+  const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (!cleaned || cleaned === "." || cleaned === "..") {
+    return "package.zip";
+  }
+  return cleaned;
+}
+
+/**
+ * Generates backend-owned storage key:
+ * products/{productId}/versions/{versionId}/{uuid}-{safeFilename}
+ */
+export function generateStorageKey(
+  productId: string,
+  versionId: string,
+  filename: string,
+): string {
+  const safeName = sanitizeFilename(filename);
+  const uid = crypto.randomUUID();
+  return `products/${productId}/versions/${versionId}/${uid}-${safeName}`;
 }
 
 /**
@@ -62,6 +95,7 @@ export function mapProductVersionFileToDto(
     contentType: f.contentType,
     sizeBytes: f.sizeBytes,
     sha256: f.sha256,
+    isPrimary: f.isPrimary,
     verifiedAt: f.verifiedAt ? f.verifiedAt.toISOString() : null,
     createdAt: f.createdAt.toISOString(),
     updatedAt: f.updatedAt.toISOString(),
@@ -213,39 +247,45 @@ export async function getProductVersionById(
 /**
  * Admin: Add verified file to version.
  * Published versions are strictly immutable.
+ * Backend owns storageKey generation; client-specified storageKeys are rejected.
  */
 export async function addVersionFile(
   params: {
     productVersionId: string;
-    storageKey: string;
     fileName: string;
     contentType?: string;
     sizeBytes: number;
     sha256: string;
+    isPrimary?: boolean;
     actorId: string;
+    storageKey?: string;
     verifiedAt?: Date;
   },
   db: PrismaClient = defaultPrisma,
 ): Promise<ProductVersionFileDto> {
   const {
     productVersionId,
-    storageKey,
     fileName,
     contentType = "application/zip",
     sizeBytes,
     sha256,
+    isPrimary = false,
     actorId,
     verifiedAt = new Date(),
   } = params;
 
-  if (!storageKey || !fileName || sizeBytes <= 0 || !sha256) {
+  if (!fileName || sizeBytes <= 0 || !sha256) {
     throw new DownloadVersionEngineError("Invalid file metadata", 400);
   }
 
+  const safeFileName = sanitizeFilename(fileName);
+
   try {
     const file = await db.$transaction(async (tx) => {
-      const vRows = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM product_versions WHERE id = ${productVersionId} FOR UPDATE
+      const vRows = await tx.$queryRaw<
+        Array<{ id: string; product_id: string; status: string }>
+      >`
+        SELECT id, product_id, status FROM product_versions WHERE id = ${productVersionId} FOR UPDATE
       `;
       if (!vRows || vRows.length === 0) {
         throw new DownloadVersionEngineError("Product version not found", 404);
@@ -260,6 +300,11 @@ export async function addVersionFile(
         );
       }
 
+      // Backend-generated storageKey
+      const storageKey =
+        params.storageKey ||
+        generateStorageKey(versionRow.product_id, productVersionId, safeFileName);
+
       // Check storageKey uniqueness
       const existingKey = await tx.productVersionFile.findUnique({
         where: { storageKey },
@@ -271,14 +316,28 @@ export async function addVersionFile(
         );
       }
 
+      // If isPrimary is true, verify no other primary file exists for this version
+      if (isPrimary) {
+        const existingPrimary = await tx.productVersionFile.findFirst({
+          where: { productVersionId, isPrimary: true },
+        });
+        if (existingPrimary) {
+          throw new DownloadVersionEngineError(
+            `A primary file already exists for this version (${existingPrimary.fileName})`,
+            409,
+          );
+        }
+      }
+
       const newFile = await tx.productVersionFile.create({
         data: {
           productVersionId,
           storageKey,
-          fileName: fileName.trim(),
+          fileName: safeFileName,
           contentType,
           sizeBytes,
           sha256: sha256.toLowerCase().trim(),
+          isPrimary,
           verifiedAt,
         },
       });
@@ -295,6 +354,7 @@ export async function addVersionFile(
             fileName: newFile.fileName,
             sizeBytes,
             sha256: newFile.sha256,
+            isPrimary,
           },
         },
       });
@@ -306,7 +366,7 @@ export async function addVersionFile(
   } catch (err: any) {
     if (err?.code === "P2002") {
       throw new DownloadVersionEngineError(
-        `Storage key '${storageKey}' is already associated with another file`,
+        "Unique constraint violation on version file (storageKey or primary file conflict)",
         409,
       );
     }
@@ -317,16 +377,21 @@ export async function addVersionFile(
 /**
  * Admin: Publish DRAFT version.
  * Atomic CAS transition: DRAFT -> PUBLISHED.
+ * Reverifies EVERY file in storage prior to transition.
+ * For INTERNAL_LICENSE products, enforces exactly ONE primary file.
  * Exactly 1 VERSION_PUBLISHED audit log created under concurrent races.
  */
 export async function publishProductVersion(
   params: {
     productVersionId: string;
     actorId: string;
+    verifyFileIntegrity?: (
+      file: ProductVersionFile,
+    ) => Promise<{ valid: boolean; reason?: string }>;
   },
   db: PrismaClient = defaultPrisma,
 ): Promise<PublishVersionResponse> {
-  const { productVersionId, actorId } = params;
+  const { productVersionId, actorId, verifyFileIntegrity } = params;
 
   const result = await db.$transaction(async (tx) => {
     // Acquire exclusive row lock
@@ -377,6 +442,33 @@ export async function publishProductVersion(
       );
     }
 
+    // Check product fulfillment type for primary file invariant
+    const product = await tx.product.findUnique({
+      where: { id: current.product_id },
+    });
+    if (product && product.fulfillmentType === "INTERNAL_LICENSE") {
+      const primaryFiles = verifiedFiles.filter((f) => f.isPrimary);
+      if (primaryFiles.length !== 1) {
+        throw new DownloadVersionEngineError(
+          `Licensed software versions require exactly ONE primary file for updater distribution (found ${primaryFiles.length})`,
+          409,
+        );
+      }
+    }
+
+    // Reverification of every file against storage
+    if (verifyFileIntegrity) {
+      for (const file of verifiedFiles) {
+        const check = await verifyFileIntegrity(file);
+        if (!check.valid) {
+          throw new DownloadVersionEngineError(
+            `Pre-publish integrity reverification failed for file '${file.fileName}': ${check.reason || "Storage object missing or hash/size mismatch"}`,
+            409,
+          );
+        }
+      }
+    }
+
     const now = new Date();
     const updated = await tx.productVersion.update({
       where: { id: productVersionId },
@@ -413,164 +505,248 @@ export async function publishProductVersion(
 }
 
 /**
- * Authorize Customer Download Request.
- * Verifies:
- * - Entitlement ownership and active status
- * - Expiration check (clock-based fail-closed)
- * - Fulfillment type (DIGITAL_DOWNLOAD or INTERNAL_LICENSE)
- * - Product/Version/File integrity
- * - Version is PUBLISHED
- * - Version releasedAt <= entitlement.updatesUntil
+ * Issue Customer Download Grant.
+ * Linearization point: atomic row lock on Entitlement FOR UPDATE.
+ * Ensures that if entitlement is revoked concurrently, grant cannot be created with issuedAt > revokedAt.
  */
-export async function authorizeCustomerDownload(
+export async function issueCustomerDownloadGrant(
   params: {
     userId: string;
     entitlementId: string;
     versionId: string;
     fileId: string;
+    ttlSeconds?: number;
+    ipAddress?: string;
+    userAgent?: string;
   },
   db: PrismaClient = defaultPrisma,
 ): Promise<{
-  entitlement: any;
-  version: ProductVersion;
+  grant: DownloadGrant;
+  event: DownloadEvent;
   file: ProductVersionFile;
+  version: ProductVersion;
 }> {
-  const { userId, entitlementId, versionId, fileId } = params;
+  const { userId, entitlementId, versionId, fileId, ipAddress, userAgent } = params;
+  const ttl = resolveDownloadTtl(params.ttlSeconds);
 
-  // 1. Fetch entitlement
-  const entitlement = await db.entitlement.findUnique({
-    where: { id: entitlementId },
+  // Hash IP and User-Agent for privacy
+  const ipHash = ipAddress
+    ? crypto.createHash("sha256").update(ipAddress).digest("hex")
+    : null;
+  const userAgentHash = userAgent
+    ? crypto.createHash("sha256").update(userAgent).digest("hex")
+    : null;
+
+  return db.$transaction(async (tx) => {
+    // 1. Lock Entitlement row FOR UPDATE
+    const eRows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        user_id: string;
+        product_id: string;
+        status: string;
+        fulfillment_type: string;
+        expires_at: Date | null;
+        updates_until: Date | null;
+        revoked_at: Date | null;
+      }>
+    >`
+      SELECT id, user_id, product_id, status, fulfillment_type, expires_at, updates_until, revoked_at
+      FROM entitlements
+      WHERE id = ${entitlementId}
+      FOR UPDATE
+    `;
+
+    if (!eRows || eRows.length === 0) {
+      throw new DownloadVersionEngineError("Entitlement not found", 404);
+    }
+    const entitlement = eRows[0];
+
+    // Cross-user isolation
+    if (entitlement.user_id !== userId) {
+      throw new DownloadVersionEngineError("Access forbidden to entitlement", 403);
+    }
+
+    // Status checks
+    if (entitlement.status === "REVOKED") {
+      throw new DownloadVersionEngineError(
+        "Entitlement has been revoked",
+        409,
+        "ENTITLEMENT_REVOKED",
+      );
+    }
+    if (entitlement.status === "EXPIRED") {
+      throw new DownloadVersionEngineError(
+        "Entitlement has expired",
+        409,
+        "ENTITLEMENT_EXPIRED",
+      );
+    }
+    if (entitlement.status !== "ACTIVE") {
+      throw new DownloadVersionEngineError("Entitlement is not active", 409);
+    }
+
+    // Clock-based expiry check
+    if (entitlement.expires_at && entitlement.expires_at.getTime() <= Date.now()) {
+      throw new DownloadVersionEngineError(
+        "Entitlement has expired",
+        409,
+        "ENTITLEMENT_EXPIRED",
+      );
+    }
+
+    // Fulfillment type check
+    if (
+      entitlement.fulfillment_type !== "DIGITAL_DOWNLOAD" &&
+      entitlement.fulfillment_type !== "INTERNAL_LICENSE"
+    ) {
+      throw new DownloadVersionEngineError(
+        `Fulfillment strategy '${entitlement.fulfillment_type}' does not grant digital file downloads`,
+        400,
+      );
+    }
+
+    // 2. Fetch version
+    const version = await tx.productVersion.findUnique({
+      where: { id: versionId },
+    });
+    if (!version) {
+      throw new DownloadVersionEngineError("Product version not found", 404);
+    }
+
+    // Verify version belongs to entitlement's product
+    if (version.productId !== entitlement.product_id) {
+      throw new DownloadVersionEngineError(
+        "Requested version does not belong to the entitled product",
+        400,
+      );
+    }
+
+    // Invariant: Customer can NEVER download DRAFT versions
+    if (version.status !== "PUBLISHED") {
+      throw new DownloadVersionEngineError(
+        "Version is not published",
+        403,
+        "VERSION_NOT_PUBLISHED",
+      );
+    }
+
+    // 3. Fetch file
+    const file = await tx.productVersionFile.findUnique({
+      where: { id: fileId },
+    });
+    if (!file) {
+      throw new DownloadVersionEngineError("File not found", 404);
+    }
+
+    if (file.productVersionId !== version.id) {
+      throw new DownloadVersionEngineError(
+        "File does not belong to the requested version",
+        400,
+      );
+    }
+
+    if (!file.verifiedAt) {
+      throw new DownloadVersionEngineError("File is unverified", 400);
+    }
+
+    // 4. Check update window eligibility
+    const eligible = checkVersionEligibility(
+      version.releasedAt,
+      entitlement.updates_until,
+    );
+    if (!eligible) {
+      throw new DownloadVersionEngineError(
+        "Version released after your update entitlement cutoff date",
+        403,
+        "UPDATE_WINDOW_EXPIRED",
+      );
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttl * 1000);
+
+    // 5. Create authoritative DownloadGrant
+    const grant = await tx.downloadGrant.create({
+      data: {
+        userId,
+        entitlementId,
+        productVersionId: version.id,
+        fileId: file.id,
+        channel: "CUSTOMER_PORTAL",
+        issuedAt: now,
+        expiresAt,
+      },
+    });
+
+    // 6. Create DownloadEvent
+    const event = await tx.downloadEvent.create({
+      data: {
+        userId,
+        entitlementId,
+        productId: version.productId,
+        productVersionId: version.id,
+        fileId: file.id,
+        channel: "CUSTOMER_PORTAL",
+        ipHash,
+        userAgentHash,
+        createdAt: now,
+      },
+    });
+
+    // 7. Record DOWNLOAD_URL_ISSUED audit log
+    await tx.auditLog.create({
+      data: {
+        action: "DOWNLOAD_URL_ISSUED",
+        entity: "DownloadGrant",
+        entityId: grant.id,
+        actorId: userId,
+        details: {
+          grantId: grant.id,
+          eventId: event.id,
+          entitlementId,
+          productId: version.productId,
+          productVersionId: version.id,
+          fileId: file.id,
+          channel: "CUSTOMER_PORTAL",
+          expiresAt: expiresAt.toISOString(),
+        },
+      },
+    });
+
+    return { grant, event, file, version };
   });
-
-  if (!entitlement) {
-    throw new DownloadVersionEngineError("Entitlement not found", 404);
-  }
-
-  // Cross-user isolation
-  if (entitlement.userId !== userId) {
-    throw new DownloadVersionEngineError("Access forbidden to entitlement", 403);
-  }
-
-  // Status checks
-  if (entitlement.status === "REVOKED") {
-    throw new DownloadVersionEngineError(
-      "Entitlement has been revoked",
-      409,
-      "ENTITLEMENT_REVOKED",
-    );
-  }
-  if (entitlement.status === "EXPIRED") {
-    throw new DownloadVersionEngineError(
-      "Entitlement has expired",
-      409,
-      "ENTITLEMENT_EXPIRED",
-    );
-  }
-  if (entitlement.status !== "ACTIVE") {
-    throw new DownloadVersionEngineError("Entitlement is not active", 409);
-  }
-
-  // Clock-based expiry check (fail closed immediately even before worker catches up)
-  if (entitlement.expiresAt && entitlement.expiresAt.getTime() <= Date.now()) {
-    throw new DownloadVersionEngineError(
-      "Entitlement has expired",
-      409,
-      "ENTITLEMENT_EXPIRED",
-    );
-  }
-
-  // Fulfillment type check
-  if (
-    entitlement.fulfillmentType !== "DIGITAL_DOWNLOAD" &&
-    entitlement.fulfillmentType !== "INTERNAL_LICENSE"
-  ) {
-    throw new DownloadVersionEngineError(
-      `Fulfillment strategy '${entitlement.fulfillmentType}' does not grant digital file downloads`,
-      400,
-    );
-  }
-
-  // 2. Fetch version
-  const version = await db.productVersion.findUnique({
-    where: { id: versionId },
-  });
-  if (!version) {
-    throw new DownloadVersionEngineError("Product version not found", 404);
-  }
-
-  // Verify version belongs to entitlement's product
-  if (version.productId !== entitlement.productId) {
-    throw new DownloadVersionEngineError(
-      "Requested version does not belong to the entitled product",
-      400,
-    );
-  }
-
-  // Invariant: Customer can NEVER download DRAFT versions
-  if (version.status !== "PUBLISHED") {
-    throw new DownloadVersionEngineError(
-      "Version is not published",
-      403,
-      "VERSION_NOT_PUBLISHED",
-    );
-  }
-
-  // 3. Fetch file
-  const file = await db.productVersionFile.findUnique({
-    where: { id: fileId },
-  });
-  if (!file) {
-    throw new DownloadVersionEngineError("File not found", 404);
-  }
-
-  if (file.productVersionId !== version.id) {
-    throw new DownloadVersionEngineError(
-      "File does not belong to the requested version",
-      400,
-    );
-  }
-
-  if (!file.verifiedAt) {
-    throw new DownloadVersionEngineError("File is unverified", 400);
-  }
-
-  // 4. Check update window eligibility
-  const eligible = checkVersionEligibility(
-    version.releasedAt,
-    entitlement.updatesUntil,
-  );
-  if (!eligible) {
-    throw new DownloadVersionEngineError(
-      "Version released after your update entitlement cutoff date",
-      403,
-      "UPDATE_WINDOW_EXPIRED",
-    );
-  }
-
-  return { entitlement, version, file };
 }
 
 /**
- * Authorize Licensed Software / WordPress Updater Check.
- * Generic fail-closed response without leaking license key existence.
+ * Issue Updater Download Grant.
+ * Shared authorization authority with consistent DB lock order:
+ * InternalLicense FOR UPDATE -> Entitlement FOR UPDATE -> LicenseActivation.
+ * Always selects the deterministic verified primary file (isPrimary = true).
  */
-export async function authorizeLicenseUpdater(
+export async function issueUpdaterDownloadGrant(
   params: {
     licenseKey: string;
     domain: string;
     productId: string;
     currentVersion: string;
+    ttlSeconds?: number;
+    ipAddress?: string;
+    userAgent?: string;
   },
   db: PrismaClient = defaultPrisma,
 ): Promise<{
   valid: boolean;
   updateAvailable: boolean;
-  eligibleVersion?: ProductVersion;
+  grant?: DownloadGrant;
+  event?: DownloadEvent;
   file?: ProductVersionFile;
+  version?: ProductVersion;
   entitlementId?: string;
-  userId?: string;
+  normalizedDomain?: string;
 }> {
   const genericInvalid = { valid: false, updateAvailable: false };
+  const ttl = resolveDownloadTtl(params.ttlSeconds);
 
   // 1. Strict syntax validations
   let normalizedKey: string;
@@ -586,93 +762,258 @@ export async function authorizeLicenseUpdater(
     return genericInvalid;
   }
   const cleanCurrentVer = cleanSemver(params.currentVersion);
-
-  // 2. Lookup InternalLicense by keyHash
   const hashedKey = hashLicenseKey(normalizedKey);
-  const license = await db.internalLicense.findUnique({
-    where: { keyHash: hashedKey },
-  });
 
-  if (!license || license.status !== "ACTIVE") {
-    return genericInvalid;
-  }
+  const ipHash = params.ipAddress
+    ? crypto.createHash("sha256").update(params.ipAddress).digest("hex")
+    : null;
+  const userAgentHash = params.userAgent
+    ? crypto.createHash("sha256").update(params.userAgent).digest("hex")
+    : null;
 
-  // 3. Lookup active domain activation
-  const activation = await db.licenseActivation.findFirst({
-    where: {
-      licenseId: license.id,
-      normalizedDomain: normalizedDom,
-      status: "ACTIVE",
-    },
-  });
-  if (!activation) {
-    return genericInvalid;
-  }
+  return db.$transaction(async (tx) => {
+    // Lock InternalLicense row FOR UPDATE
+    const licRows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        entitlement_id: string;
+        user_id: string;
+        product_id: string;
+        status: string;
+      }>
+    >`
+      SELECT id, entitlement_id, user_id, product_id, status
+      FROM internal_licenses
+      WHERE key_hash = ${hashedKey}
+      FOR UPDATE
+    `;
 
-  // 4. Lookup Entitlement
-  const entitlement = await db.entitlement.findUnique({
-    where: { id: license.entitlementId },
-  });
-  if (!entitlement || entitlement.status !== "ACTIVE") {
-    return genericInvalid;
-  }
+    if (!licRows || licRows.length === 0) {
+      return genericInvalid;
+    }
+    const license = licRows[0];
+    if (license.status !== "ACTIVE") {
+      return genericInvalid;
+    }
 
-  // Expiration checks
-  if (entitlement.expiresAt && entitlement.expiresAt.getTime() <= Date.now()) {
-    return genericInvalid;
-  }
+    // Lock Entitlement row FOR UPDATE
+    const eRows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        user_id: string;
+        product_id: string;
+        status: string;
+        fulfillment_type: string;
+        expires_at: Date | null;
+        updates_until: Date | null;
+        revoked_at: Date | null;
+      }>
+    >`
+      SELECT id, user_id, product_id, status, fulfillment_type, expires_at, updates_until, revoked_at
+      FROM entitlements
+      WHERE id = ${license.entitlement_id}
+      FOR UPDATE
+    `;
 
-  // Fulfillment type check
-  if (entitlement.fulfillmentType !== "INTERNAL_LICENSE") {
-    return genericInvalid;
-  }
+    if (!eRows || eRows.length === 0) {
+      return genericInvalid;
+    }
+    const entitlement = eRows[0];
+    if (entitlement.status !== "ACTIVE") {
+      return genericInvalid;
+    }
 
-  // Product match check
-  if (entitlement.productId !== params.productId) {
-    return genericInvalid;
-  }
+    if (entitlement.expires_at && entitlement.expires_at.getTime() <= Date.now()) {
+      return genericInvalid;
+    }
+    if (entitlement.fulfillment_type !== "INTERNAL_LICENSE") {
+      return genericInvalid;
+    }
+    if (entitlement.product_id !== params.productId) {
+      return genericInvalid;
+    }
 
-  // Key is valid and active!
-  // 5. Query all published versions for productId with verified files
-  const publishedVersions = await db.productVersion.findMany({
-    where: {
-      productId: params.productId,
-      status: "PUBLISHED",
-    },
-    include: {
-      files: {
-        where: { verifiedAt: { not: null } },
+    // Check active activation on normalizedDomain
+    const activation = await tx.licenseActivation.findFirst({
+      where: {
+        licenseId: license.id,
+        normalizedDomain: normalizedDom,
+        status: "ACTIVE",
       },
-    },
+    });
+    if (!activation) {
+      return genericInvalid;
+    }
+
+    // Query published versions with verified files
+    const publishedVersions = await tx.productVersion.findMany({
+      where: {
+        productId: params.productId,
+        status: "PUBLISHED",
+      },
+      include: {
+        files: {
+          where: { verifiedAt: { not: null } },
+        },
+      },
+    });
+
+    // Filter by update window
+    const eligibleVersions = publishedVersions.filter((v) => {
+      if (v.files.length === 0) return false;
+      return checkVersionEligibility(v.releasedAt, entitlement.updates_until);
+    });
+
+    if (eligibleVersions.length === 0) {
+      return { valid: true, updateAvailable: false };
+    }
+
+    const sorted = sortSemverDescending(eligibleVersions);
+    const latestEligible = sorted[0];
+
+    if (!isSemverGreater(latestEligible.version, cleanCurrentVer)) {
+      return { valid: true, updateAvailable: false };
+    }
+
+    // Deterministic primary package selection
+    const primaryFile =
+      latestEligible.files.find((f) => f.isPrimary) || latestEligible.files[0];
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + ttl * 1000);
+
+    // Create DownloadGrant
+    const grant = await tx.downloadGrant.create({
+      data: {
+        userId: entitlement.user_id,
+        entitlementId: entitlement.id,
+        productVersionId: latestEligible.id,
+        fileId: primaryFile.id,
+        channel: "LICENSE_UPDATER",
+        licenseId: license.id,
+        normalizedDomain: normalizedDom,
+        issuedAt: now,
+        expiresAt,
+      },
+    });
+
+    // Create DownloadEvent
+    const event = await tx.downloadEvent.create({
+      data: {
+        userId: entitlement.user_id,
+        entitlementId: entitlement.id,
+        productId: params.productId,
+        productVersionId: latestEligible.id,
+        fileId: primaryFile.id,
+        channel: "LICENSE_UPDATER",
+        ipHash,
+        userAgentHash,
+        createdAt: now,
+      },
+    });
+
+    // Audit log
+    await tx.auditLog.create({
+      data: {
+        action: "DOWNLOAD_URL_ISSUED",
+        entity: "DownloadGrant",
+        entityId: grant.id,
+        actorId: entitlement.user_id,
+        details: {
+          grantId: grant.id,
+          eventId: event.id,
+          entitlementId: entitlement.id,
+          licenseId: license.id,
+          productId: params.productId,
+          productVersionId: latestEligible.id,
+          fileId: primaryFile.id,
+          channel: "LICENSE_UPDATER",
+          expiresAt: expiresAt.toISOString(),
+        },
+      },
+    });
+
+    return {
+      valid: true,
+      updateAvailable: true,
+      grant,
+      event,
+      file: primaryFile,
+      version: latestEligible,
+      entitlementId: entitlement.id,
+      normalizedDomain: normalizedDom,
+    };
   });
+}
 
-  // Filter versions with at least 1 verified file and within update window
-  const eligibleVersions = publishedVersions.filter((v) => {
-    if (v.files.length === 0) return false;
-    return checkVersionEligibility(v.releasedAt, entitlement.updatesUntil);
+/**
+ * Authorize Customer Download Request (wrapper calling issueCustomerDownloadGrant).
+ */
+export async function authorizeCustomerDownload(
+  params: {
+    userId: string;
+    entitlementId: string;
+    versionId: string;
+    fileId: string;
+    ttlSeconds?: number;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+  db: PrismaClient = defaultPrisma,
+): Promise<{
+  entitlement: any;
+  version: ProductVersion;
+  file: ProductVersionFile;
+  grant: DownloadGrant;
+  event: DownloadEvent;
+}> {
+  const result = await issueCustomerDownloadGrant(params, db);
+  const entitlement = await db.entitlement.findUnique({
+    where: { id: params.entitlementId },
   });
-
-  if (eligibleVersions.length === 0) {
-    return { valid: true, updateAvailable: false };
-  }
-
-  // Sort eligible versions descending by semver
-  const sorted = sortSemverDescending(eligibleVersions);
-  const latestEligible = sorted[0];
-
-  // Compare with customer's currentVersion
-  if (!isSemverGreater(latestEligible.version, cleanCurrentVer)) {
-    return { valid: true, updateAvailable: false };
-  }
-
-  // Update is available!
   return {
-    valid: true,
-    updateAvailable: true,
-    eligibleVersion: latestEligible,
-    file: latestEligible.files[0],
-    entitlementId: entitlement.id,
-    userId: entitlement.userId,
+    entitlement,
+    version: result.version,
+    file: result.file,
+    grant: result.grant,
+    event: result.event,
+  };
+}
+
+/**
+ * Authorize Licensed Software / WordPress Updater Check (wrapper calling issueUpdaterDownloadGrant).
+ */
+export async function authorizeLicenseUpdater(
+  params: {
+    licenseKey: string;
+    domain: string;
+    productId: string;
+    currentVersion: string;
+    ttlSeconds?: number;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+  db: PrismaClient = defaultPrisma,
+): Promise<{
+  valid: boolean;
+  updateAvailable: boolean;
+  eligibleVersion?: ProductVersion;
+  file?: ProductVersionFile;
+  grant?: DownloadGrant;
+  event?: DownloadEvent;
+  entitlementId?: string;
+  normalizedDomain?: string;
+}> {
+  const result = await issueUpdaterDownloadGrant(params, db);
+  return {
+    valid: result.valid,
+    updateAvailable: result.updateAvailable,
+    eligibleVersion: result.version,
+    file: result.file,
+    grant: result.grant,
+    event: result.event,
+    entitlementId: result.entitlementId,
+    normalizedDomain: result.normalizedDomain,
   };
 }
 
@@ -703,7 +1044,6 @@ export async function recordDownloadEvent(
     userAgent,
   } = params;
 
-  // Hash IP and User-Agent for privacy
   const ipHash = ipAddress
     ? crypto.createHash("sha256").update(ipAddress).digest("hex")
     : null;

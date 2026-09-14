@@ -1,7 +1,6 @@
 import {
   PrismaClient,
   LicenseStatus,
-  LicenseActivationStatus,
   EntitlementStatus,
   FulfillmentType,
 } from "@prisma/client";

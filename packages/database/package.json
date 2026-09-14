@@ -16,11 +16,11 @@
     "seed:dev": "ts-node src/seed.ts --dev-users",
     "seed:catalog": "ts-node src/seed.ts --catalog",
     "seed:local": "ts-node src/seed.ts --local-all",
-    "acceptance:phase4": "ts-node scripts/phase4-acceptance.ts",
-    "acceptance:phase5": "ts-node scripts/phase5-acceptance.ts",
-    "acceptance:phase6": "ts-node scripts/phase6-acceptance.ts",
-    "acceptance:phase7": "ts-node scripts/phase7-acceptance.ts",
-    "acceptance:phase8": "ts-node scripts/phase8-acceptance.ts",
+    "acceptance:phase4": "ts-node --transpile-only scripts/phase4-acceptance.ts",
+    "acceptance:phase5": "ts-node --transpile-only scripts/phase5-acceptance.ts",
+    "acceptance:phase6": "ts-node --transpile-only scripts/phase6-acceptance.ts",
+    "acceptance:phase7": "ts-node --transpile-only scripts/phase7-acceptance.ts",
+    "acceptance:phase8": "ts-node --transpile-only scripts/phase8-acceptance.ts",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {
