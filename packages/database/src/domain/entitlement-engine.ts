@@ -141,7 +141,18 @@ export async function issueEntitlementsForOrder(
       // 4. Strict snapshot version switch: only version 1 is supported currently
       switch (item.snapshotVersion) {
         case 1: {
-          if (item.licensePlanIdAtPurchase) {
+          if (item.licensePlanIdAtPurchase !== null && item.licensePlanIdAtPurchase !== undefined) {
+            // Requirement 1 & 3: Mandatory maxActivations positive integer for license plans
+            if (
+              typeof item.maxActivations !== "number" ||
+              !Number.isInteger(item.maxActivations) ||
+              item.maxActivations <= 0
+            ) {
+              throw new Error(
+                `Malformed entitlement policy snapshot for OrderItem '${item.id}': maxActivations must be a positive integer`,
+              );
+            }
+
             const hasValidDuration =
               item.isLifetime === true ||
               (typeof item.durationDays === "number" &&
@@ -181,18 +192,6 @@ export async function issueEntitlementsForOrder(
               }
             }
 
-            if (item.maxActivations !== null && item.maxActivations !== undefined) {
-              if (
-                typeof item.maxActivations !== "number" ||
-                !Number.isInteger(item.maxActivations) ||
-                item.maxActivations <= 0
-              ) {
-                throw new Error(
-                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': maxActivations must be a positive integer`,
-                );
-              }
-            }
-
             if (item.updatesDays !== null && item.updatesDays !== undefined) {
               if (
                 typeof item.updatesDays !== "number" ||
@@ -215,6 +214,29 @@ export async function issueEntitlementsForOrder(
                   `Malformed entitlement policy snapshot for OrderItem '${item.id}': supportDays must be a positive integer or null`,
                 );
               }
+            }
+          } else {
+            // Requirement 2: Strict No-Plan Snapshot Shape
+            // Intentional no-license-plan perpetual asset
+            // Allowed V1 shape:
+            // isLifetime === false
+            // durationDays === null
+            // durationMonths === null
+            // maxActivations === null
+            // updatesDays === null
+            // supportDays === null
+            const hasPollutedRights =
+              item.isLifetime === true ||
+              (item.durationDays !== null && item.durationDays !== undefined) ||
+              (item.durationMonths !== null && item.durationMonths !== undefined) ||
+              (item.maxActivations !== null && item.maxActivations !== undefined) ||
+              (item.updatesDays !== null && item.updatesDays !== undefined) ||
+              (item.supportDays !== null && item.supportDays !== undefined);
+
+            if (hasPollutedRights) {
+              throw new Error(
+                `Malformed entitlement policy snapshot for OrderItem '${item.id}': no-plan snapshot must not contain license rights (isLifetime, duration, activations, updates, support)`,
+              );
             }
           }
           break;

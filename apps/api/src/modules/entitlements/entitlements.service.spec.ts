@@ -119,12 +119,106 @@ describe("EntitlementsService", () => {
             isLifetime: false,
             durationDays: null,
             durationMonths: null,
+            maxActivations: 1,
           },
         ],
       });
 
       await expect(
         service.issueEntitlementsForOrder("order-bad"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if license plan has null maxActivations", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-null-acts",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-null-acts",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Null Activations",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: true,
+            maxActivations: null,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-null-acts"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if license plan has 0 maxActivations", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-zero-acts",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-zero-acts",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Zero Activations",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: true,
+            maxActivations: 0,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-zero-acts"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if license plan has float maxActivations", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-float-acts",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-float-acts",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Float Activations",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: true,
+            maxActivations: 1.5,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-float-acts"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if no-plan snapshot contains polluted license rights", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-polluted",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-polluted",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Polluted No-Plan",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: null,
+            isLifetime: false,
+            maxActivations: 5,
+            updatesDays: 365,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-polluted"),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -163,6 +257,7 @@ describe("EntitlementsService", () => {
             snapshotVersion: 1,
             licensePlanIdAtPurchase: "plan-1",
             isLifetime: true,
+            maxActivations: 1,
             updatesDays: -5,
           },
         ],
@@ -194,7 +289,7 @@ describe("EntitlementsService", () => {
             isLifetime: true,
             durationDays: null,
             durationMonths: null,
-            maxActivations: null,
+            maxActivations: 1,
             licensePlanIdAtPurchase: "plan-life-1",
           },
           {
@@ -283,6 +378,8 @@ describe("EntitlementsService", () => {
             productName: "Theme",
             snapshotVersion: 1,
             isLifetime: true,
+            maxActivations: 1,
+            licensePlanIdAtPurchase: "plan-rb",
             quantity: 1,
           },
         ],
@@ -317,9 +414,12 @@ describe("EntitlementsService", () => {
             fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
             quantity: 1,
             snapshotVersion: 1,
-            isLifetime: true,
+            isLifetime: false,
             durationDays: null,
             durationMonths: null,
+            maxActivations: null,
+            updatesDays: null,
+            supportDays: null,
             licensePlanIdAtPurchase: null,
           },
         ],
@@ -342,6 +442,61 @@ describe("EntitlementsService", () => {
       expect(results[0]).toEqual(existingEntitlement);
       expect(prisma.$queryRaw).not.toHaveBeenCalled();
       expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it("issues perpetual entitlement for clean no-plan asset", async () => {
+      const mockOrder = {
+        id: "order-clean-noplan",
+        orderNumber: "ORD-CLEAN-NOPLAN",
+        userId: "user-1",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-clean-noplan",
+            productId: "prod-clean",
+            variantId: "var-clean",
+            productName: "Asset Only",
+            variantName: "Standard",
+            sku: "SKU-CLEAN",
+            productType: ProductType.DOWNLOADABLE_ASSET,
+            fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+            quantity: 1,
+            snapshotVersion: 1,
+            isLifetime: false,
+            durationDays: null,
+            durationMonths: null,
+            maxActivations: null,
+            updatesDays: null,
+            supportDays: null,
+            licensePlanIdAtPurchase: null,
+          },
+        ],
+      };
+
+      const newEntitlement = {
+        id: "ent-clean-noplan",
+        orderItemId: "item-clean-noplan",
+        status: EntitlementStatus.ACTIVE,
+        expiresAt: null,
+        maxActivations: null,
+        updatesUntil: null,
+        supportUntil: null,
+      };
+
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+      (prisma.entitlement.findUnique as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(newEntitlement);
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "ent-clean-noplan" }]);
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: "audit-clean" });
+
+      const results = await service.issueEntitlementsForOrder("order-clean-noplan");
+
+      expect(results).toHaveLength(1);
+      expect(results[0].expiresAt).toBeNull();
+      expect(results[0].maxActivations).toBeNull();
+      expect(results[0].updatesUntil).toBeNull();
+      expect(results[0].supportUntil).toBeNull();
     });
   });
 

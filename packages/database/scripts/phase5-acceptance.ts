@@ -94,7 +94,7 @@ function startWorker(workerId: string, pollIntervalMs = "500"): ChildProcess {
 
 async function runAcceptance() {
   console.log("==================================================");
-  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 4 — 30 GATES)");
+  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 5 — 33 GATES)");
   console.log("==================================================\n");
 
   const customerToken = "dev-customer-token";
@@ -530,6 +530,8 @@ async function runAcceptance() {
         lineTotalAmount: 1500,
         currency: Currency.USD,
         isLifetime: true,
+        licensePlanIdAtPurchase: lifetimeVariant.licensePlanId,
+        maxActivations: 1,
         snapshotVersion: 1,
       },
     });
@@ -1089,6 +1091,7 @@ async function runAcceptance() {
         isLifetime: false,
         durationDays: null,
         durationMonths: null,
+        maxActivations: 1,
       },
     });
 
@@ -1229,6 +1232,8 @@ async function runAcceptance() {
         lineTotalAmount: 1000,
         currency: Currency.USD,
         isLifetime: true,
+        licensePlanIdAtPurchase: lifetimeVariant.licensePlanId,
+        maxActivations: 1,
         snapshotVersion: 1,
       },
     });
@@ -1611,8 +1616,239 @@ async function runAcceptance() {
     }
     console.log("✓ Gate 30 passed: Customer & Admin APIs return authoritative typed rights (maxActivations, updatesUntil, supportUntil)\n");
 
+    // ----------------------------------------------------
+    // Gate 31: Licensed OrderItem with missing maxActivations Fails Closed
+    // ----------------------------------------------------
+    console.log("[Gate 31] Verifying licensed OrderItem with missing maxActivations fails closed...");
+    const g31Order = await prisma.order.create({
+      data: {
+        id: `ord-gate31-${Date.now()}`,
+        orderNumber: `ORD-G31-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    const g31Item = await prisma.orderItem.create({
+      data: {
+        id: `item-gate31-${Date.now()}`,
+        orderId: g31Order.id,
+        productId: activeProduct.id,
+        variantId: driftVariant.id,
+        productName: "Missing MaxActivations Theme",
+        variantName: "Standard",
+        sku: `SKU-G31-${Date.now()}`,
+        productType: ProductType.LICENSED_SOFTWARE,
+        fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        isLifetime: true,
+        licensePlanIdAtPurchase: "plan-g31-licensed",
+        maxActivations: null, // REQUIRED FOR LICENSE PLANS -> MUST FAIL CLOSED
+        snapshotVersion: 1,
+      },
+    });
+
+    const g31Outbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: g31Order.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: g31Order.id },
+        status: "PENDING",
+      },
+    });
+
+    const g31Start = Date.now();
+    let g31Processed = null;
+    while (Date.now() - g31Start < 10000) {
+      await sleep(300);
+      g31Processed = await prisma.outboxEvent.findUnique({ where: { id: g31Outbox.id } });
+      if (g31Processed && g31Processed.retryCount >= 1) break;
+    }
+    if (!g31Processed || g31Processed.status === "PROCESSED") {
+      throw new Error(`Expected licensed missing maxActivations event to fail, but got status=${g31Processed?.status}`);
+    }
+    if (!g31Processed.error?.includes("maxActivations must be a positive integer")) {
+      throw new Error(`Unexpected error message for missing maxActivations: ${g31Processed.error}`);
+    }
+    const g31Ents = await prisma.entitlement.findMany({ where: { orderItemId: g31Item.id } });
+    if (g31Ents.length !== 0) {
+      throw new Error(`Expected 0 entitlements for missing maxActivations, found ${g31Ents.length}`);
+    }
+    await prisma.outboxEvent.update({
+      where: { id: g31Outbox.id },
+      data: { status: "FAILED" },
+    });
+    console.log("✓ Gate 31 passed: Licensed OrderItem with missing maxActivations failed closed with explicit error\n");
+
+    // ----------------------------------------------------
+    // Gate 32: No-Plan Snapshot with Polluted License Rights Fails Closed
+    // ----------------------------------------------------
+    console.log("[Gate 32] Verifying no-plan snapshot with polluted license rights fails closed...");
+    const g32Order = await prisma.order.create({
+      data: {
+        id: `ord-gate32-${Date.now()}`,
+        orderNumber: `ORD-G32-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    const g32Item = await prisma.orderItem.create({
+      data: {
+        id: `item-gate32-${Date.now()}`,
+        orderId: g32Order.id,
+        productId: activeProduct.id,
+        variantId: driftVariant.id,
+        productName: "Polluted No-Plan Theme",
+        variantName: "Standard",
+        sku: `SKU-G32-${Date.now()}`,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+        fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        licensePlanIdAtPurchase: null, // No plan
+        isLifetime: false,
+        maxActivations: 999, // Polluted license right
+        updatesDays: 365,   // Polluted license right
+        snapshotVersion: 1,
+      },
+    });
+
+    const g32Outbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: g32Order.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: g32Order.id },
+        status: "PENDING",
+      },
+    });
+
+    const g32Start = Date.now();
+    let g32Processed = null;
+    while (Date.now() - g32Start < 10000) {
+      await sleep(300);
+      g32Processed = await prisma.outboxEvent.findUnique({ where: { id: g32Outbox.id } });
+      if (g32Processed && g32Processed.retryCount >= 1) break;
+    }
+    if (!g32Processed || g32Processed.status === "PROCESSED") {
+      throw new Error(`Expected polluted no-plan event to fail, but got status=${g32Processed?.status}`);
+    }
+    if (!g32Processed.error?.includes("no-plan snapshot must not contain license rights")) {
+      throw new Error(`Unexpected error message for polluted no-plan: ${g32Processed.error}`);
+    }
+    const g32Ents = await prisma.entitlement.findMany({ where: { orderItemId: g32Item.id } });
+    if (g32Ents.length !== 0) {
+      throw new Error(`Expected 0 entitlements for polluted no-plan, found ${g32Ents.length}`);
+    }
+    await prisma.outboxEvent.update({
+      where: { id: g32Outbox.id },
+      data: { status: "FAILED" },
+    });
+    console.log("✓ Gate 32 passed: No-plan snapshot with polluted license rights failed closed\n");
+
+    // ----------------------------------------------------
+    // Gate 33: Clean No-Plan Snapshot Creates Perpetual Entitlement with Null Rights
+    // ----------------------------------------------------
+    console.log("[Gate 33] Verifying clean no-plan snapshot creates perpetual entitlement with null rights...");
+    const g33Order = await prisma.order.create({
+      data: {
+        id: `ord-gate33-${Date.now()}`,
+        orderNumber: `ORD-G33-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    const g33Item = await prisma.orderItem.create({
+      data: {
+        id: `item-gate33-${Date.now()}`,
+        orderId: g33Order.id,
+        productId: activeProduct.id,
+        variantId: driftVariant.id,
+        productName: "Clean No-Plan Asset",
+        variantName: "Perpetual Asset Only",
+        sku: `SKU-G33-${Date.now()}`,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+        fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        licensePlanIdAtPurchase: null,
+        isLifetime: false,
+        durationDays: null,
+        durationMonths: null,
+        maxActivations: null,
+        updatesDays: null,
+        supportDays: null,
+        snapshotVersion: 1,
+      },
+    });
+
+    const g33Outbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: g33Order.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: g33Order.id },
+        status: "PENDING",
+      },
+    });
+
+    const g33Start = Date.now();
+    let g33Processed = null;
+    while (Date.now() - g33Start < 10000) {
+      await sleep(300);
+      g33Processed = await prisma.outboxEvent.findUnique({ where: { id: g33Outbox.id } });
+      if (g33Processed && g33Processed.status === "PROCESSED") break;
+    }
+    if (!g33Processed || g33Processed.status !== "PROCESSED") {
+      throw new Error(`Expected clean no-plan outbox event to be PROCESSED, got status=${g33Processed?.status}, error=${g33Processed?.error}`);
+    }
+
+    const g33Ents = await prisma.entitlement.findMany({ where: { orderItemId: g33Item.id } });
+    if (g33Ents.length !== 1) {
+      throw new Error(`Expected 1 entitlement for clean no-plan asset, found ${g33Ents.length}`);
+    }
+    const g33Ent = g33Ents[0];
+    if (g33Ent.status !== EntitlementStatus.ACTIVE) {
+      throw new Error(`Expected status ACTIVE, got ${g33Ent.status}`);
+    }
+    if (g33Ent.expiresAt !== null) {
+      throw new Error(`Expected expiresAt null, got ${g33Ent.expiresAt}`);
+    }
+    if (g33Ent.maxActivations !== null) {
+      throw new Error(`Expected maxActivations null, got ${g33Ent.maxActivations}`);
+    }
+    if (g33Ent.updatesUntil !== null) {
+      throw new Error(`Expected updatesUntil null, got ${g33Ent.updatesUntil}`);
+    }
+    if (g33Ent.supportUntil !== null) {
+      throw new Error(`Expected supportUntil null, got ${g33Ent.supportUntil}`);
+    }
+    console.log("✓ Gate 33 passed: Clean no-plan snapshot created ACTIVE perpetual entitlement with all null license rights\n");
+
     console.log("==================================================");
-    console.log("ALL 30 PHASE 5 GATES PASSED SUCCESSFULLY!");
+    console.log("ALL 33 PHASE 5 GATES PASSED SUCCESSFULLY!");
     console.log("==================================================");
   } finally {
     if (worker1Process) {
