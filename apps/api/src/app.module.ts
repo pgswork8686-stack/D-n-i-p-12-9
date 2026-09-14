@@ -13,6 +13,7 @@ import { OrdersModule } from "./modules/orders/orders.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
 import { EntitlementsModule } from "./modules/entitlements/entitlements.module";
 import { AllocationsModule } from "./modules/allocations/allocations.module";
+import { LicensesModule } from "./modules/licenses/licenses.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -32,6 +33,7 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     PaymentsModule,
     EntitlementsModule,
     AllocationsModule,
+    LicensesModule,
     HealthModule,
     StorageModule,
     AuthModule,
