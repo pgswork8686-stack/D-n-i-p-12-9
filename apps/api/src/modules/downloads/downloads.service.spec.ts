@@ -25,6 +25,7 @@ jest.mock("@nexus/database", () => {
     publishProductVersion: jest.fn(),
     issueCustomerDownloadGrant: jest.fn(),
     issueUpdaterDownloadGrant: jest.fn(),
+    recordDownloadIssuance: jest.fn(),
   };
 });
 
@@ -40,6 +41,7 @@ describe("DownloadsService", () => {
       verifyObjectIntegrity: jest.fn(),
       createSignedDownloadUrl: jest.fn(),
       uploadFile: jest.fn(),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
     };
 
     mockRateLimiter = {
@@ -51,6 +53,10 @@ describe("DownloadsService", () => {
     mockConfigService = {
       get: jest.fn().mockReturnValue("180"),
     };
+
+    (dbEngine.recordDownloadIssuance as jest.Mock).mockResolvedValue({
+      event: { id: "ev-recorded" },
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -98,70 +104,6 @@ describe("DownloadsService", () => {
     });
   });
 
-  describe("addFile", () => {
-    it("rejects client-specified storageKey", async () => {
-      await expect(
-        service.addFile(
-          "v-1",
-          { fileName: "theme.zip", storageKey: "custom/key.zip" } as any,
-          "admin-1",
-        ),
-      ).rejects.toThrow(HttpException);
-    });
-
-    it("verifies object in storage and registers verified file with backend-generated storageKey", async () => {
-      (dbEngine.getProductVersionById as jest.Mock).mockResolvedValue({
-        id: "v-1",
-        productId: "p-1",
-        status: "DRAFT",
-      });
-
-      mockStorageService.headObject.mockResolvedValue({
-        contentLength: 1024,
-        contentType: "application/zip",
-      });
-
-      mockStorageService.verifyObjectIntegrity.mockResolvedValue({
-        valid: true,
-        actualSha256: "abc123sha",
-        actualSizeBytes: 1024,
-      });
-
-      (dbEngine.addVersionFile as jest.Mock).mockResolvedValue({
-        id: "f-1",
-        productVersionId: "v-1",
-        storageKey: "products/p-1/versions/v-1/generated.zip",
-        fileName: "theme.zip",
-        sizeBytes: 1024,
-        sha256: "abc123sha",
-        isPrimary: false,
-      });
-
-      const res = await service.addFile(
-        "v-1",
-        { fileName: "theme.zip" },
-        "admin-1",
-      );
-
-      expect(res.id).toBe("f-1");
-      expect(mockStorageService.headObject).toHaveBeenCalled();
-      expect(mockStorageService.verifyObjectIntegrity).toHaveBeenCalled();
-    });
-
-    it("throws 400 if object is not in storage", async () => {
-      (dbEngine.getProductVersionById as jest.Mock).mockResolvedValue({
-        id: "v-1",
-        productId: "p-1",
-        status: "DRAFT",
-      });
-      mockStorageService.headObject.mockResolvedValue(null);
-
-      await expect(
-        service.addFile("v-1", { fileName: "theme.zip" }, "admin-1"),
-      ).rejects.toThrow(HttpException);
-    });
-  });
-
   describe("uploadFile", () => {
     it("authoritatively computes SHA and size, streams to storage, and registers file", async () => {
       (dbEngine.getProductVersionById as jest.Mock).mockResolvedValue({
@@ -191,6 +133,32 @@ describe("DownloadsService", () => {
       expect(mockStorageService.uploadFile).toHaveBeenCalled();
       expect(mockStorageService.verifyObjectIntegrity).toHaveBeenCalled();
       expect(dbEngine.addVersionFile).toHaveBeenCalled();
+      expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
+    });
+
+    it("cleans up orphaned storage object when DB file registration fails", async () => {
+      (dbEngine.getProductVersionById as jest.Mock).mockResolvedValue({
+        id: "v-1",
+        productId: "p-1",
+        status: "DRAFT",
+      });
+
+      mockStorageService.uploadFile.mockResolvedValue("products/p-1/versions/v-1/uuid-plugin.zip");
+      mockStorageService.verifyObjectIntegrity.mockResolvedValue({ valid: true });
+      (dbEngine.addVersionFile as jest.Mock).mockRejectedValue(new Error("DB insertion failed"));
+
+      const dummyFile = {
+        originalname: "plugin.zip",
+        buffer: Buffer.from("dummy-zip-content"),
+        mimetype: "application/zip",
+        size: 17,
+      };
+
+      await expect(
+        service.uploadFile("v-1", dummyFile, true, "admin-1"),
+      ).rejects.toThrow();
+
+      expect(mockStorageService.deleteObject).toHaveBeenCalled();
     });
   });
 
@@ -208,7 +176,7 @@ describe("DownloadsService", () => {
   });
 
   describe("requestDownload", () => {
-    it("checks preflight ownership, enforces rate limit, issues grant, and creates signed URL", async () => {
+    it("checks preflight ownership, enforces rate limit, issues grant, signs URL, and records issuance", async () => {
       (dbEngine.prisma.entitlement.findUnique as jest.Mock).mockResolvedValue({
         id: "ent-1",
         userId: "u-1",
@@ -216,7 +184,6 @@ describe("DownloadsService", () => {
 
       (dbEngine.issueCustomerDownloadGrant as jest.Mock).mockResolvedValue({
         grant: { id: "grant-1", issuedAt: new Date() },
-        event: { id: "ev-1" },
         version: { id: "v-1", productId: "p-1" },
         file: {
           id: "f-1",
@@ -263,8 +230,44 @@ describe("DownloadsService", () => {
       expect(mockStorageService.headObject).toHaveBeenCalledWith(
         "products/p-1/versions/v-1/file.zip",
       );
+      expect(dbEngine.recordDownloadIssuance).toHaveBeenCalledWith({
+        grantId: "grant-1",
+        ipAddress: "127.0.0.1",
+        userAgent: "Mozilla/5.0",
+      });
       expect(res.downloadUrl).toBe("https://r2.storage/signed-url");
       expect(res.expiresIn).toBe(180);
+    });
+
+    it("fails closed with 503 and records NO issuance if storage object is missing", async () => {
+      (dbEngine.prisma.entitlement.findUnique as jest.Mock).mockResolvedValue({
+        id: "ent-1",
+        userId: "u-1",
+      });
+
+      (dbEngine.issueCustomerDownloadGrant as jest.Mock).mockResolvedValue({
+        grant: { id: "grant-1", issuedAt: new Date() },
+        version: { id: "v-1", productId: "p-1" },
+        file: {
+          id: "f-1",
+          storageKey: "products/p-1/versions/v-1/missing.zip",
+          fileName: "missing.zip",
+          contentType: "application/zip",
+          sizeBytes: 2048,
+          sha256: "hash123",
+        },
+      });
+
+      mockStorageService.headObject.mockResolvedValue(null);
+
+      await expect(
+        service.requestDownload(
+          "u-1",
+          { entitlementId: "ent-1", versionId: "v-1", fileId: "f-1" },
+        ),
+      ).rejects.toThrow(HttpException);
+
+      expect(dbEngine.recordDownloadIssuance).not.toHaveBeenCalled();
     });
 
     it("rejects unauthorized entitlement preflight before touching rate limiter", async () => {
@@ -287,6 +290,7 @@ describe("DownloadsService", () => {
         id: "lic-1",
         entitlementId: "ent-1",
         status: "ACTIVE",
+        activations: [{ id: "act-1", normalizedDomain: "example.com", status: "ACTIVE" }],
       });
 
       (dbEngine.issueUpdaterDownloadGrant as jest.Mock).mockResolvedValue({
@@ -304,6 +308,7 @@ describe("DownloadsService", () => {
       expect(res.valid).toBe(true);
       expect(res.updateAvailable).toBe(false);
       expect(mockStorageService.createSignedDownloadUrl).not.toHaveBeenCalled();
+      expect(dbEngine.recordDownloadIssuance).not.toHaveBeenCalled();
     });
 
     it("returns update payload with signed URL when update is eligible and primary file selected", async () => {
@@ -311,6 +316,7 @@ describe("DownloadsService", () => {
         id: "lic-1",
         entitlementId: "ent-1",
         status: "ACTIVE",
+        activations: [{ id: "act-1", normalizedDomain: "example.com", status: "ACTIVE" }],
       });
 
       (dbEngine.issueUpdaterDownloadGrant as jest.Mock).mockResolvedValue({
@@ -331,7 +337,6 @@ describe("DownloadsService", () => {
           isPrimary: true,
         },
         grant: { id: "grant-u-1" },
-        event: { id: "ev-u-1" },
       });
 
       mockStorageService.headObject.mockResolvedValue({ contentLength: 4096 });
@@ -350,6 +355,31 @@ describe("DownloadsService", () => {
       expect(res.updateAvailable).toBe(true);
       expect(res.version).toBe("2.0.0");
       expect(res.downloadUrl).toBe("https://r2.storage/signed-update-url");
+      expect(dbEngine.recordDownloadIssuance).toHaveBeenCalledWith({
+        grantId: "grant-u-1",
+        ipAddress: undefined,
+        userAgent: undefined,
+      });
+    });
+
+    it("rejects unactivated domain preflight before touching rate limiter", async () => {
+      (dbEngine.prisma.internalLicense.findUnique as jest.Mock).mockResolvedValue({
+        id: "lic-1",
+        entitlementId: "ent-1",
+        status: "ACTIVE",
+        activations: [], // No active activation for this domain
+      });
+
+      const res = await service.checkUpdate({
+        licenseKey: "NXS-1111-2222-3333-4444-5555-6666-7777-8888",
+        domain: "unauthorized-domain.com",
+        productId: "p-1",
+        currentVersion: "1.0.0",
+      });
+
+      expect(res.valid).toBe(false);
+      expect(res.updateAvailable).toBe(false);
+      expect(mockRateLimiter.checkAndConsumeUpdaterRateLimit).not.toHaveBeenCalled();
     });
   });
 });

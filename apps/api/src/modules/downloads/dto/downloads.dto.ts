@@ -8,7 +8,6 @@ import {
 import { Transform } from "class-transformer";
 import {
   CreateProductVersionRequest,
-  AddVersionFileRequest,
   RequestDownloadRequest,
   CheckUpdateRequest,
 } from "@nexus/contracts";
@@ -23,19 +22,6 @@ export class CreateProductVersionDto implements CreateProductVersionRequest {
   releaseNotes?: string;
 }
 
-export class AddVersionFileDto implements AddVersionFileRequest {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsOptional()
-  contentType?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  isPrimary?: boolean;
-}
 
 export class UploadVersionFileDto {
   @IsBoolean()

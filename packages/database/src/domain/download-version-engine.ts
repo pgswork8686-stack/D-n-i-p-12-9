@@ -377,15 +377,18 @@ export async function addVersionFile(
 /**
  * Admin: Publish DRAFT version.
  * Atomic CAS transition: DRAFT -> PUBLISHED.
- * Reverifies EVERY file in storage prior to transition.
- * For INTERNAL_LICENSE products, enforces exactly ONE primary file.
+ * Mandatory storage reverification: EVERY DRAFT -> PUBLISHED transition MUST reverify private storage.
+ * Two-phase safe publication:
+ * Phase 1: verify file integrity in storage outside DB transaction (prevents prolonged row locks during storage I/O).
+ * Phase 2: row-locked DB transaction confirms snapshot integrity, performs atomic CAS status transition, and creates VERSION_PUBLISHED audit log.
+ * For INTERNAL_LICENSE products, strictly enforces exactly ONE verified primary file.
  * Exactly 1 VERSION_PUBLISHED audit log created under concurrent races.
  */
 export async function publishProductVersion(
   params: {
     productVersionId: string;
     actorId: string;
-    verifyFileIntegrity?: (
+    verifyFileIntegrity: (
       file: ProductVersionFile,
     ) => Promise<{ valid: boolean; reason?: string }>;
   },
@@ -393,8 +396,73 @@ export async function publishProductVersion(
 ): Promise<PublishVersionResponse> {
   const { productVersionId, actorId, verifyFileIntegrity } = params;
 
-  const result = await db.$transaction(async (tx) => {
-    // Acquire exclusive row lock
+  // Blocker: Storage reverification must not be optional or omitted
+  if (!verifyFileIntegrity || typeof verifyFileIntegrity !== "function") {
+    throw new DownloadVersionEngineError(
+      "Storage reverification authority is mandatory to publish a product version",
+      503,
+      "STORAGE_VERIFICATION_REQUIRED",
+    );
+  }
+
+  // Phase 1: Outside DB transaction, read snapshot of version and files
+  const snapshotVersion = await db.productVersion.findUnique({
+    where: { id: productVersionId },
+    include: { files: true, product: true },
+  });
+
+  if (!snapshotVersion) {
+    throw new DownloadVersionEngineError("Product version not found", 404);
+  }
+
+  // Idempotent return if already published (zero duplicate audit logs)
+  if (snapshotVersion.status === "PUBLISHED") {
+    return {
+      success: true,
+      version: mapProductVersionToDto(snapshotVersion),
+    };
+  }
+
+  const verifiedFiles = snapshotVersion.files.filter((f) => f.verifiedAt !== null);
+  if (verifiedFiles.length === 0) {
+    throw new DownloadVersionEngineError(
+      "Cannot publish version without at least one verified file",
+      400,
+    );
+  }
+
+  // Check product fulfillment type for primary file invariant
+  if (snapshotVersion.product?.fulfillmentType === "INTERNAL_LICENSE") {
+    const primaryFiles = verifiedFiles.filter((f) => f.isPrimary);
+    if (primaryFiles.length !== 1) {
+      throw new DownloadVersionEngineError(
+        `Licensed software versions require exactly ONE primary file for updater distribution (found ${primaryFiles.length})`,
+        409,
+      );
+    }
+  }
+
+  // Reverification of every file against storage OUTSIDE the DB transaction
+  for (const file of verifiedFiles) {
+    let check: { valid: boolean; reason?: string };
+    try {
+      check = await verifyFileIntegrity(file);
+    } catch (verErr: any) {
+      throw new DownloadVersionEngineError(
+        `Pre-publish integrity reverification failed for file '${file.fileName}': ${verErr?.message || "Storage error"}`,
+        503,
+      );
+    }
+    if (!check.valid) {
+      throw new DownloadVersionEngineError(
+        `Pre-publish integrity reverification failed for file '${file.fileName}': ${check.reason || "Storage object missing or hash/size mismatch"}`,
+        409,
+      );
+    }
+  }
+
+  // Phase 2: Enter DB transaction, lock row FOR UPDATE, verify snapshot did not drift, and CAS transition
+  return db.$transaction(async (tx) => {
     const vRows = await tx.$queryRaw<
       Array<{
         id: string;
@@ -415,7 +483,7 @@ export async function publishProductVersion(
     }
     const current = vRows[0];
 
-    // Idempotent return if already published (zero duplicate audit logs)
+    // Concurrency race: already published by concurrent caller
     if (current.status === "PUBLISHED") {
       const full = await tx.productVersion.findUnique({
         where: { id: productVersionId },
@@ -427,45 +495,32 @@ export async function publishProductVersion(
       };
     }
 
-    // Must have at least 1 verified file
-    const verifiedFiles = await tx.productVersionFile.findMany({
-      where: {
-        productVersionId,
-        verifiedAt: { not: null },
-      },
+    // Reload files under lock to ensure files did not drift
+    const lockedFiles = await tx.productVersionFile.findMany({
+      where: { productVersionId },
     });
 
-    if (verifiedFiles.length === 0) {
+    // Check drift against pre-verified snapshot
+    if (lockedFiles.length !== snapshotVersion.files.length) {
       throw new DownloadVersionEngineError(
-        "Cannot publish version without at least one verified file",
-        400,
+        "Version files modified during publication verification",
+        409,
       );
     }
 
-    // Check product fulfillment type for primary file invariant
-    const product = await tx.product.findUnique({
-      where: { id: current.product_id },
-    });
-    if (product && product.fulfillmentType === "INTERNAL_LICENSE") {
-      const primaryFiles = verifiedFiles.filter((f) => f.isPrimary);
-      if (primaryFiles.length !== 1) {
+    for (const lf of lockedFiles) {
+      const snap = snapshotVersion.files.find((s) => s.id === lf.id);
+      if (
+        !snap ||
+        snap.storageKey !== lf.storageKey ||
+        snap.sha256 !== lf.sha256 ||
+        snap.sizeBytes !== lf.sizeBytes ||
+        snap.isPrimary !== lf.isPrimary
+      ) {
         throw new DownloadVersionEngineError(
-          `Licensed software versions require exactly ONE primary file for updater distribution (found ${primaryFiles.length})`,
+          `Version file '${lf.fileName}' drifted during publication verification`,
           409,
         );
-      }
-    }
-
-    // Reverification of every file against storage
-    if (verifyFileIntegrity) {
-      for (const file of verifiedFiles) {
-        const check = await verifyFileIntegrity(file);
-        if (!check.valid) {
-          throw new DownloadVersionEngineError(
-            `Pre-publish integrity reverification failed for file '${file.fileName}': ${check.reason || "Storage object missing or hash/size mismatch"}`,
-            409,
-          );
-        }
       }
     }
 
@@ -500,8 +555,6 @@ export async function publishProductVersion(
       version: mapProductVersionToDto(updated),
     };
   });
-
-  return result;
 }
 
 /**
@@ -522,20 +575,11 @@ export async function issueCustomerDownloadGrant(
   db: PrismaClient = defaultPrisma,
 ): Promise<{
   grant: DownloadGrant;
-  event: DownloadEvent;
   file: ProductVersionFile;
   version: ProductVersion;
 }> {
   const { userId, entitlementId, versionId, fileId, ipAddress, userAgent } = params;
   const ttl = resolveDownloadTtl(params.ttlSeconds);
-
-  // Hash IP and User-Agent for privacy
-  const ipHash = ipAddress
-    ? crypto.createHash("sha256").update(ipAddress).digest("hex")
-    : null;
-  const userAgentHash = userAgent
-    ? crypto.createHash("sha256").update(userAgent).digest("hex")
-    : null;
 
   return db.$transaction(async (tx) => {
     // 1. Lock Entitlement row FOR UPDATE
@@ -666,7 +710,7 @@ export async function issueCustomerDownloadGrant(
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttl * 1000);
 
-    // 5. Create authoritative DownloadGrant
+    // 5. Create authoritative DownloadGrant (linearization point)
     const grant = await tx.downloadGrant.create({
       data: {
         userId,
@@ -679,42 +723,7 @@ export async function issueCustomerDownloadGrant(
       },
     });
 
-    // 6. Create DownloadEvent
-    const event = await tx.downloadEvent.create({
-      data: {
-        userId,
-        entitlementId,
-        productId: version.productId,
-        productVersionId: version.id,
-        fileId: file.id,
-        channel: "CUSTOMER_PORTAL",
-        ipHash,
-        userAgentHash,
-        createdAt: now,
-      },
-    });
-
-    // 7. Record DOWNLOAD_URL_ISSUED audit log
-    await tx.auditLog.create({
-      data: {
-        action: "DOWNLOAD_URL_ISSUED",
-        entity: "DownloadGrant",
-        entityId: grant.id,
-        actorId: userId,
-        details: {
-          grantId: grant.id,
-          eventId: event.id,
-          entitlementId,
-          productId: version.productId,
-          productVersionId: version.id,
-          fileId: file.id,
-          channel: "CUSTOMER_PORTAL",
-          expiresAt: expiresAt.toISOString(),
-        },
-      },
-    });
-
-    return { grant, event, file, version };
+    return { grant, file, version };
   });
 }
 
@@ -739,7 +748,6 @@ export async function issueUpdaterDownloadGrant(
   valid: boolean;
   updateAvailable: boolean;
   grant?: DownloadGrant;
-  event?: DownloadEvent;
   file?: ProductVersionFile;
   version?: ProductVersion;
   entitlementId?: string;
@@ -763,13 +771,6 @@ export async function issueUpdaterDownloadGrant(
   }
   const cleanCurrentVer = cleanSemver(params.currentVersion);
   const hashedKey = hashLicenseKey(normalizedKey);
-
-  const ipHash = params.ipAddress
-    ? crypto.createHash("sha256").update(params.ipAddress).digest("hex")
-    : null;
-  const userAgentHash = params.userAgent
-    ? crypto.createHash("sha256").update(params.userAgent).digest("hex")
-    : null;
 
   return db.$transaction(async (tx) => {
     // Lock InternalLicense row FOR UPDATE
@@ -875,14 +876,16 @@ export async function issueUpdaterDownloadGrant(
       return { valid: true, updateAvailable: false };
     }
 
-    // Deterministic primary package selection
-    const primaryFile =
-      latestEligible.files.find((f) => f.isPrimary) || latestEligible.files[0];
+    // Deterministic primary package selection (strictly require isPrimary && verifiedAt, NO fallback)
+    const primaryFile = latestEligible.files.find((f) => f.isPrimary && f.verifiedAt);
+    if (!primaryFile) {
+      return { valid: true, updateAvailable: false };
+    }
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttl * 1000);
 
-    // Create DownloadGrant
+    // Create DownloadGrant (linearization point)
     const grant = await tx.downloadGrant.create({
       data: {
         userId: entitlement.user_id,
@@ -897,52 +900,83 @@ export async function issueUpdaterDownloadGrant(
       },
     });
 
-    // Create DownloadEvent
-    const event = await tx.downloadEvent.create({
-      data: {
-        userId: entitlement.user_id,
-        entitlementId: entitlement.id,
-        productId: params.productId,
-        productVersionId: latestEligible.id,
-        fileId: primaryFile.id,
-        channel: "LICENSE_UPDATER",
-        ipHash,
-        userAgentHash,
-        createdAt: now,
-      },
-    });
-
-    // Audit log
-    await tx.auditLog.create({
-      data: {
-        action: "DOWNLOAD_URL_ISSUED",
-        entity: "DownloadGrant",
-        entityId: grant.id,
-        actorId: entitlement.user_id,
-        details: {
-          grantId: grant.id,
-          eventId: event.id,
-          entitlementId: entitlement.id,
-          licenseId: license.id,
-          productId: params.productId,
-          productVersionId: latestEligible.id,
-          fileId: primaryFile.id,
-          channel: "LICENSE_UPDATER",
-          expiresAt: expiresAt.toISOString(),
-        },
-      },
-    });
-
     return {
       valid: true,
       updateAvailable: true,
       grant,
-      event,
       file: primaryFile,
       version: latestEligible,
       entitlementId: entitlement.id,
       normalizedDomain: normalizedDom,
     };
+  });
+}
+
+/**
+ * Authoritative record of actual download URL issuance (Step C).
+ * Called strictly AFTER signed URL generation succeeds.
+ * Creates DownloadEvent and AuditLog (action = 'DOWNLOAD_URL_ISSUED') linked to DownloadGrant.
+ */
+export async function recordDownloadIssuance(
+  params: {
+    grantId: string;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+  db: PrismaClient = defaultPrisma,
+): Promise<{ event: DownloadEvent }> {
+  const { grantId, ipAddress, userAgent } = params;
+  const ipHash = ipAddress
+    ? crypto.createHash("sha256").update(ipAddress).digest("hex")
+    : null;
+  const userAgentHash = userAgent
+    ? crypto.createHash("sha256").update(userAgent).digest("hex")
+    : null;
+
+  return db.$transaction(async (tx) => {
+    const grant = await tx.downloadGrant.findUnique({
+      where: { id: grantId },
+      include: { productVersion: true },
+    });
+    if (!grant) {
+      throw new DownloadVersionEngineError("Download grant not found", 404);
+    }
+
+    const event = await tx.downloadEvent.create({
+      data: {
+        userId: grant.userId,
+        entitlementId: grant.entitlementId,
+        productId: grant.productVersion.productId,
+        productVersionId: grant.productVersionId,
+        fileId: grant.fileId,
+        channel: grant.channel,
+        ipHash,
+        userAgentHash,
+        createdAt: new Date(),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        action: "DOWNLOAD_URL_ISSUED",
+        entity: "DownloadGrant",
+        entityId: grant.id,
+        actorId: grant.userId || grant.entitlementId,
+        details: {
+          grantId: grant.id,
+          eventId: event.id,
+          entitlementId: grant.entitlementId,
+          licenseId: grant.licenseId,
+          productId: grant.productVersion.productId,
+          productVersionId: grant.productVersionId,
+          fileId: grant.fileId,
+          channel: grant.channel,
+          expiresAt: grant.expiresAt.toISOString(),
+        },
+      },
+    });
+
+    return { event };
   });
 }
 
@@ -965,7 +999,6 @@ export async function authorizeCustomerDownload(
   version: ProductVersion;
   file: ProductVersionFile;
   grant: DownloadGrant;
-  event: DownloadEvent;
 }> {
   const result = await issueCustomerDownloadGrant(params, db);
   const entitlement = await db.entitlement.findUnique({
@@ -976,7 +1009,6 @@ export async function authorizeCustomerDownload(
     version: result.version,
     file: result.file,
     grant: result.grant,
-    event: result.event,
   };
 }
 
@@ -1000,7 +1032,6 @@ export async function authorizeLicenseUpdater(
   eligibleVersion?: ProductVersion;
   file?: ProductVersionFile;
   grant?: DownloadGrant;
-  event?: DownloadEvent;
   entitlementId?: string;
   normalizedDomain?: string;
 }> {
@@ -1011,7 +1042,6 @@ export async function authorizeLicenseUpdater(
     eligibleVersion: result.version,
     file: result.file,
     grant: result.grant,
-    event: result.event,
     entitlementId: result.entitlementId,
     normalizedDomain: result.normalizedDomain,
   };

@@ -50,7 +50,6 @@ import {
   ProductVersionDto,
   ProductVersionFileDto,
   CreateProductVersionRequest,
-  AddVersionFileRequest,
   PublishVersionResponse,
   RequestDownloadRequest,
   DownloadUrlResponse,
@@ -1041,22 +1040,6 @@ export class NexusApiClient {
       throw new Error(`Get product version failed (${res.status}): ${err}`);
     }
     return (await res.json()) as ProductVersionDto;
-  }
-
-  async addVersionFile(
-    versionId: string,
-    data: AddVersionFileRequest,
-  ): Promise<ProductVersionFileDto> {
-    const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}/files`, {
-      method: "POST",
-      headers: this.buildHeaders(),
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Add version file failed (${res.status}): ${err}`);
-    }
-    return (await res.json()) as ProductVersionFileDto;
   }
 
   async uploadVersionFile(

@@ -6,6 +6,7 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import Redis from "ioredis";
 import {
@@ -15,6 +16,8 @@ import {
   EntitlementStatus,
   LicenseStatus,
   LicenseActivationStatus,
+  publishProductVersion,
+  DownloadVersionEngineError,
 } from "../src/index";
 import {
   generateLicenseKey,
@@ -39,6 +42,7 @@ const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 let apiProcess: ChildProcess | null = null;
 let workerProcess: ChildProcess | null = null;
 let offlineApiProcess: ChildProcess | null = null;
+let allSpawnedProcesses: ChildProcess[] = [];
 
 const s3Client = new S3Client({
   endpoint: S3_ENDPOINT,
@@ -137,6 +141,12 @@ async function ensureWorkerRunning(): Promise<void> {
 }
 
 function stopChildProcesses(): void {
+  for (const p of allSpawnedProcesses) {
+    try {
+      p.kill("SIGTERM");
+    } catch {}
+  }
+  allSpawnedProcesses = [];
   if (workerProcess) {
     try {
       workerProcess.kill("SIGTERM");
@@ -237,7 +247,7 @@ async function uploadRawObjectToMinio(
 
 async function runPhase8Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 8 — DOWNLOAD & VERSION ENGINE LIVE ACCEPTANCE (57 GATES)");
+  console.log("PHASE 8 — DOWNLOAD & VERSION ENGINE LIVE ACCEPTANCE (65 GATES)");
   console.log("==================================================");
 
   // [Gate 1] Verify API Health & Spawning Worker
@@ -1287,8 +1297,8 @@ async function runPhase8Acceptance() {
   }
   console.log("✓ Gate 42 passed: True Entitlement revoke vs download request race linearized");
 
-  // [Gate 43] Client cannot choose arbitrary storageKey
-  console.log("\n[Gate 43] Verifying client cannot supply arbitrary storageKey...");
+  // [Gate 43] Dead JSON file registration endpoint removed (404 Not Found)
+  console.log("\n[Gate 43] Verifying dead JSON file registration endpoint is cleanly removed...");
   const hackKeyRes = await apiPost(
     `/admin/product-versions/${vFresh.data.id}/files`,
     {
@@ -1297,10 +1307,10 @@ async function runPhase8Acceptance() {
     },
     adminToken,
   );
-  if (hackKeyRes.ok || hackKeyRes.status !== 400) {
-    throw new Error(`Expected 400 when client supplies storageKey, got ${hackKeyRes.status}`);
+  if (hackKeyRes.status !== 404) {
+    throw new Error(`Expected 404 for removed JSON file endpoint, got ${hackKeyRes.status}`);
   }
-  console.log("✓ Gate 43 passed: Client-specified storageKey strictly rejected with 400 Bad Request");
+  console.log("✓ Gate 43 passed: Dead JSON file registration endpoint cleanly removed (404 Not Found)");
 
   // [Gate 44] Admin upload uses backend-generated storage key
   console.log("\n[Gate 44] Verifying admin upload uses backend-generated storage key...");
@@ -1561,38 +1571,205 @@ async function runPhase8Acceptance() {
   // Tested in Gate 31, re-verified zero grants/events created
   console.log("✓ Gate 51 passed: Verified customer download request fails closed with 503 and zero records");
 
-  // [Gate 52] Actual Redis outage through updater issuance -> no signed URL returned
-  console.log("\n[Gate 52] Verifying updater request during Redis outage...");
-  const deadRedisClient = new Redis("redis://127.0.0.1:6389", {
-    maxRetriesPerRequest: 0,
-    connectTimeout: 200,
-    enableOfflineQueue: false,
-    retryStrategy: () => null,
-  });
-  let updaterOutagePass = false;
-  try {
-    await deadRedisClient.eval("return 1", 0);
-  } catch {
-    updaterOutagePass = true;
-  } finally {
-    deadRedisClient.disconnect();
-  }
-  if (!updaterOutagePass) throw new Error("Dead redis did not fail");
-  console.log("✓ Gate 52 passed: Updater channel fails closed when rate limit authority unavailable");
+  // [Gate 52] Actual Redis outage through updater API -> 503 + zero grant/event/url
+  console.log("\n[Gate 52] Testing actual Redis outage through updater API (POST /v1/updates/check)...");
+  const updaterOfflineProcess = spawn(
+    "node",
+    [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
+    {
+      cwd: path.resolve(__dirname, "../../.."),
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PORT: "4004",
+        REDIS_URL: "redis://127.0.0.1:6389", // unreachable dead port
+        LICENSE_KEY_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+      },
+    },
+  );
+  allSpawnedProcesses.push(updaterOfflineProcess);
 
-  // [Gate 53] True sliding-window boundary behavior
-  console.log("\n[Gate 53] Testing true sliding-window boundary behavior...");
-  const swKey = `test:ratelimit:sliding:${Date.now()}`;
-  await redis.del(swKey);
-  const nowMs = Date.now();
-  // Add 10 entries within the window
-  for (let i = 0; i < 10; i++) {
-    await redis.zadd(swKey, nowMs - (10 - i) * 1000, `entry-${i}`);
+  let upOfflineReady = false;
+  const startWait52 = Date.now();
+  while (Date.now() - startWait52 < 15000) {
+    await sleep(400);
+    try {
+      const res = await fetch("http://localhost:4004/health");
+      if (res.status === 200 || res.status === 503) {
+        upOfflineReady = true;
+        break;
+      }
+    } catch {}
   }
-  // 11th request within window must be rejected
-  const count = await redis.zcard(swKey);
-  if (count !== 10) throw new Error(`Expected 10 entries, got ${count}`);
-  console.log("✓ Gate 53 passed: Sliding-window boundary tracks discrete timestamps atomically");
+  if (!upOfflineReady) {
+    throw new Error("Failed to start updater offline API process on port 4004");
+  }
+
+  const grantsBefore52 = await prisma.downloadGrant.count({ where: { entitlementId: pluginEnt.id } });
+  const eventsBefore52 = await prisma.downloadEvent.count({ where: { entitlementId: pluginEnt.id } });
+  const auditsBefore52 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  const offlineUpRes = await fetch("http://localhost:4004/v1/updates/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      licenseKey: rawKey,
+      domain: "client-site.com",
+      productId: pluginProd.id,
+      currentVersion: "1.0.0",
+    }),
+  });
+  const offlineUpData: any = await offlineUpRes.json().catch(() => null);
+
+  const grantsAfter52 = await prisma.downloadGrant.count({ where: { entitlementId: pluginEnt.id } });
+  const eventsAfter52 = await prisma.downloadEvent.count({ where: { entitlementId: pluginEnt.id } });
+  const auditsAfter52 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  try {
+    updaterOfflineProcess.kill("SIGTERM");
+  } catch {}
+
+  if (offlineUpRes.status !== 503) {
+    throw new Error(`Expected 503 during updater Redis outage, got ${offlineUpRes.status}`);
+  }
+  if (offlineUpData?.downloadUrl) {
+    throw new Error("Download URL returned during updater Redis outage!");
+  }
+  if (grantsAfter52 !== grantsBefore52 || eventsAfter52 !== eventsBefore52 || auditsAfter52 !== auditsBefore52) {
+    throw new Error("Download records or audits created during updater Redis outage!");
+  }
+  console.log("✓ Gate 52 passed: Actual updater Redis outage returned 503 with zero grants, events, or URLs issued");
+
+  // [Gate 53] Live sliding-window rate limit validated across time boundaries (max=2, window=2s)
+  console.log("\n[Gate 53] Testing true sliding-window rate limit (max=2, window=2s) via live API...");
+  const limiterApiProcess = spawn(
+    "node",
+    [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
+    {
+      cwd: path.resolve(__dirname, "../../.."),
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PORT: "4006",
+        DOWNLOAD_RATE_LIMIT_MAX: "2",
+        DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: "2",
+      },
+    },
+  );
+  allSpawnedProcesses.push(limiterApiProcess);
+
+  let limiterReady = false;
+  const startLimiter = Date.now();
+  while (Date.now() - startLimiter < 15000) {
+    await sleep(400);
+    try {
+      const res = await fetch("http://localhost:4006/health");
+      if (res.status === 200) {
+        limiterReady = true;
+        break;
+      }
+    } catch {}
+  }
+  if (!limiterReady) {
+    throw new Error("Failed to start limiter test API on port 4006");
+  }
+
+  const gate53Ent = await createTestEntitlement({ userId: customer1Id });
+  // t=0: request A -> allow (200)
+  const reqA = await fetch("http://localhost:4006/v1/downloads/request", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customer1Token}`,
+    },
+    body: JSON.stringify({
+      entitlementId: gate53Ent.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    }),
+  });
+  if (!reqA.ok) {
+    throw new Error(`Request A failed: ${reqA.status}`);
+  }
+
+  // Wait 1 second (t≈1s)
+  await sleep(1000);
+
+  // Request B (t≈1s) -> allow (200)
+  const reqB = await fetch("http://localhost:4006/v1/downloads/request", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customer1Token}`,
+    },
+    body: JSON.stringify({
+      entitlementId: gate53Ent.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    }),
+  });
+  if (!reqB.ok) {
+    throw new Error(`Request B failed: ${reqB.status}`);
+  }
+
+  // Immediate Request C -> rate limited (429)
+  const reqC = await fetch("http://localhost:4006/v1/downloads/request", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customer1Token}`,
+    },
+    body: JSON.stringify({
+      entitlementId: gate53Ent.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    }),
+  });
+  if (reqC.status !== 429) {
+    throw new Error(`Expected 429 for immediate request C, got ${reqC.status}`);
+  }
+
+  // Wait 1.2s: now t ≈ 2.2s. Request A (at t=0) is outside the 2s sliding window, but Request B (at t≈1.0s) remains inside.
+  await sleep(1200);
+
+  // Request D -> allowed (exactly 1 request inside window now)
+  const reqD = await fetch("http://localhost:4006/v1/downloads/request", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customer1Token}`,
+    },
+    body: JSON.stringify({
+      entitlementId: gate53Ent.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    }),
+  });
+  if (!reqD.ok) {
+    throw new Error(`Expected request D to be allowed after sliding window cleared request A, got ${reqD.status}`);
+  }
+
+  // Immediate request E -> rate limited again (429)
+  const reqE = await fetch("http://localhost:4006/v1/downloads/request", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${customer1Token}`,
+    },
+    body: JSON.stringify({
+      entitlementId: gate53Ent.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    }),
+  });
+  if (reqE.status !== 429) {
+    throw new Error(`Expected 429 for immediate request E, got ${reqE.status}`);
+  }
+
+  try {
+    limiterApiProcess.kill("SIGTERM");
+  } catch {}
+  console.log("✓ Gate 53 passed: Live sliding-window rate limit validated across time boundaries (max=2, window=2s)");
 
   // [Gate 54] Updater rate limit enforced atomically
   console.log("\n[Gate 54] Testing updater rate limiting per entitlement + domain...");
@@ -1738,8 +1915,492 @@ async function runPhase8Acceptance() {
   if (resolveDownloadTtl("NaN") !== 180) throw new Error("Invalid TTL not defaulted to 180");
   console.log("✓ Gate 57 passed: Authoritative resolveDownloadTtl correctly clamps TTL (120..300, default 180)");
 
+  // [Gate 58] Direct domain publishProductVersion without verifier fails closed (503 STORAGE_VERIFICATION_REQUIRED)
+  console.log("\n[Gate 58] Testing direct publishProductVersion without verifyFileIntegrity callback...");
+  const v58Prod = await createTestProduct(FulfillmentType.DIGITAL_DOWNLOAD);
+  const v58 = await prisma.productVersion.create({
+    data: {
+      productId: v58Prod.product.id,
+      version: "5.8.0",
+      status: "DRAFT",
+    },
+  });
+  const s3Res58 = await uploadRawObjectToMinio(`products/${v58Prod.product.id}/5.8.0/main.zip`, "GATE_58_DATA");
+  await prisma.productVersionFile.create({
+    data: {
+      productVersionId: v58.id,
+      storageKey: `products/${v58Prod.product.id}/5.8.0/main.zip`,
+      fileName: "main.zip",
+      sizeBytes: s3Res58.sizeBytes,
+      sha256: s3Res58.sha256,
+      isPrimary: true,
+      verifiedAt: new Date(),
+    },
+  });
+
+  let gate58Threw = false;
+  try {
+    await publishProductVersion(prisma as any, {
+      versionId: v58.id,
+      adminUserId: adminId,
+      verifyFileIntegrity: undefined as any,
+    });
+  } catch (err: any) {
+    if (err instanceof DownloadVersionEngineError && err.code === "STORAGE_VERIFICATION_REQUIRED" && err.statusCode === 503) {
+      gate58Threw = true;
+    } else {
+      throw new Error(`Unexpected error thrown by publishProductVersion without verifier: ${err?.message || err}`);
+    }
+  }
+  if (!gate58Threw) {
+    throw new Error("publishProductVersion succeeded without verifyFileIntegrity callback! Must fail closed with 503.");
+  }
+
+  // Also verify with throwing verifier (e.g. storage verification fails)
+  let gate58StorageFailThrew = false;
+  try {
+    await publishProductVersion(prisma as any, {
+      versionId: v58.id,
+      adminUserId: adminId,
+      verifyFileIntegrity: async () => {
+        throw new Error("Private storage connection timed out");
+      },
+    });
+  } catch (err: any) {
+    gate58StorageFailThrew = true;
+  }
+  if (!gate58StorageFailThrew) {
+    throw new Error("publishProductVersion succeeded when verifier threw error!");
+  }
+
+  // Verify version is still DRAFT, not published, and no audit log emitted
+  const v58After = await prisma.productVersion.findUnique({ where: { id: v58.id } });
+  if (v58After?.status !== "DRAFT") {
+    throw new Error(`Expected version to remain DRAFT, but got ${v58After?.status}`);
+  }
+  const audits58 = await prisma.auditLog.count({
+    where: { entity: "ProductVersion", entityId: v58.id, action: "VERSION_PUBLISHED" },
+  });
+  if (audits58 !== 0) {
+    throw new Error(`Expected 0 VERSION_PUBLISHED audit logs for gate 58, found ${audits58}`);
+  }
+  console.log("✓ Gate 58 passed: Domain publishProductVersion strictly requires verifyFileIntegrity and fails closed (503)");
+
+  // [Gate 59] PUBLISHED updater version without primary file returns updateAvailable: false
+  console.log("\n[Gate 59] Testing PUBLISHED updater version without primary file returns updateAvailable: false...");
+  const v59 = await prisma.productVersion.create({
+    data: {
+      productId: pluginProd.id,
+      version: "5.9.0",
+      status: "PUBLISHED",
+      releasedAt: new Date(),
+    },
+  });
+  const s3Res59 = await uploadRawObjectToMinio(`products/${pluginProd.id}/5.9.0/notes.txt`, "RELEASE_NOTES_ONLY");
+  await prisma.productVersionFile.create({
+    data: {
+      productVersionId: v59.id,
+      storageKey: `products/${pluginProd.id}/5.9.0/notes.txt`,
+      fileName: "notes.txt",
+      sizeBytes: s3Res59.sizeBytes,
+      sha256: s3Res59.sha256,
+      isPrimary: false,
+      verifiedAt: new Date(),
+    },
+  });
+
+  const grantsBefore59 = await prisma.downloadGrant.count({ where: { productVersionId: v59.id } });
+  const eventsBefore59 = await prisma.downloadEvent.count({ where: { productVersionId: v59.id } });
+
+  const res59 = await apiPost("/v1/updates/check", {
+    licenseKey: rawKey,
+    domain: "client-site.com",
+    productId: pluginProd.id,
+    currentVersion: "2.0.0",
+  });
+  if (!res59.ok) {
+    throw new Error(`Gate 59 update check request failed: ${res59.status}`);
+  }
+  if (res59.data.updateAvailable !== false || res59.data.downloadUrl) {
+    throw new Error(`Expected updateAvailable: false and no downloadUrl, got ${JSON.stringify(res59.data)}`);
+  }
+  const grantsAfter59 = await prisma.downloadGrant.count({ where: { productVersionId: v59.id } });
+  const eventsAfter59 = await prisma.downloadEvent.count({ where: { productVersionId: v59.id } });
+  if (grantsAfter59 !== grantsBefore59 || eventsAfter59 !== eventsBefore59) {
+    throw new Error("DownloadGrant or DownloadEvent created for version with no primary package file!");
+  }
+  console.log("✓ Gate 59 passed: Updater check with published version missing primary file returns updateAvailable: false without grants/events");
+
+  // [Gate 60] Oversize admin upload fails closed with HTTP 413
+  console.log("\n[Gate 60] Testing oversize admin upload fails closed with 413 and zero storage objects...");
+  const oversizeApi = spawn(
+    "node",
+    [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
+    {
+      cwd: path.resolve(__dirname, "../../.."),
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PORT: "4007",
+        MAX_UPLOAD_BYTES: "1024",
+      },
+    },
+  );
+  allSpawnedProcesses.push(oversizeApi);
+
+  let oversizeReady = false;
+  const startOversize = Date.now();
+  while (Date.now() - startOversize < 15000) {
+    await sleep(400);
+    try {
+      const res = await fetch("http://localhost:4007/health");
+      if (res.status === 200) {
+        oversizeReady = true;
+        break;
+      }
+    } catch {}
+  }
+  if (!oversizeReady) {
+    throw new Error("Failed to start oversize test API on port 4007");
+  }
+
+  const v60 = await prisma.productVersion.create({
+    data: {
+      productId: pluginProd.id,
+      version: "6.0.0",
+      status: "DRAFT",
+    },
+  });
+
+  const bigBuffer = Buffer.alloc(2048, "A");
+  const oversizeRes = await apiUpload(
+    `/admin/product-versions/${v60.id}/files/upload`,
+    bigBuffer,
+    "oversize.zip",
+    true,
+    adminToken,
+    "http://localhost:4007",
+  );
+
+  try {
+    oversizeApi.kill("SIGTERM");
+  } catch {}
+
+  if (oversizeRes.status !== 413) {
+    throw new Error(`Expected HTTP 413 for oversize upload, got ${oversizeRes.status}: ${JSON.stringify(oversizeRes.data)}`);
+  }
+  const files60 = await prisma.productVersionFile.count({ where: { productVersionId: v60.id } });
+  if (files60 !== 0) {
+    throw new Error(`Expected 0 files in DB for oversize upload, found ${files60}`);
+  }
+  const list60 = await s3Client.send(
+    new ListObjectsV2Command({
+      Bucket: S3_BUCKET,
+      Prefix: `products/${pluginProd.id}/versions/${v60.id}/`,
+    }),
+  );
+  if (list60.KeyCount && list60.KeyCount > 0) {
+    throw new Error(`Found ${list60.KeyCount} orphan storage objects after 413 upload rejection!`);
+  }
+  console.log("✓ Gate 60 passed: Oversize admin upload rejected with 413; zero DB records and zero storage objects created");
+
+  // [Gate 61] DB registration failure cleans up storage object (zero orphan objects in bucket)
+  console.log("\n[Gate 61] Testing orphan storage cleanup when upload encounters duplicate primary file conflict...");
+  const v61 = await prisma.productVersion.create({
+    data: {
+      productId: pluginProd.id,
+      version: "6.1.0",
+      status: "DRAFT",
+    },
+  });
+
+  const upload1Res = await apiUpload(
+    `/admin/product-versions/${v61.id}/files/upload`,
+    Buffer.from("VALID_PRIMARY_FILE_V61"),
+    "primary-v61.zip",
+    true,
+    adminToken,
+  );
+  if (!upload1Res.ok) {
+    throw new Error(`First primary file upload failed: ${upload1Res.status}`);
+  }
+
+  const listBefore = await s3Client.send(
+    new ListObjectsV2Command({
+      Bucket: S3_BUCKET,
+      Prefix: `products/${pluginProd.id}/versions/${v61.id}/`,
+    }),
+  );
+  const countBefore = listBefore.KeyCount || 0;
+  if (countBefore !== 1) {
+    throw new Error(`Expected exactly 1 storage object before conflict, found ${countBefore}`);
+  }
+
+  // Second primary file upload fails with 409 Conflict
+  const upload2Res = await apiUpload(
+    `/admin/product-versions/${v61.id}/files/upload`,
+    Buffer.from("SECOND_PRIMARY_SHOULD_FAIL"),
+    "primary-v61-second.zip",
+    true,
+    adminToken,
+  );
+  if (upload2Res.status !== 409) {
+    throw new Error(`Expected 409 Conflict for duplicate primary file, got ${upload2Res.status}`);
+  }
+
+  // Check MinIO: the second file must NOT remain orphaned in storage
+  const listAfter = await s3Client.send(
+    new ListObjectsV2Command({
+      Bucket: S3_BUCKET,
+      Prefix: `products/${pluginProd.id}/versions/${v61.id}/`,
+    }),
+  );
+  const countAfter = listAfter.KeyCount || 0;
+  if (countAfter !== 1) {
+    throw new Error(`Orphan object remained in private storage after 409! Count before: ${countBefore}, count after: ${countAfter}`);
+  }
+  console.log("✓ Gate 61 passed: Best-effort cleanup deleted orphan storage object on DB conflict (409)");
+
+  // [Gate 62] Storage object deleted before customer download request fails closed
+  console.log("\n[Gate 62] Testing customer download request when storage object is missing from bucket...");
+  const v62Prod = await createTestProduct(FulfillmentType.DIGITAL_DOWNLOAD);
+  const v62Ent = await createTestEntitlement({
+    userId: customer1Id,
+    productId: v62Prod.product.id,
+    variantId: v62Prod.variant.id,
+  });
+  const v62 = await prisma.productVersion.create({
+    data: {
+      productId: v62Prod.product.id,
+      version: "6.2.0",
+      status: "DRAFT",
+    },
+  });
+  const s3Res62 = await uploadRawObjectToMinio(`products/${v62Prod.product.id}/versions/${v62.id}/file.zip`, "GATE_62_CONTENT");
+  const file62 = await prisma.productVersionFile.create({
+    data: {
+      productVersionId: v62.id,
+      storageKey: `products/${v62Prod.product.id}/versions/${v62.id}/file.zip`,
+      fileName: "file.zip",
+      sizeBytes: s3Res62.sizeBytes,
+      sha256: s3Res62.sha256,
+      isPrimary: true,
+      verifiedAt: new Date(),
+    },
+  });
+  await apiPost(`/admin/product-versions/${v62.id}/publish`, {}, adminToken);
+
+  // Delete object from MinIO to simulate object missing/deleted
+  await s3Client.send(
+    new DeleteObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: file62.storageKey,
+    }),
+  );
+
+  const eventsBefore62 = await prisma.downloadEvent.count({ where: { productVersionId: v62.id } });
+  const auditsBefore62 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  const dlRes62 = await apiPost(
+    "/v1/downloads/request",
+    {
+      entitlementId: v62Ent.id,
+      versionId: v62.id,
+      fileId: file62.id,
+    },
+    customer1Token,
+  );
+
+  if (dlRes62.status !== 503) {
+    throw new Error(`Expected 503 when storage object is missing for customer download, got ${dlRes62.status}`);
+  }
+
+  const eventsAfter62 = await prisma.downloadEvent.count({ where: { productVersionId: v62.id } });
+  const auditsAfter62 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+  if (eventsAfter62 !== eventsBefore62 || auditsAfter62 !== auditsBefore62) {
+    throw new Error("DownloadEvent or DOWNLOAD_URL_ISSUED audit emitted when storage object was missing!");
+  }
+  console.log("✓ Gate 62 passed: Storage object missing before download request failed closed (503) with zero events and zero audits");
+
+  // [Gate 63] Storage object missing on updater check fails closed without emitting DownloadEvent or audit log
+  console.log("\n[Gate 63] Testing updater check when primary file storage object is missing from bucket...");
+  const v63 = await prisma.productVersion.create({
+    data: {
+      productId: pluginProd.id,
+      version: "6.3.0",
+      status: "DRAFT",
+    },
+  });
+  const s3Res63 = await uploadRawObjectToMinio(`products/${pluginProd.id}/versions/${v63.id}/updater-missing.zip`, "UPDATER_WILL_DELETE");
+  const file63 = await prisma.productVersionFile.create({
+    data: {
+      productVersionId: v63.id,
+      storageKey: `products/${pluginProd.id}/versions/${v63.id}/updater-missing.zip`,
+      fileName: "updater-missing.zip",
+      sizeBytes: s3Res63.sizeBytes,
+      sha256: s3Res63.sha256,
+      isPrimary: true,
+      verifiedAt: new Date(),
+    },
+  });
+  await apiPost(`/admin/product-versions/${v63.id}/publish`, {}, adminToken);
+
+  // Delete object from MinIO
+  await s3Client.send(
+    new DeleteObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: file63.storageKey,
+    }),
+  );
+
+  const eventsBefore63 = await prisma.downloadEvent.count({ where: { productVersionId: v63.id } });
+  const auditsBefore63 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  const upRes63 = await apiPost("/v1/updates/check", {
+    licenseKey: rawKey,
+    domain: "client-site.com",
+    productId: pluginProd.id,
+    currentVersion: "2.0.0",
+  });
+
+  if (!upRes63.ok) {
+    throw new Error(`Updater check failed: ${upRes63.status}`);
+  }
+  if (upRes63.data.updateAvailable !== false || upRes63.data.downloadUrl) {
+    throw new Error(`Expected updateAvailable: false and no downloadUrl when storage object is missing, got ${JSON.stringify(upRes63.data)}`);
+  }
+
+  const eventsAfter63 = await prisma.downloadEvent.count({ where: { productVersionId: v63.id } });
+  const auditsAfter63 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+  if (eventsAfter63 !== eventsBefore63 || auditsAfter63 !== auditsBefore63) {
+    throw new Error("DownloadEvent or audit log emitted when storage object was missing during updater check!");
+  }
+  console.log("✓ Gate 63 passed: Missing storage object during updater check returned updateAvailable: false with zero events and zero audits");
+
+  // [Gate 64] Updater Redis outage through real API verified across multiple calls
+  console.log("\n[Gate 64] Testing updater Redis outage across multiple consecutive requests via real API...");
+  const updaterOutageProcess = spawn(
+    "node",
+    [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
+    {
+      cwd: path.resolve(__dirname, "../../.."),
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        PORT: "4008",
+        REDIS_URL: "redis://127.0.0.1:6399", // unreachable dead port
+        LICENSE_KEY_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+      },
+    },
+  );
+  allSpawnedProcesses.push(updaterOutageProcess);
+
+  let upOutageReady = false;
+  const startUpOutage = Date.now();
+  while (Date.now() - startUpOutage < 15000) {
+    await sleep(400);
+    try {
+      const res = await fetch("http://localhost:4008/health");
+      if (res.status === 200 || res.status === 503) {
+        upOutageReady = true;
+        break;
+      }
+    } catch {}
+  }
+  if (!upOutageReady) {
+    throw new Error("Failed to start updater outage API process on port 4008");
+  }
+
+  const grantsBefore64 = await prisma.downloadGrant.count({ where: { entitlementId: pluginEnt.id } });
+  const eventsBefore64 = await prisma.downloadEvent.count({ where: { entitlementId: pluginEnt.id } });
+  const auditsBefore64 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  // Make 3 calls during outage
+  for (let i = 1; i <= 3; i++) {
+    const outageRes = await fetch("http://localhost:4008/v1/updates/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        licenseKey: rawKey,
+        domain: "client-site.com",
+        productId: pluginProd.id,
+        currentVersion: "1.0.0",
+      }),
+    });
+    if (outageRes.status !== 503) {
+      throw new Error(`Request ${i} expected 503 during Redis outage, got ${outageRes.status}`);
+    }
+    const outageData: any = await outageRes.json().catch(() => null);
+    if (outageData?.downloadUrl) {
+      throw new Error(`Request ${i} returned downloadUrl during Redis outage!`);
+    }
+  }
+
+  const grantsAfter64 = await prisma.downloadGrant.count({ where: { entitlementId: pluginEnt.id } });
+  const eventsAfter64 = await prisma.downloadEvent.count({ where: { entitlementId: pluginEnt.id } });
+  const auditsAfter64 = await prisma.auditLog.count({ where: { action: "DOWNLOAD_URL_ISSUED", entity: "DownloadGrant" } });
+
+  try {
+    updaterOutageProcess.kill("SIGTERM");
+  } catch {}
+
+  if (grantsAfter64 !== grantsBefore64 || eventsAfter64 !== eventsBefore64 || auditsAfter64 !== auditsBefore64) {
+    throw new Error("Grants, events, or audits created during multi-call updater Redis outage!");
+  }
+  console.log("✓ Gate 64 passed: Multiple updater check calls during Redis outage all failed closed (503) with zero grants, events, or audits");
+
+  // [Gate 65] Redis TIME sliding-window member format verification
+  console.log("\n[Gate 65] Verifying rate limit sorted set member format matches ${nowMs}:${nonce} using Redis TIME...");
+  const ent65 = await createTestEntitlement({ userId: customer1Id });
+  const rateLimitKey65 = `ratelimit:download:customer:${ent65.id}:${customer1Id}`;
+  await redis.del(rateLimitKey65);
+
+  const req65 = await apiPost(
+    "/v1/downloads/request",
+    {
+      entitlementId: ent65.id,
+      versionId: v1Id,
+      fileId: file1Id,
+    },
+    customer1Token,
+  );
+  if (!req65.ok) {
+    throw new Error(`Gate 65 download request failed: ${req65.status}`);
+  }
+
+  const zMembers = await redis.zrange(rateLimitKey65, 0, -1, "WITHSCORES");
+  if (!zMembers || zMembers.length < 2) {
+    throw new Error(`Expected at least 1 member and score in ZSET, got ${JSON.stringify(zMembers)}`);
+  }
+
+  const [member, scoreStr] = zMembers;
+  const score = Number(scoreStr);
+  const colonIdx = member.indexOf(":");
+  if (colonIdx === -1) {
+    throw new Error(`Member format does not contain colon: ${member}`);
+  }
+  const memberNowMs = Number(member.substring(0, colonIdx));
+  const nonce = member.substring(colonIdx + 1);
+
+  if (memberNowMs !== score) {
+    throw new Error(`Member nowMs (${memberNowMs}) does not match ZSET score (${score})`);
+  }
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(nonce)) {
+    throw new Error(`Member nonce is not a valid UUID: ${nonce}`);
+  }
+
+  const redisTimeResult = (await redis.time()) as [string, string];
+  const redisNowMs = Number(redisTimeResult[0]) * 1000 + Math.floor(Number(redisTimeResult[1]) / 1000);
+  const driftMs = Math.abs(redisNowMs - memberNowMs);
+  if (driftMs > 10000) {
+    throw new Error(`Member timestamp drift from Redis TIME is too high: ${driftMs}ms (member: ${memberNowMs}, redis: ${redisNowMs})`);
+  }
+  console.log(`✓ Gate 65 passed: Redis ZSET member matches \${nowMs}:\${nonce} (${memberNowMs}:${nonce.substring(0, 8)}...), score ${score}, drift from Redis TIME is ${driftMs}ms`);
+
   console.log("\n==================================================");
-  console.log("ALL 57 PHASE 8 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 65 PHASE 8 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

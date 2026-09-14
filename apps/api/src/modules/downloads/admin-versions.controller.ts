@@ -16,9 +16,10 @@ import { RequirePermissions } from "../auth/require-permissions.decorator";
 import { DownloadsService } from "./downloads.service";
 import {
   CreateProductVersionDto,
-  AddVersionFileDto,
   UploadVersionFileDto,
 } from "./dto/downloads.dto";
+
+const DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB safe finite default
 
 @Controller("admin")
 @UseGuards(AuthGuard, PermissionsGuard)
@@ -48,20 +49,17 @@ export class AdminVersionsController {
     return this.downloadsService.getVersion(id);
   }
 
-  @Post("product-versions/:id/files")
-  @RequirePermissions("product.write")
-  async addFile(
-    @Param("id") id: string,
-    @Body() dto: AddVersionFileDto,
-    @Req() req: any,
-  ) {
-    const actorId = req.user.id;
-    return this.downloadsService.addFile(id, dto, actorId);
-  }
-
   @Post("product-versions/:id/files/upload")
   @RequirePermissions("product.write")
-  @UseInterceptors(FileInterceptor("file"))
+  @UseInterceptors(
+    FileInterceptor("file", {
+      limits: {
+        fileSize: process.env.MAX_UPLOAD_BYTES
+          ? parseInt(process.env.MAX_UPLOAD_BYTES, 10)
+          : DEFAULT_MAX_UPLOAD_BYTES,
+      },
+    }),
+  )
   async uploadFile(
     @Param("id") id: string,
     @UploadedFile() file: Express.Multer.File,

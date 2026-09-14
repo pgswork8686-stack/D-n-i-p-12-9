@@ -15,12 +15,15 @@ import {
 
 const SLIDING_WINDOW_LUA_SCRIPT = `
 local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local windowMs = tonumber(ARGV[2])
-local maxRequests = tonumber(ARGV[3])
-local member = ARGV[4]
+local windowMs = tonumber(ARGV[1])
+local maxRequests = tonumber(ARGV[2])
+local nonce = ARGV[3]
 
-local clearBefore = now - windowMs
+local t = redis.call('TIME')
+local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local member = tostring(nowMs) .. ':' .. nonce
+
+local clearBefore = nowMs - windowMs
 redis.call('ZREMRANGEBYSCORE', key, '-inf', clearBefore)
 local currentCount = redis.call('ZCARD', key)
 
@@ -28,7 +31,7 @@ if currentCount >= maxRequests then
   return {0, currentCount}
 end
 
-redis.call('ZADD', key, now, member)
+redis.call('ZADD', key, nowMs, member)
 redis.call('PEXPIRE', key, windowMs)
 return {1, currentCount + 1}
 `;
@@ -120,18 +123,16 @@ export class DownloadRateLimiter implements OnModuleDestroy {
     const limit = customLimit ?? this.defaultLimit;
     const windowSeconds = customWindowSeconds ?? this.defaultWindowSeconds;
     const windowMs = windowSeconds * 1000;
-    const now = Date.now();
-    const member = `${now}-${crypto.randomUUID()}`;
+    const nonce = crypto.randomUUID();
 
     try {
       const result = (await this.redisClient.eval(
         SLIDING_WINDOW_LUA_SCRIPT,
         1,
         key,
-        now,
         windowMs,
         limit,
-        member,
+        nonce,
       )) as [number, number];
 
       const [allowed, current] = result;

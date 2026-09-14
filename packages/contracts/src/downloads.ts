@@ -61,15 +61,10 @@ export interface DownloadGrantDto {
   expiresAt: string;
 }
 
+
 export interface CreateProductVersionRequest {
   version: string;
   releaseNotes?: string;
-}
-
-export interface AddVersionFileRequest {
-  fileName: string;
-  contentType?: string;
-  isPrimary?: boolean;
 }
 
 export interface PublishVersionResponse {
