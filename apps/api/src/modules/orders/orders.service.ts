@@ -73,6 +73,8 @@ export class OrdersService {
       durationDays: item.durationDays,
       durationMonths: item.durationMonths,
       maxActivations: item.maxActivations,
+      updatesDays: item.updatesDays,
+      supportDays: item.supportDays,
       snapshotVersion: item.snapshotVersion,
       metadata: item.metadata as Record<string, any> | null,
       createdAt: item.createdAt.toISOString(),
@@ -475,6 +477,8 @@ export class OrdersService {
             durationDays: variant.licensePlan?.durationDays ?? null,
             durationMonths: variant.licensePlan?.durationMonths ?? null,
             maxActivations: variant.licensePlan?.maxActivations ?? null,
+            updatesDays: variant.licensePlan?.updatesDays ?? null,
+            supportDays: variant.licensePlan?.supportDays ?? null,
             snapshotVersion: 1,
           };
         });

@@ -449,6 +449,8 @@ model OrderItem {
   durationDays            Int?            @map("duration_days")
   durationMonths          Int?            @map("duration_months")
   maxActivations          Int?            @map("max_activations")
+  updatesDays             Int?            @map("updates_days")
+  supportDays             Int?            @map("support_days")
   snapshotVersion         Int?            @map("snapshot_version")
   metadata                Json?
   createdAt               DateTime        @default(now()) @map("created_at")
@@ -569,6 +571,9 @@ model Entitlement {
   activatedAt     DateTime          @default(now()) @map("activated_at")
   expiresAt       DateTime?         @map("expires_at")
   revokedAt       DateTime?         @map("revoked_at")
+  maxActivations  Int?              @map("max_activations")
+  updatesUntil    DateTime?         @map("updates_until")
+  supportUntil    DateTime?         @map("support_until")
   metadata        Json?
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")

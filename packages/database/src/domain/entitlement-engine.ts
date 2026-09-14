@@ -138,27 +138,113 @@ export async function issueEntitlementsForOrder(
         );
       }
 
-      // 4. Strict policy validation for snapshotVersion === 1
-      if (item.licensePlanIdAtPurchase) {
-        const hasValidPolicy =
-          item.isLifetime === true ||
-          (typeof item.durationDays === "number" && item.durationDays > 0) ||
-          (typeof item.durationMonths === "number" && item.durationMonths > 0);
+      // 4. Strict snapshot version switch: only version 1 is supported currently
+      switch (item.snapshotVersion) {
+        case 1: {
+          if (item.licensePlanIdAtPurchase) {
+            const hasValidDuration =
+              item.isLifetime === true ||
+              (typeof item.durationDays === "number" &&
+                Number.isInteger(item.durationDays) &&
+                item.durationDays > 0) ||
+              (typeof item.durationMonths === "number" &&
+                Number.isInteger(item.durationMonths) &&
+                item.durationMonths > 0);
 
-        if (!hasValidPolicy) {
+            if (!hasValidDuration) {
+              throw new Error(
+                `Malformed entitlement policy snapshot for OrderItem '${item.id}': finite license plan requires positive durationDays or durationMonths`,
+              );
+            }
+
+            if (item.durationDays !== null && item.durationDays !== undefined) {
+              if (
+                typeof item.durationDays !== "number" ||
+                !Number.isInteger(item.durationDays) ||
+                item.durationDays <= 0
+              ) {
+                throw new Error(
+                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': durationDays must be a positive integer`,
+                );
+              }
+            }
+
+            if (item.durationMonths !== null && item.durationMonths !== undefined) {
+              if (
+                typeof item.durationMonths !== "number" ||
+                !Number.isInteger(item.durationMonths) ||
+                item.durationMonths <= 0
+              ) {
+                throw new Error(
+                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': durationMonths must be a positive integer`,
+                );
+              }
+            }
+
+            if (item.maxActivations !== null && item.maxActivations !== undefined) {
+              if (
+                typeof item.maxActivations !== "number" ||
+                !Number.isInteger(item.maxActivations) ||
+                item.maxActivations <= 0
+              ) {
+                throw new Error(
+                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': maxActivations must be a positive integer`,
+                );
+              }
+            }
+
+            if (item.updatesDays !== null && item.updatesDays !== undefined) {
+              if (
+                typeof item.updatesDays !== "number" ||
+                !Number.isInteger(item.updatesDays) ||
+                item.updatesDays <= 0
+              ) {
+                throw new Error(
+                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': updatesDays must be a positive integer or null`,
+                );
+              }
+            }
+
+            if (item.supportDays !== null && item.supportDays !== undefined) {
+              if (
+                typeof item.supportDays !== "number" ||
+                !Number.isInteger(item.supportDays) ||
+                item.supportDays <= 0
+              ) {
+                throw new Error(
+                  `Malformed entitlement policy snapshot for OrderItem '${item.id}': supportDays must be a positive integer or null`,
+                );
+              }
+            }
+          }
+          break;
+        }
+        default: {
           throw new Error(
-            `Malformed entitlement policy snapshot for OrderItem '${item.id}': finite license plan requires positive durationDays or durationMonths`,
+            `Unsupported entitlement policy snapshot version '${item.snapshotVersion}' for OrderItem '${item.id}'`,
           );
         }
       }
 
-      // 5. Expiration calculation strictly from item snapshot (ZERO mutable fallback)
+      // 5. Rights calculation strictly from item snapshot (ZERO mutable catalog fallback)
       const activatedAt = new Date();
       const expiresAt = calculateExpirationDate(activatedAt, {
         isLifetime: item.isLifetime,
         durationDays: item.durationDays,
         durationMonths: item.durationMonths,
       });
+
+      const maxActivations: number | null = item.maxActivations ?? null;
+
+      const updatesUntil: Date | null =
+        typeof item.updatesDays === "number" && item.updatesDays > 0
+          ? new Date(activatedAt.getTime() + item.updatesDays * 86400000)
+          : null;
+
+      const supportUntil: Date | null =
+        typeof item.supportDays === "number" && item.supportDays > 0
+          ? new Date(activatedAt.getTime() + item.supportDays * 86400000)
+          : null;
 
       const newId = crypto.randomUUID();
       const metadata = {
@@ -171,6 +257,8 @@ export async function issueEntitlementsForOrder(
         durationDays: item.durationDays,
         durationMonths: item.durationMonths,
         maxActivations: item.maxActivations,
+        updatesDays: item.updatesDays,
+        supportDays: item.supportDays,
         snapshotVersion: item.snapshotVersion,
       };
 
@@ -192,6 +280,9 @@ export async function issueEntitlementsForOrder(
             "quantity",
             "activated_at",
             "expires_at",
+            "max_activations",
+            "updates_until",
+            "support_until",
             "metadata",
             "created_at",
             "updated_at"
@@ -209,6 +300,9 @@ export async function issueEntitlementsForOrder(
             ${item.quantity},
             ${activatedAt},
             ${expiresAt},
+            ${maxActivations},
+            ${updatesUntil},
+            ${supportUntil},
             ${JSON.stringify(metadata)}::jsonb,
             NOW(),
             NOW()
@@ -237,6 +331,9 @@ export async function issueEntitlementsForOrder(
                 quantity: item.quantity,
                 activatedAt,
                 expiresAt,
+                maxActivations,
+                updatesUntil,
+                supportUntil,
                 metadata,
               },
             });
@@ -270,6 +367,9 @@ export async function issueEntitlementsForOrder(
               quantity: item.quantity,
               status: "ACTIVE",
               expiresAt: expiresAt ? expiresAt.toISOString() : null,
+              maxActivations,
+              updatesUntil: updatesUntil ? updatesUntil.toISOString() : null,
+              supportUntil: supportUntil ? supportUntil.toISOString() : null,
               isLifetime: item.isLifetime,
               licensePlanIdAtPurchase: item.licensePlanIdAtPurchase,
               snapshotVersion: item.snapshotVersion,
@@ -298,6 +398,9 @@ export async function issueEntitlementsForOrder(
             activatedAt,
             expiresAt,
             revokedAt: null,
+            maxActivations,
+            updatesUntil,
+            supportUntil,
             metadata: metadata as any,
             createdAt: new Date(),
             updatedAt: new Date(),

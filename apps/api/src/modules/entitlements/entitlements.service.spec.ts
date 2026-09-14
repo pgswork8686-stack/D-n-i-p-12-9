@@ -128,6 +128,51 @@ describe("EntitlementsService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it("throws BadRequestException if snapshotVersion is unsupported (e.g. 99)", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-v99",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-v99",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Future Item",
+            snapshotVersion: 99,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: true,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-v99"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("throws BadRequestException if updatesDays in snapshot is negative", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-bad-upd",
+        status: OrderStatus.PAID,
+        items: [
+          {
+            id: "item-bad-upd",
+            productId: "prod-1",
+            variantId: "var-1",
+            productName: "Bad Updates",
+            snapshotVersion: 1,
+            licensePlanIdAtPurchase: "plan-1",
+            isLifetime: true,
+            updatesDays: -5,
+          },
+        ],
+      });
+
+      await expect(
+        service.issueEntitlementsForOrder("order-bad-upd"),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it("creates entitlements for all items when order is PAID", async () => {
       const mockOrder = {
         id: "order-1",
@@ -421,6 +466,41 @@ describe("EntitlementsService", () => {
       await expect(
         service.revokeEntitlement("ent-missing", "admin-user"),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe("mapToDto", () => {
+    it("maps typed rights correctly including maxActivations, updatesUntil, supportUntil", () => {
+      const now = new Date();
+      const updatesUntil = new Date(now.getTime() + 365 * 86400000);
+      const supportUntil = new Date(now.getTime() + 180 * 86400000);
+
+      const dto = service.mapToDto({
+        id: "ent-1",
+        userId: "user-1",
+        orderId: "order-1",
+        orderItemId: "item-1",
+        productId: "prod-1",
+        variantId: "var-1",
+        productType: ProductType.LICENSED_SOFTWARE,
+        fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+        status: EntitlementStatus.ACTIVE,
+        quantity: 1,
+        activatedAt: now,
+        expiresAt: null,
+        revokedAt: null,
+        maxActivations: 5,
+        updatesUntil,
+        supportUntil,
+        metadata: { sku: "SKU-PRO" },
+        createdAt: now,
+        updatedAt: now,
+      } as any);
+
+      expect(dto.maxActivations).toBe(5);
+      expect(dto.updatesUntil).toBe(updatesUntil.toISOString());
+      expect(dto.supportUntil).toBe(supportUntil.toISOString());
+      expect(dto.expiresAt).toBeNull();
     });
   });
 });

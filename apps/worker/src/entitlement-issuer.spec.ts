@@ -233,6 +233,194 @@ describe("issueEntitlementsForOrder", () => {
     );
   });
 
+  it("fails closed when snapshotVersion is unsupported (e.g. version 99)", async () => {
+    const mockOrder = {
+      id: "ord-unsupported-v",
+      orderNumber: "ORD-UNSUPPORTED",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-unsupported",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "DIGITAL_DOWNLOAD",
+          sku: "SKU-V99",
+          variantName: "Future Plan",
+          productName: "Future Theme",
+          quantity: 1,
+          isLifetime: false,
+          durationDays: 30,
+          durationMonths: null,
+          licensePlanIdAtPurchase: "plan-future",
+          snapshotVersion: 99,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-unsupported-v")).rejects.toThrow(
+      "Unsupported entitlement policy snapshot version '99' for OrderItem 'item-unsupported'",
+    );
+  });
+
+  it("fails closed when maxActivations is non-positive or non-integer", async () => {
+    const mockOrder = {
+      id: "ord-bad-acts",
+      orderNumber: "ORD-BAD-ACTS",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-bad-acts",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "INTERNAL_LICENSE",
+          sku: "SKU-BAD-ACTS",
+          variantName: "Bad Activations",
+          productName: "Theme",
+          quantity: 1,
+          isLifetime: true,
+          durationDays: null,
+          durationMonths: null,
+          maxActivations: -1,
+          licensePlanIdAtPurchase: "plan-bad-acts",
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-bad-acts")).rejects.toThrow(
+      "Malformed entitlement policy snapshot for OrderItem 'item-bad-acts': maxActivations must be a positive integer",
+    );
+  });
+
+  it("fails closed when updatesDays is non-positive or non-integer", async () => {
+    const mockOrder = {
+      id: "ord-bad-updates",
+      orderNumber: "ORD-BAD-UPDATES",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-bad-updates",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "INTERNAL_LICENSE",
+          sku: "SKU-BAD-UPD",
+          variantName: "Bad Updates",
+          productName: "Theme",
+          quantity: 1,
+          isLifetime: true,
+          durationDays: null,
+          durationMonths: null,
+          updatesDays: 0,
+          licensePlanIdAtPurchase: "plan-bad-upd",
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-bad-updates")).rejects.toThrow(
+      "Malformed entitlement policy snapshot for OrderItem 'item-bad-updates': updatesDays must be a positive integer or null",
+    );
+  });
+
+  it("fails closed when supportDays is non-positive or non-integer", async () => {
+    const mockOrder = {
+      id: "ord-bad-support",
+      orderNumber: "ORD-BAD-SUPPORT",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-bad-support",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "INTERNAL_LICENSE",
+          sku: "SKU-BAD-SUP",
+          variantName: "Bad Support",
+          productName: "Theme",
+          quantity: 1,
+          isLifetime: true,
+          durationDays: null,
+          durationMonths: null,
+          supportDays: -10,
+          licensePlanIdAtPurchase: "plan-bad-sup",
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+    await expect(issueEntitlementsForOrder("ord-bad-support")).rejects.toThrow(
+      "Malformed entitlement policy snapshot for OrderItem 'item-bad-support': supportDays must be a positive integer or null",
+    );
+  });
+
+  it("calculates typed rights: maxActivations, updatesUntil, supportUntil from OrderItem snapshot", async () => {
+    const mockOrder = {
+      id: "ord-typed",
+      orderNumber: "ORD-TYPED",
+      userId: "user-1",
+      status: OrderStatus.PAID,
+      items: [
+        {
+          id: "item-typed",
+          productId: "prod-1",
+          variantId: "var-1",
+          productType: "PLUGIN",
+          fulfillmentType: "INTERNAL_LICENSE",
+          sku: "SKU-TYPED",
+          variantName: "Typed Plan",
+          productName: "Plugin Suite",
+          quantity: 1,
+          isLifetime: false,
+          durationDays: 365,
+          durationMonths: null,
+          maxActivations: 3,
+          updatesDays: 365,
+          supportDays: 180,
+          licensePlanIdAtPurchase: "plan-typed",
+          snapshotVersion: 1,
+        },
+      ],
+    };
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+    (prisma.entitlement.findUnique as jest.Mock)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "ent-typed",
+        orderId: "ord-typed",
+        orderItemId: "item-typed",
+        userId: "user-1",
+        status: EntitlementStatus.ACTIVE,
+        maxActivations: 3,
+        updatesUntil: new Date(Date.now() + 365 * 86400000),
+        supportUntil: new Date(Date.now() + 180 * 86400000),
+        expiresAt: new Date(Date.now() + 365 * 86400000),
+      });
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "ent-typed" }]);
+    (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: "audit-typed" });
+
+    const result = await issueEntitlementsForOrder("ord-typed");
+    expect(result.issuedCount).toBe(1);
+    expect(result.entitlements[0].maxActivations).toBe(3);
+    expect(result.entitlements[0].updatesUntil).toBeInstanceOf(Date);
+    expect(result.entitlements[0].supportUntil).toBeInstanceOf(Date);
+  });
+
   it("issues perpetual entitlement when item has no license plan (licensePlanIdAtPurchase is null)", async () => {
     const mockOrder = {
       id: "ord-noplan",

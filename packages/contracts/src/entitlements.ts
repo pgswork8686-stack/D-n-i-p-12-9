@@ -14,6 +14,9 @@ export interface EntitlementDto {
   activatedAt: string;
   expiresAt?: string | null;
   revokedAt?: string | null;
+  maxActivations?: number | null;
+  updatesUntil?: string | null;
+  supportUntil?: string | null;
   metadata?: Record<string, any> | null;
   createdAt: string;
   updatedAt: string;

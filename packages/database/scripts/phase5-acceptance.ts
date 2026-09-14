@@ -94,7 +94,7 @@ function startWorker(workerId: string, pollIntervalMs = "500"): ChildProcess {
 
 async function runAcceptance() {
   console.log("==================================================");
-  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 3 — 26 GATES)");
+  console.log("PHASE 5 — ENTITLEMENT ENGINE LIVE RUNTIME ACCEPTANCE (ROUND 4 — 30 GATES)");
   console.log("==================================================\n");
 
   const customerToken = "dev-customer-token";
@@ -1046,6 +1046,10 @@ async function runAcceptance() {
     if (legacyEnts.length !== 0) {
       throw new Error(`CRITICAL: Silent entitlement created for legacy OrderItem! count=${legacyEnts.length}`);
     }
+    await prisma.outboxEvent.update({
+      where: { id: legacyOutbox.id },
+      data: { status: "FAILED" },
+    });
     console.log("✓ Gate 21 passed: Legacy OrderItem failed closed with explicit error, 0 silent entitlements created\n");
 
     // ----------------------------------------------------
@@ -1117,6 +1121,10 @@ async function runAcceptance() {
     if (malformedEnts.length !== 0) {
       throw new Error(`CRITICAL: Entitlement created for malformed snapshot! count=${malformedEnts.length}`);
     }
+    await prisma.outboxEvent.update({
+      where: { id: malformedOutbox.id },
+      data: { status: "FAILED" },
+    });
     console.log("✓ Gate 22 passed: Malformed finite plan snapshot failed closed with policy validation error\n");
 
     // ----------------------------------------------------
@@ -1148,6 +1156,10 @@ async function runAcceptance() {
     if (!missingProcessed.error?.includes(`Order '${missingOrderId}' not found`)) {
       throw new Error(`Unexpected error message for missing order: ${missingProcessed.error}`);
     }
+    await prisma.outboxEvent.update({
+      where: { id: missingOutbox.id },
+      data: { status: "FAILED" },
+    });
     console.log("✓ Gate 23 passed: Missing order outbox event failed closed, retrying with error logged\n");
 
     // ----------------------------------------------------
@@ -1178,6 +1190,10 @@ async function runAcceptance() {
     if (!mismatchProcessed.error?.includes("does not match aggregateId")) {
       throw new Error(`Unexpected error message for payload mismatch: ${mismatchProcessed.error}`);
     }
+    await prisma.outboxEvent.update({
+      where: { id: mismatchOutbox.id },
+      data: { status: "FAILED" },
+    });
     console.log("✓ Gate 24 passed: Tampered payload orderId rejected with mismatch error\n");
 
     // ----------------------------------------------------
@@ -1244,13 +1260,23 @@ async function runAcceptance() {
     // ----------------------------------------------------
     // Gate 26: Database Schema & Migration Drift Verification
     // ----------------------------------------------------
-    console.log("[Gate 26] Verifying database schema columns & indexes (snapshot_version and @@index([status, expiresAt]))...");
+    console.log("[Gate 26] Verifying database schema columns & indexes...");
     const colCheck = await prisma.$queryRaw<Array<{ column_name: string }>>`
       SELECT column_name FROM information_schema.columns
-      WHERE table_name = 'order_items' AND column_name = 'snapshot_version'
+      WHERE table_name = 'order_items' AND column_name IN ('snapshot_version', 'updates_days', 'support_days')
     `;
-    if (colCheck.length === 0) {
-      throw new Error("Schema drift: Column 'snapshot_version' not found on 'order_items' table");
+    const colNames = colCheck.map((c) => c.column_name);
+    if (!colNames.includes("snapshot_version") || !colNames.includes("updates_days") || !colNames.includes("support_days")) {
+      throw new Error(`Schema drift: OrderItem missing required snapshot columns: ${JSON.stringify(colNames)}`);
+    }
+
+    const entColCheck = await prisma.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'entitlements' AND column_name IN ('max_activations', 'updates_until', 'support_until')
+    `;
+    const entColNames = entColCheck.map((c) => c.column_name);
+    if (!entColNames.includes("max_activations") || !entColNames.includes("updates_until") || !entColNames.includes("support_until")) {
+      throw new Error(`Schema drift: Entitlement missing typed rights columns: ${JSON.stringify(entColNames)}`);
     }
 
     const idxCheck = await prisma.$queryRaw<Array<{ indexname: string }>>`
@@ -1260,10 +1286,333 @@ async function runAcceptance() {
     if (idxCheck.length === 0) {
       throw new Error("Schema drift: Index 'entitlements_status_expires_at_idx' not found on 'entitlements' table");
     }
-    console.log("✓ Gate 26 passed: Schema verified: snapshot_version column and composite status+expiresAt index present\n");
+    console.log("✓ Gate 26 passed: Schema verified: snapshot columns, typed rights columns, and composite index present\n");
+
+    // ----------------------------------------------------
+    // Gate 27: Immutable Purchase Snapshot Drift Regression
+    // ----------------------------------------------------
+    console.log("[Gate 27] Verifying updatesDays/supportDays/maxActivations immutable purchase snapshot drift...");
+    const driftPlan = await prisma.licensePlan.create({
+      data: {
+        id: `plan-drift-${Date.now()}`,
+        name: "Drift Test 365D Plan",
+        durationDays: 365,
+        maxActivations: 3,
+        updatesDays: 365,
+        supportDays: 180,
+        isLifetime: false,
+      },
+    });
+
+    const activeProduct = await prisma.product.findFirst({ where: { status: "ACTIVE" } });
+    if (!activeProduct) throw new Error("No active product found for Gate 27");
+
+    const driftVariant = await prisma.productVariant.create({
+      data: {
+        id: `var-drift-${Date.now()}`,
+        productId: activeProduct.id,
+        sku: `SKU-DRIFT-${Date.now()}`,
+        name: "Drift Test Variant",
+        status: "ACTIVE",
+        licensePlanId: driftPlan.id,
+      },
+    });
+
+    await prisma.productPrice.create({
+      data: {
+        variantId: driftVariant.id,
+        currency: Currency.USD,
+        amount: 2500,
+        billingType: "ONE_TIME",
+        isActive: true,
+      },
+    });
+
+    // Customer 1 checkouts with driftVariant
+    await fetch(`${API_BASE}/cart`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${customerToken}` },
+    });
+    await fetch(`${API_BASE}/cart/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${customerToken}` },
+      body: JSON.stringify({ variantId: driftVariant.id, quantity: 1, currency: "USD" }),
+    });
+
+    const driftCheckoutRes = await fetch(`${API_BASE}/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${customerToken}` },
+      body: JSON.stringify({ currency: "USD" }),
+    });
+    if (!driftCheckoutRes.ok) throw new Error(`Gate 27 checkout failed: ${driftCheckoutRes.status}`);
+    const driftCheckoutData: any = await driftCheckoutRes.json();
+    const driftOrderId = driftCheckoutData.order.id;
+
+    // Verify OrderItem snapshot is exact immediately after checkout
+    const driftOrderItem = await prisma.orderItem.findFirst({
+      where: { orderId: driftOrderId },
+    });
+    if (!driftOrderItem) throw new Error("Gate 27 OrderItem not found in DB");
+    if (
+      driftOrderItem.durationDays !== 365 ||
+      driftOrderItem.maxActivations !== 3 ||
+      driftOrderItem.updatesDays !== 365 ||
+      driftOrderItem.supportDays !== 180 ||
+      driftOrderItem.snapshotVersion !== 1
+    ) {
+      throw new Error(`Gate 27 OrderItem snapshot mismatch: ${JSON.stringify(driftOrderItem)}`);
+    }
+
+    // Mutate catalog LicensePlan BEFORE payment / worker runs!
+    await prisma.licensePlan.update({
+      where: { id: driftPlan.id },
+      data: {
+        durationDays: 30,
+        maxActivations: 1,
+        updatesDays: 30,
+        supportDays: 7,
+      },
+    });
+
+    // Pay order via webhook callback
+    const driftPayment = driftCheckoutData.payment;
+    const paymentCallbackPayload = {
+      paymentId: driftPayment.id,
+      externalEventId: `evt_drift_${Date.now()}`,
+      eventType: "payment.succeeded",
+      amount: driftPayment.amount,
+      currency: "USD",
+    };
+    const driftSig = getTestWebhookSignature(paymentCallbackPayload);
+    const cbRes = await fetch(`${API_BASE}/payments/test-callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-signature": driftSig,
+      },
+      body: JSON.stringify(paymentCallbackPayload),
+    });
+    if (!cbRes.ok) throw new Error(`Gate 27 payment callback failed: ${await cbRes.text()}`);
+
+    // Wait for worker to issue entitlement via ORDER_PAID outbox
+    const g27Start = Date.now();
+    let driftEnt = null;
+    while (Date.now() - g27Start < 15000) {
+      await sleep(300);
+      driftEnt = await prisma.entitlement.findUnique({
+        where: { orderItemId: driftOrderItem.id },
+      });
+      if (driftEnt) break;
+    }
+    if (!driftEnt) throw new Error("Timed out waiting for worker to issue Gate 27 entitlement");
+
+    // Verify entitlement retains exact purchased snapshot rights, NOT newly mutated catalog values!
+    if (driftEnt.maxActivations !== 3) {
+      throw new Error(`Gate 27 expected maxActivations=3 from snapshot, but got ${driftEnt.maxActivations} (catalog was mutated to 1)`);
+    }
+    if (!driftEnt.expiresAt) throw new Error("Gate 27 expected non-null expiresAt");
+    const expDiffDays = Math.round((driftEnt.expiresAt.getTime() - driftEnt.activatedAt.getTime()) / 86400000);
+    if (expDiffDays !== 365) {
+      throw new Error(`Gate 27 expected expiresAt ~365 days, but got ${expDiffDays} days (catalog was mutated to 30)`);
+    }
+    if (!driftEnt.updatesUntil) throw new Error("Gate 27 expected non-null updatesUntil");
+    const updDiffDays = Math.round((driftEnt.updatesUntil.getTime() - driftEnt.activatedAt.getTime()) / 86400000);
+    if (updDiffDays !== 365) {
+      throw new Error(`Gate 27 expected updatesUntil ~365 days, but got ${updDiffDays} days (catalog was mutated to 30)`);
+    }
+    if (!driftEnt.supportUntil) throw new Error("Gate 27 expected non-null supportUntil");
+    const supDiffDays = Math.round((driftEnt.supportUntil.getTime() - driftEnt.activatedAt.getTime()) / 86400000);
+    if (supDiffDays !== 180) {
+      throw new Error(`Gate 27 expected supportUntil ~180 days, but got ${supDiffDays} days (catalog was mutated to 7)`);
+    }
+    console.log("✓ Gate 27 passed: Catalog mutation ignored; entitlement issued with exact purchased snapshot rights\n");
+
+    // ----------------------------------------------------
+    // Gate 28: Unsupported Snapshot Version Fails Closed
+    // ----------------------------------------------------
+    console.log("[Gate 28] Verifying unsupported snapshotVersion (e.g. 99) fails closed...");
+    const unsupportedOrder = await prisma.order.create({
+      data: {
+        id: `ord-v99-${Date.now()}`,
+        orderNumber: `ORD-V99-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    const unsupportedItem = await prisma.orderItem.create({
+      data: {
+        id: `item-v99-${Date.now()}`,
+        orderId: unsupportedOrder.id,
+        productId: activeProduct.id,
+        variantId: driftVariant.id,
+        productName: "Future Version Theme",
+        variantName: "Standard",
+        sku: `SKU-V99-${Date.now()}`,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+        fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        isLifetime: true,
+        snapshotVersion: 99, // UNSUPPORTED FUTURE VERSION
+      },
+    });
+
+    const v99Outbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: unsupportedOrder.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: unsupportedOrder.id },
+        status: "PENDING",
+      },
+    });
+
+    const g28Start = Date.now();
+    let v99Processed = null;
+    while (Date.now() - g28Start < 10000) {
+      await sleep(300);
+      v99Processed = await prisma.outboxEvent.findUnique({ where: { id: v99Outbox.id } });
+      if (v99Processed && v99Processed.retryCount >= 1) break;
+    }
+    if (!v99Processed || v99Processed.status === "PROCESSED") {
+      throw new Error(`Expected unsupported snapshotVersion event to fail, but got status=${v99Processed?.status}`);
+    }
+    if (!v99Processed.error?.includes("Unsupported entitlement policy snapshot version '99'")) {
+      throw new Error(`Unexpected error message for snapshotVersion=99: ${v99Processed.error}`);
+    }
+    const v99Ents = await prisma.entitlement.findMany({ where: { orderItemId: unsupportedItem.id } });
+    if (v99Ents.length !== 0) {
+      throw new Error(`Expected 0 entitlements for unsupported version, found ${v99Ents.length}`);
+    }
+    await prisma.outboxEvent.update({
+      where: { id: v99Outbox.id },
+      data: { status: "FAILED" },
+    });
+    console.log("✓ Gate 28 passed: Unsupported snapshotVersion=99 failed closed, outbox logged error\n");
+
+    // ----------------------------------------------------
+    // Gate 29: Malformed Rights (updatesDays/supportDays/maxActivations) Fail Closed
+    // ----------------------------------------------------
+    console.log("[Gate 29] Verifying malformed updatesDays/supportDays/maxActivations fail closed...");
+    const malformedRightsOrder = await prisma.order.create({
+      data: {
+        id: `ord-malformed-rights-${Date.now()}`,
+        orderNumber: `ORD-MAL-R-${Date.now()}`,
+        userId: customerUser.id,
+        currency: Currency.USD,
+        status: OrderStatus.PAID,
+        subtotalAmount: 1000,
+        discountAmount: 0,
+        totalAmount: 1000,
+      },
+    });
+
+    const malformedItem = await prisma.orderItem.create({
+      data: {
+        id: `item-malformed-rights-${Date.now()}`,
+        orderId: malformedRightsOrder.id,
+        productId: activeProduct.id,
+        variantId: driftVariant.id,
+        productName: "Malformed Rights Theme",
+        variantName: "Standard",
+        sku: `SKU-MAL-R-${Date.now()}`,
+        productType: ProductType.DOWNLOADABLE_ASSET,
+        fulfillmentType: FulfillmentType.DIGITAL_DOWNLOAD,
+        unitAmount: 1000,
+        quantity: 1,
+        lineTotalAmount: 1000,
+        currency: Currency.USD,
+        isLifetime: false,
+        durationDays: 30,
+        licensePlanIdAtPurchase: "plan-malformed",
+        maxActivations: -1, // MALFORMED negative
+        updatesDays: 0,    // MALFORMED zero
+        supportDays: -5,   // MALFORMED negative
+        snapshotVersion: 1,
+      },
+    });
+
+    const malOutbox = await prisma.outboxEvent.create({
+      data: {
+        aggregateType: "Order",
+        aggregateId: malformedRightsOrder.id,
+        eventType: "ORDER_PAID",
+        payload: { orderId: malformedRightsOrder.id },
+        status: "PENDING",
+      },
+    });
+
+    const g29Start = Date.now();
+    let malProcessed = null;
+    while (Date.now() - g29Start < 10000) {
+      await sleep(300);
+      malProcessed = await prisma.outboxEvent.findUnique({ where: { id: malOutbox.id } });
+      if (malProcessed && malProcessed.retryCount >= 1) break;
+    }
+    if (!malProcessed || malProcessed.status === "PROCESSED") {
+      throw new Error(`Expected malformed rights event to fail, but got status=${malProcessed?.status}`);
+    }
+    if (!malProcessed.error?.includes("Malformed entitlement policy snapshot for OrderItem")) {
+      throw new Error(`Unexpected error message for malformed rights: ${malProcessed.error}`);
+    }
+    const malEnts = await prisma.entitlement.findMany({ where: { orderItemId: malformedItem.id } });
+    if (malEnts.length !== 0) {
+      throw new Error(`Expected 0 entitlements for malformed rights, found ${malEnts.length}`);
+    }
+    await prisma.outboxEvent.update({
+      where: { id: malOutbox.id },
+      data: { status: "FAILED" },
+    });
+    console.log("✓ Gate 29 passed: Malformed rights values rejected; 0 corrupted entitlements created\n");
+
+    // ----------------------------------------------------
+    // Gate 30: Entitlement API Returns Typed Purchased-Right Values
+    // ----------------------------------------------------
+    console.log("[Gate 30] Verifying Entitlement API returns typed purchased-right values correctly...");
+    const customerEntRes = await fetch(`${API_BASE}/entitlements/${driftEnt.id}`, {
+      headers: { Authorization: `Bearer ${customerToken}` },
+    });
+    if (!customerEntRes.ok) {
+      throw new Error(`Customer GET /entitlements/${driftEnt.id} failed: ${customerEntRes.status}`);
+    }
+    const customerEntData: any = await customerEntRes.json();
+    if (customerEntData.maxActivations !== 3) {
+      throw new Error(`Customer API expected maxActivations=3, got ${customerEntData.maxActivations}`);
+    }
+    if (!customerEntData.updatesUntil || typeof customerEntData.updatesUntil !== "string") {
+      throw new Error(`Customer API expected updatesUntil ISO string, got ${customerEntData.updatesUntil}`);
+    }
+    if (!customerEntData.supportUntil || typeof customerEntData.supportUntil !== "string") {
+      throw new Error(`Customer API expected supportUntil ISO string, got ${customerEntData.supportUntil}`);
+    }
+    if (!customerEntData.expiresAt || typeof customerEntData.expiresAt !== "string") {
+      throw new Error(`Customer API expected expiresAt ISO string, got ${customerEntData.expiresAt}`);
+    }
+
+    const adminEntRes = await fetch(`${API_BASE}/admin/entitlements/${driftEnt.id}`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    if (!adminEntRes.ok) {
+      throw new Error(`Admin GET /admin/entitlements/${driftEnt.id} failed: ${adminEntRes.status}`);
+    }
+    const adminEntData: any = await adminEntRes.json();
+    if (adminEntData.maxActivations !== 3) {
+      throw new Error(`Admin API expected maxActivations=3, got ${adminEntData.maxActivations}`);
+    }
+    if (!adminEntData.updatesUntil || !adminEntData.supportUntil) {
+      throw new Error("Admin API missing typed rights in response");
+    }
+    console.log("✓ Gate 30 passed: Customer & Admin APIs return authoritative typed rights (maxActivations, updatesUntil, supportUntil)\n");
 
     console.log("==================================================");
-    console.log("ALL 26 PHASE 5 GATES PASSED SUCCESSFULLY!");
+    console.log("ALL 30 PHASE 5 GATES PASSED SUCCESSFULLY!");
     console.log("==================================================");
   } finally {
     if (worker1Process) {

@@ -41,6 +41,7 @@ export class EntitlementsService {
       if (
         err.message?.includes("expected 'PAID'") ||
         err.message?.includes("Missing entitlement policy snapshot") ||
+        err.message?.includes("Unsupported entitlement policy snapshot version") ||
         err.message?.includes("Malformed entitlement policy snapshot")
       ) {
         throw new BadRequestException(err.message);
@@ -232,6 +233,9 @@ export class EntitlementsService {
       activatedAt: e.activatedAt.toISOString(),
       expiresAt: e.expiresAt ? e.expiresAt.toISOString() : null,
       revokedAt: e.revokedAt ? e.revokedAt.toISOString() : null,
+      maxActivations: e.maxActivations ?? null,
+      updatesUntil: e.updatesUntil ? e.updatesUntil.toISOString() : null,
+      supportUntil: e.supportUntil ? e.supportUntil.toISOString() : null,
       metadata: (e.metadata as any) || null,
       createdAt: e.createdAt.toISOString(),
       updatedAt: e.updatedAt.toISOString(),

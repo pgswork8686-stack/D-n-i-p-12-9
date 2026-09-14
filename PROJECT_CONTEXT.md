@@ -92,10 +92,20 @@ Không thiết kế `order → license`.
 
 Phải là:
 ```text
-order → order_item → entitlement → fulfillment strategy
+order → order_item (immutable purchase snapshot) → entitlement (typed rights) → fulfillment strategy
 ```
 
-Entitlement trả lời: khách có quyền dùng gì, bao lâu, bao nhiêu site, được update/support/download tới khi nào. License key chỉ là một loại fulfillment.
+Entitlement trả lời: khách có quyền dùng gì, bao lâu, bao nhiêu site (`maxActivations`), được update (`updatesUntil`) / support (`supportUntil`) / download tới khi nào. License key chỉ là một loại fulfillment.
+
+Fulfillment cụ thể được chia theo từng phase độc lập:
+- Phase 6: Elementor External Managed License (upstream allocation, domain binding)
+- Phase 7: Internal License (activation, deactivation, validation)
+- Phase 8: Download & Version (asset release versions, signed short-lived R2 URLs)
+
+### Legacy Order Policy
+- Các đơn hàng cũ hoặc OrderItem không có `snapshotVersion` (null/0) sẽ fail-closed: **KHÔNG tự suy diễn quyền từ catalog hiện tại**.
+- Không tự ý backfill bằng mutable `LicensePlan`.
+- Quy trình vận hành: Nếu có dữ liệu đơn hàng trả phí trước Phase 5 cần cấp quyền, phải thực hiện explicit manual reconciliation / deterministic backfill script trước khi cutover sang production.
 
 ## Elementor / external managed license
 Không coi mỗi khách là một Elementor key riêng. Hệ thống quản quyền khách bằng entitlement + allocation trên một provider account/upstream subscription.
@@ -144,21 +154,28 @@ Content:
 Operations:
 `tickets, ticket_messages, notifications, outbox_events, automation_runs, audit_logs, idempotency_keys, system_settings`
 
-## Payment flow
+## Payment & Entitlement Flow
 ```text
 Customer
 → Cart
-→ backend recalculates price
-→ Order PENDING_PAYMENT
+→ backend recalculates price & bounds
+→ Order PENDING_PAYMENT + immutable OrderItem snapshots (snapshotVersion=1, licensePlanIdAtPurchase, isLifetime, durationDays, durationMonths, maxActivations, updatesDays, supportDays)
 → Payment provider
 → SIGNED WEBHOOK
 → verify signature
 → idempotency check
-→ DB transaction:
+→ DB transaction (Phase 4):
    Payment SUCCEEDED
    Order PAID
-   create Entitlement
-   create Outbox Event
+   create Outbox Event (ORDER_PAID)
+
+→ Worker Outbox Consumer (Phase 5):
+   first-party worker consumes ORDER_PAID event (FOR UPDATE SKIP LOCKED)
+   → idempotent entitlement issuance
+   → one Entitlement per OrderItem (ON CONFLICT ("order_item_id") DO NOTHING)
+   → immutable purchased-right snapshot (ZERO mutable catalog fallback)
+   → typed rights: maxActivations, updatesUntil, supportUntil
+   → Outbox Event PROCESSED
 ```
 
 Side-effects như email, license generation, affiliate commission chạy qua outbox/worker.
@@ -229,17 +246,22 @@ Màn hình cần bổ sung: Product Detail, Customer Dashboard, Standard Checkou
 
 Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/software account quá rộng, mobile app, Zalo mini app.
 
-## Thứ tự triển khai
-1. Foundation: monorepo, Docker, env/staging, PostgreSQL, Redis, R2, Auth, health checks.
-2. Catalog/Admin: Product, Variant, Price, Product type, Fulfillment strategy, Admin CRUD.
-3. Commerce slice: Cart, Checkout, Order, test payment, Entitlement.
-4. Elementor flow: Product → fake buy → PAID → Entitlement → domain → Allocation PENDING → Admin Confirm → ACTIVE.
-5. Internal License + Download.
-6. Payment production: provider abstraction, signed webhook, idempotency, refund/revoke.
-7. Customer Portal.
-8. CMS + SEO.
-9. n8n Automation.
-10. Growth: affiliate, membership, hosting integration, advanced search.
+## Thứ tự triển khai (Roadmap 15 Phases)
+1. Phase 1 — Foundation (Local setup, Docker, Turbo, NestJS, Next.js, Redis, MinIO)
+2. Phase 2 — Identity, Authentication & RBAC (Supabase Auth, RBAC authority, Audit)
+3. Phase 3 — Catalog & Admin Product (Extensible multi-model product engine, categories, minor-unit money)
+4. Phase 4 — Commerce Core (Cart, Checkout, Order, Outbox pattern, idempotent payment callbacks)
+5. Phase 5 — Entitlement Engine (Immutable purchased rights snapshot, worker-driven issuance, expiration engine, typed rights)
+6. Phase 6 — Elementor External License (Upstream capacity, customer domain allocation, lifecycle management)
+7. Phase 7 — Internal License (Offline activation, cryptographically verifiable tokens, domain limits)
+8. Phase 8 — Download & Version (Private asset versioning, signed R2 download tokens, rate limits)
+9. Phase 9 — Production Payment (Stripe, VietQR, OpenBanking, automated reconciliations)
+10. Phase 10 — Customer Portal (License center, download hub, domain binding GUI)
+11. Phase 11 — CMS & SEO (Editorial content, programmatic SEO, dynamic metadata)
+12. Phase 12 — n8n Automation (AI-assisted drafts, operational notifications)
+13. Phase 13 — Affiliate & Membership (Tiered access, recurring entitlements, referral tracking)
+14. Phase 14 — Hosting Integration (cPanel/DirectAdmin/Cloudflare automation)
+15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
