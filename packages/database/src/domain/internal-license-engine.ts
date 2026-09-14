@@ -23,6 +23,7 @@ import {
   ValidateLicenseResponse,
   DeactivateLicenseResponse,
   AdminLicenseDto,
+  AdminLicenseRevokeReason,
 } from "@nexus/contracts";
 
 export class InternalLicenseEngineError extends Error {
@@ -655,21 +656,51 @@ export async function getCustomerLicense(
   };
 }
 
+export const ALLOWED_ADMIN_REVOKE_REASONS: AdminLicenseRevokeReason[] = [
+  "ADMINISTRATIVE",
+  "REFUND",
+  "FRAUD",
+  "SUPPORT",
+  "SECURITY",
+  "OTHER",
+];
+
 export interface AdminRevokeLicenseParams {
   licenseId: string;
   actorId: string;
-  reason?: string;
+  reasonCode?: AdminLicenseRevokeReason | string;
 }
 
 /**
  * Admin manual revocation of internal license fulfillment record.
  * Requires license.manage permission.
  * Deactivates all currently active activations.
+ * Records typed reasonCode only; never stores plaintext keys or free-form secrets.
  */
 export async function adminRevokeLicense(
   params: AdminRevokeLicenseParams,
   db: PrismaClient = prisma,
 ): Promise<AdminLicenseDto> {
+  // Validate reasonCode safely (fail closed if secret pattern or invalid value)
+  let safeReasonCode: AdminLicenseRevokeReason = "ADMINISTRATIVE";
+  if (params.reasonCode) {
+    if (
+      typeof params.reasonCode === "string" &&
+      /NXS-(?:[0-9A-F]{4}-){7}[0-9A-F]{4}/i.test(params.reasonCode)
+    ) {
+      throw new InternalLicenseEngineError("Invalid revoke reason code", 400);
+    }
+
+    if (
+      !ALLOWED_ADMIN_REVOKE_REASONS.includes(
+        params.reasonCode as AdminLicenseRevokeReason,
+      )
+    ) {
+      throw new InternalLicenseEngineError("Invalid revoke reason code", 400);
+    }
+    safeReasonCode = params.reasonCode as AdminLicenseRevokeReason;
+  }
+
   return db.$transaction(async (tx) => {
     const licenseRows = await tx.$queryRaw<
       Array<{
@@ -738,7 +769,7 @@ export async function adminRevokeLicense(
       },
     });
 
-    // Record transactional audit log (exactly once)
+    // Record transactional audit log (exactly once with typed reasonCode only)
     await tx.auditLog.create({
       data: {
         action: "INTERNAL_LICENSE_REVOKED",
@@ -749,7 +780,7 @@ export async function adminRevokeLicense(
           licenseId: license.id,
           entitlementId: license.entitlement_id,
           keyLast4: license.key_last4,
-          reason: params.reason || "Administrative revocation",
+          reasonCode: safeReasonCode,
         },
       },
     });

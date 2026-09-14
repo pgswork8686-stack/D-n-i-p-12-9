@@ -150,7 +150,7 @@ export class LicensesService {
       return await adminRevokeLicense({
         licenseId,
         actorId,
-        reason: dto?.reason,
+        reasonCode: dto?.reasonCode,
       });
     } catch (err) {
       this.handleError(err);

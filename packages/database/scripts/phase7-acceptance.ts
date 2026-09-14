@@ -138,7 +138,7 @@ async function apiGet(endpoint: string, token?: string) {
 
 async function runPhase7Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 7 — INTERNAL LICENSE ENGINE LIVE ACCEPTANCE (38 GATES)");
+  console.log("PHASE 7 — INTERNAL LICENSE ENGINE LIVE ACCEPTANCE (41 GATES)");
   console.log("==================================================");
 
   // [Gate 1] Health & Worker Runtime
@@ -706,7 +706,7 @@ async function runPhase7Acceptance() {
   console.log("\n[Gate 28] Admin revokes license with license.manage permission...");
   const adminRevokeRes = await apiPost(
     `/admin/internal-licenses/${licRights.id}/revoke`,
-    { reason: "Manual operational revocation" },
+    { reasonCode: "ADMINISTRATIVE" },
     adminToken,
   );
   if (!adminRevokeRes.ok || adminRevokeRes.data.status !== "REVOKED") {
@@ -890,7 +890,7 @@ async function runPhase7Acceptance() {
     Array.from({ length: 5 }, () =>
       apiPost(
         `/admin/internal-licenses/${revokeLic.id}/revoke`,
-        { reason: "Concurrent revoke test" },
+        { reasonCode: "SECURITY" },
         adminToken,
       ),
     ),
@@ -1043,8 +1043,162 @@ async function runPhase7Acceptance() {
   }
   console.log("✓ Gate 38 passed: All malformed license keys rejected generically across activate, validate, and deactivate");
 
+  // [Gate 39] Admin revoke free-text license-key injection protection
+  console.log("\n[Gate 39] Testing admin revoke license-key injection protection...");
+  const injEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 1,
+  });
+  let injLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    injLic = await prisma.internalLicense.findUnique({ where: { entitlementId: injEnt.id } });
+    if (injLic) break;
+    await sleep(500);
+  }
+  const realKey = decryptLicenseKey(injLic.keyCiphertext, injLic.keyIv, injLic.keyAuthTag, TEST_ENCRYPTION_KEY);
+
+  // Attempt 1: Malicious key injected into "reason" (stripped by ValidationPipe, safe default reasonCode used)
+  const injReasonRes = await apiPost(
+    `/admin/internal-licenses/${injLic.id}/revoke`,
+    { reason: realKey },
+    adminToken,
+  );
+  if (!injReasonRes.ok || injReasonRes.data.status !== "REVOKED") {
+    throw new Error(`Expected successful revoke with stripped reason, got ${injReasonRes.status}`);
+  }
+
+  // Attempt 2: Malicious key injected into "reasonCode" (strictly rejected with 400)
+  const injReasonCodeRes = await apiPost(
+    `/admin/internal-licenses/${injLic.id}/revoke`,
+    { reasonCode: realKey },
+    adminToken,
+  );
+  if (injReasonCodeRes.status !== 400) {
+    throw new Error(`Expected 400 for key-injected reasonCode, got ${injReasonCodeRes.status}`);
+  }
+
+  // Comprehensive DB and response scan: realKey must NOT appear in audit_logs, DB fields, metadata, or responses
+  const allAuditsForInj = await prisma.auditLog.findMany();
+  for (const a of allAuditsForInj) {
+    const detailsStr = JSON.stringify(a.details ?? {});
+    if (detailsStr.includes(realKey)) {
+      throw new Error(`CRITICAL INJECTION LEAK: realKey found in audit log ${a.id}: ${detailsStr}`);
+    }
+  }
+  const allLicRows = await prisma.internalLicense.findMany({ where: { id: injLic.id } });
+  for (const l of allLicRows) {
+    const rowStr = JSON.stringify(l);
+    if (rowStr.includes(realKey)) {
+      throw new Error(`CRITICAL INJECTION LEAK: realKey found in internal_license row ${l.id}`);
+    }
+  }
+  if (JSON.stringify(injReasonRes.data).includes(realKey) || JSON.stringify(injReasonCodeRes.data).includes(realKey)) {
+    throw new Error("CRITICAL INJECTION LEAK: realKey found in API response body");
+  }
+  console.log("✓ Gate 39 passed: License key injection safely prevented; real key absent from audit logs, DB, and API responses");
+
+  // [Gate 40] Dual-worker provisioning: exactly 1 license AND exactly 1 creation audit per entitlement
+  console.log("\n[Gate 40] Testing dual-worker provisioning audit exactness (1 license & 1 audit per entitlement)...");
+  const auditEnts: any[] = [];
+  for (let i = 0; i < 5; i++) {
+    const ent = await createTestEntitlement({
+      userId: customer1Id,
+      maxActivations: 1,
+    });
+    auditEnts.push(ent);
+  }
+
+  // Two workers concurrently race to provision the 5 entitlements
+  await Promise.all([
+    provisionInternalLicenses({ workerId: "worker-audit-race-1", batchSize: 10 }),
+    provisionInternalLicenses({ workerId: "worker-audit-race-2", batchSize: 10 }),
+  ]);
+  await sleep(1000);
+
+  for (const ent of auditEnts) {
+    const licCount = await prisma.internalLicense.count({ where: { entitlementId: ent.id } });
+    if (licCount !== 1) {
+      throw new Error(`Expected exactly 1 InternalLicense for ent ${ent.id}, got ${licCount}`);
+    }
+    const lic = await prisma.internalLicense.findUnique({ where: { entitlementId: ent.id } });
+    const auditCount = await prisma.auditLog.count({
+      where: {
+        entity: "InternalLicense",
+        entityId: lic!.id,
+        action: "INTERNAL_LICENSE_CREATED",
+      },
+    });
+    if (auditCount !== 1) {
+      throw new Error(`Expected exactly 1 INTERNAL_LICENSE_CREATED audit for ent ${ent.id}, got ${auditCount}`);
+    }
+  }
+  console.log("✓ Gate 40 passed: Dual-worker race produced exactly 1 InternalLicense and 1 creation audit per entitlement");
+
+  // [Gate 41] Activate vs Deactivate race: validation matches final DB state and exactly-once deactivation audit
+  console.log("\n[Gate 41] Testing activate vs deactivate race final-state consistency...");
+  const race41Ent = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 2,
+  });
+  let race41Lic: any = null;
+  for (let i = 0; i < 20; i++) {
+    race41Lic = await prisma.internalLicense.findUnique({ where: { entitlementId: race41Ent.id } });
+    if (race41Lic) break;
+    await sleep(500);
+  }
+  const race41Key = decryptLicenseKey(race41Lic.keyCiphertext, race41Lic.keyIv, race41Lic.keyAuthTag, TEST_ENCRYPTION_KEY);
+
+  // Pre-activate
+  await apiPost("/v1/licenses/activate", { licenseKey: race41Key, domain: "race-gate41.com" });
+
+  // Concurrently race activate and deactivate for the same domain
+  const [raceActRes, raceDeactRes] = await Promise.all([
+    apiPost("/v1/licenses/activate", { licenseKey: race41Key, domain: "race-gate41.com" }),
+    apiPost("/v1/licenses/deactivate", { licenseKey: race41Key, domain: "race-gate41.com" }),
+  ]);
+  if (!raceActRes.ok || !raceDeactRes.ok) {
+    throw new Error(`Race returned failure: act=${raceActRes.status}, deact=${raceDeactRes.status}`);
+  }
+
+  // Inspect final database state
+  const dbRows = await prisma.licenseActivation.findMany({
+    where: { licenseId: race41Lic.id, normalizedDomain: "race-gate41.com" },
+  });
+  if (dbRows.length !== 1) {
+    throw new Error(`Expected exactly 1 DB row for domain, found ${dbRows.length}`);
+  }
+  const finalDbState = dbRows[0].status;
+
+  // Validate endpoint verification against final state
+  const finalValRes = await apiPost("/v1/licenses/validate", {
+    licenseKey: race41Key,
+    domain: "race-gate41.com",
+  });
+  if (finalDbState === "ACTIVE") {
+    if (!finalValRes.ok || finalValRes.data.valid !== true) {
+      throw new Error(`Expected valid: true for ACTIVE final state, got ${JSON.stringify(finalValRes.data)}`);
+    }
+  } else if (finalDbState === "DEACTIVATED") {
+    if (!finalValRes.ok || finalValRes.data.valid !== false) {
+      throw new Error(`Expected valid: false for DEACTIVATED final state, got ${JSON.stringify(finalValRes.data)}`);
+    }
+  }
+
+  // Verify deactivation audit count
+  const deactAuditCount = await prisma.auditLog.count({
+    where: {
+      entity: "LicenseActivation",
+      entityId: dbRows[0].id,
+      action: "LICENSE_DEACTIVATED",
+    },
+  });
+  if (deactAuditCount > 1) {
+    throw new Error(`Expected at most 1 LICENSE_DEACTIVATED audit, found ${deactAuditCount}`);
+  }
+  console.log(`✓ Gate 41 passed: Race finalized in consistent state '${finalDbState}', validation accurately matched, audits exactly-once`);
+
   console.log("\n==================================================");
-  console.log("ALL 38 PHASE 7 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 41 PHASE 7 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

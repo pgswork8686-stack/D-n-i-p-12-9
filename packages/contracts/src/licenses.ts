@@ -76,3 +76,16 @@ export interface AdminLicenseDto {
   updatedAt: string;
   revokedAt: string | null;
 }
+
+export type AdminLicenseRevokeReason =
+  | "ADMINISTRATIVE"
+  | "REFUND"
+  | "FRAUD"
+  | "SUPPORT"
+  | "SECURITY"
+  | "OTHER";
+
+export interface AdminRevokeLicenseRequest {
+  reasonCode?: AdminLicenseRevokeReason;
+}
+

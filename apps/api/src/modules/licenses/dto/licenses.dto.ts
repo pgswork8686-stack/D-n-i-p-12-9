@@ -1,8 +1,10 @@
-import { IsNotEmpty, IsString, IsOptional } from "class-validator";
+import { IsNotEmpty, IsString, IsOptional, IsEnum } from "class-validator";
 import {
   ActivateLicenseRequest,
   ValidateLicenseRequest,
   DeactivateLicenseRequest,
+  AdminLicenseRevokeReason,
+  AdminRevokeLicenseRequest,
 } from "@nexus/contracts";
 
 export class ActivateLicenseDto implements ActivateLicenseRequest {
@@ -35,8 +37,21 @@ export class DeactivateLicenseDto implements DeactivateLicenseRequest {
   domain!: string;
 }
 
-export class AdminRevokeLicenseDto {
-  @IsOptional()
-  @IsString({ message: "reason must be a string" })
-  reason?: string;
+export enum AdminLicenseRevokeReasonEnum {
+  ADMINISTRATIVE = "ADMINISTRATIVE",
+  REFUND = "REFUND",
+  FRAUD = "FRAUD",
+  SUPPORT = "SUPPORT",
+  SECURITY = "SECURITY",
+  OTHER = "OTHER",
 }
+
+export class AdminRevokeLicenseDto implements AdminRevokeLicenseRequest {
+  @IsOptional()
+  @IsEnum(AdminLicenseRevokeReasonEnum, {
+    message:
+      "reasonCode must be a valid AdminLicenseRevokeReason (ADMINISTRATIVE, REFUND, FRAUD, SUPPORT, SECURITY, OTHER)",
+  })
+  reasonCode?: AdminLicenseRevokeReason;
+}
+
