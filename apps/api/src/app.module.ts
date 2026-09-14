@@ -11,6 +11,7 @@ import { CatalogModule } from "./modules/catalog/catalog.module";
 import { CartModule } from "./modules/cart/cart.module";
 import { OrdersModule } from "./modules/orders/orders.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
+import { EntitlementsModule } from "./modules/entitlements/entitlements.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -28,6 +29,7 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     CartModule,
     OrdersModule,
     PaymentsModule,
+    EntitlementsModule,
     HealthModule,
     StorageModule,
     AuthModule,

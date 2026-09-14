@@ -1,4 +1,5 @@
 import { prisma, OutboxEventStatus } from "@nexus/database";
+import { issueEntitlementsForOrder } from "./entitlement-issuer";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -116,10 +117,30 @@ export async function processOutboxEvents(
     );
 
     try {
-      // Strictly foundational logging in Phase 4:
-      // NO entitlement creation (Phase 5)
+      // Phase 5: Authoritatively issue entitlements for ORDER_PAID events
+      // Strictly foundational in Phase 5:
       // NO license allocation (Phase 6)
       // NO license key generation (Phase 7)
+      if (event.eventType === "ORDER_PAID") {
+        if (event.aggregateType !== "Order") {
+          throw new Error(
+            `Invalid aggregateType '${event.aggregateType}' for eventType 'ORDER_PAID', expected 'Order'`,
+          );
+        }
+
+        const authoritativeOrderId = event.aggregateId;
+        const payloadOrderId = (event.payload as any)?.orderId;
+
+        if (payloadOrderId && payloadOrderId !== authoritativeOrderId) {
+          throw new Error(
+            `Payload orderId '${payloadOrderId}' does not match aggregateId '${authoritativeOrderId}'`,
+          );
+        }
+
+        await issueEntitlementsForOrder(authoritativeOrderId);
+      } else {
+        throw new Error(`Unsupported outbox event type '${event.eventType}'`);
+      }
 
       const finalizeResult = await prisma.outboxEvent.updateMany({
         where: {

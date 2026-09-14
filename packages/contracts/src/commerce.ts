@@ -66,6 +66,14 @@ export interface OrderItemDto {
   quantity: number;
   lineTotalAmount: number;
   currency: Currency;
+  licensePlanIdAtPurchase?: string | null;
+  isLifetime?: boolean;
+  durationDays?: number | null;
+  durationMonths?: number | null;
+  maxActivations?: number | null;
+  updatesDays?: number | null;
+  supportDays?: number | null;
+  snapshotVersion?: number | null;
   metadata?: Record<string, any> | null;
   createdAt: string;
 }

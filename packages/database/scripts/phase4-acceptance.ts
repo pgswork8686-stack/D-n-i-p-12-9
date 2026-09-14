@@ -1,10 +1,50 @@
 import * as crypto from "node:crypto";
+import { spawn, ChildProcess } from "node:child_process";
+import * as path from "node:path";
 import { prisma } from "../src/client";
 import { processOutboxEvents } from "../../../apps/worker/src/outbox-processor";
 
 const API_BASE = process.env.API_URL || "http://localhost:4000";
 const TEST_WEBHOOK_SECRET =
   process.env.TEST_PAYMENT_WEBHOOK_SECRET || "change-me-local-only";
+
+let apiProcess: ChildProcess | null = null;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureApiRunning(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    if (res.ok) {
+      return;
+    }
+  } catch {
+    // Not running
+  }
+
+  console.log("Starting API server child process on port 4000...");
+  apiProcess = spawn("node", [path.resolve(__dirname, "../../../apps/api/dist/main.js")], {
+    stdio: "pipe",
+    env: { ...process.env, PORT: "4000" },
+  });
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < 30000) {
+    await sleep(500);
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) {
+        console.log("API server is ready!");
+        return;
+      }
+    } catch {
+      // Keep waiting
+    }
+  }
+  throw new Error("Timed out waiting for API server to start");
+}
 
 function getTestWebhookSignature(payload: {
   externalEventId: string;
@@ -22,6 +62,8 @@ async function runAcceptance() {
   console.log("==================================================");
   console.log("PHASE 4 — COMMERCE CORE LIVE RUNTIME ACCEPTANCE");
   console.log("==================================================\n");
+
+  await ensureApiRunning();
 
   const customerToken = "dev-customer-token";
   const customer2Token = "dev-no-email:sub_dev_customer_002";
@@ -616,40 +658,60 @@ async function runAcceptance() {
   console.log(
     "\n[Gate 15] Concurrency probe: Multi-worker outbox processing with SKIP LOCKED...",
   );
+  const probeOrderIds = [
+    `probe-ord-1-${Date.now()}`,
+    `probe-ord-2-${Date.now()}`,
+    `probe-ord-3-${Date.now()}`,
+    `probe-ord-4-${Date.now()}`,
+  ];
+  for (let i = 0; i < 4; i++) {
+    await prisma.order.create({
+      data: {
+        id: probeOrderIds[i],
+        orderNumber: `ORD-PROBE-${Date.now()}-${i}`,
+        userId: dataB.order.userId,
+        currency: "USD",
+        status: "PAID",
+        subtotalAmount: 0,
+        discountAmount: 0,
+        totalAmount: 0,
+      },
+    });
+  }
   const dummyEvents = await prisma.$transaction([
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-1-${Date.now()}`,
+        aggregateId: probeOrderIds[0],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 1 },
+        payload: { orderId: probeOrderIds[0], testWorker: 1 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-2-${Date.now()}`,
+        aggregateId: probeOrderIds[1],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 2 },
+        payload: { orderId: probeOrderIds[1], testWorker: 2 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-3-${Date.now()}`,
+        aggregateId: probeOrderIds[2],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 3 },
+        payload: { orderId: probeOrderIds[2], testWorker: 3 },
         status: "PENDING",
       },
     }),
     prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: `probe-agg-4-${Date.now()}`,
+        aggregateId: probeOrderIds[3],
         eventType: "ORDER_PAID",
-        payload: { testWorker: 4 },
+        payload: { orderId: probeOrderIds[3], testWorker: 4 },
         status: "PENDING",
       },
     }),
@@ -1202,12 +1264,25 @@ async function runAcceptance() {
   console.log(
     "\n[Gate 22] Outbox Stale Lease: Stale worker cannot finalize reclaimed event...",
   );
+  const staleOrderId = `stale-order-${Date.now()}`;
+  await prisma.order.create({
+    data: {
+      id: staleOrderId,
+      orderNumber: `ORD-STALE-${Date.now()}`,
+      userId: dataB.order.userId,
+      currency: "USD",
+      status: "PAID",
+      subtotalAmount: 0,
+      discountAmount: 0,
+      totalAmount: 0,
+    },
+  });
   const staleEvent = await prisma.outboxEvent.create({
     data: {
       aggregateType: "Order",
-      aggregateId: `stale-order-${Date.now()}`,
+      aggregateId: staleOrderId,
       eventType: "ORDER_PAID",
-      payload: { test: "lease" },
+      payload: { orderId: staleOrderId, test: "lease" },
       status: "PROCESSING",
       lockOwner: "worker-stale-old",
       lockedAt: new Date(Date.now() - 3600 * 1000),
@@ -1338,7 +1413,7 @@ async function runAcceptance() {
   });
 
   const variant2 = targetProduct.variants.find(
-    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+    (v: any) => v.id !== targetVariant.id && (v.status === "ACTIVE" || !v.status) && v.prices?.some((p: any) => p.currency === "USD" && (p.isActive ?? true)),
   ) || targetVariant;
 
   const [resCheckoutG24, resPostG24] = await Promise.all([
@@ -1436,7 +1511,7 @@ async function runAcceptance() {
   });
 
   const variantToDel = targetProduct.variants.find(
-    (v: any) => v.id !== targetVariant.id && v.status === "ACTIVE" && v.prices?.some((p: any) => p.currency === "USD" && p.isActive),
+    (v: any) => v.id !== targetVariant.id && (v.status === "ACTIVE" || !v.status) && v.prices?.some((p: any) => p.currency === "USD" && (p.isActive ?? true)),
   ) || targetVariant;
 
   const addG25Res = await fetch(`${API_BASE}/cart/items`, {
@@ -1857,11 +1932,13 @@ async function runAcceptance() {
 
 runAcceptance()
   .then(async () => {
+    if (apiProcess) apiProcess.kill("SIGTERM");
     await prisma.$disconnect();
     process.exit(0);
   })
   .catch(async (err) => {
     console.error("\n❌ RUNTIME ACCEPTANCE FAILED:", err);
+    if (apiProcess) apiProcess.kill("SIGTERM");
     await prisma.$disconnect();
     process.exit(1);
   });
