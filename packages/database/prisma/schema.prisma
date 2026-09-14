@@ -22,6 +22,8 @@ model User {
   idempotencyKeys    IdempotencyKey[]
   entitlements       Entitlement[]
   licenseAllocations LicenseAllocation[]
+  internalLicenses   InternalLicense[]
+  licenseActivations LicenseActivation[]
 
   @@map("users")
 }
@@ -211,6 +213,7 @@ model Product {
   media        ProductMedia[]
   orderItems   OrderItem[]
   entitlements Entitlement[]
+  internalLicenses InternalLicense[]
 
   @@index([status])
   @@index([productType])
@@ -236,6 +239,7 @@ model ProductVariant {
   cartItems    CartItem[]
   orderItems   OrderItem[]
   entitlements Entitlement[]
+  internalLicenses InternalLicense[]
 
   @@index([productId])
   @@index([sku])
@@ -585,6 +589,7 @@ model Entitlement {
   product     Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
   variant     ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Restrict)
   allocations LicenseAllocation[]
+  internalLicense InternalLicense?
 
   @@index([userId])
   @@index([orderId])
@@ -686,4 +691,70 @@ model LicenseAllocation {
   @@index([status])
   @@index([normalizedDomain])
   @@map("license_allocations")
+}
+
+// --------------------------------------------------------
+// Phase 7 — Internal License Engine Models
+// --------------------------------------------------------
+
+enum LicenseStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum LicenseActivationStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+model InternalLicense {
+  id            String        @id @default(uuid())
+  entitlementId String        @unique @map("entitlement_id")
+  userId        String        @map("user_id")
+  productId     String        @map("product_id")
+  variantId     String        @map("variant_id")
+  status        LicenseStatus @default(ACTIVE)
+  keyHash       String        @unique @map("key_hash")
+  keyCiphertext String        @map("key_ciphertext")
+  keyIv         String        @map("key_iv")
+  keyAuthTag    String        @map("key_auth_tag")
+  keyLast4      String        @map("key_last4")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  revokedAt     DateTime?     @map("revoked_at")
+
+  entitlement Entitlement         @relation(fields: [entitlementId], references: [id], onDelete: Restrict)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  product     Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant     ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  activations LicenseActivation[]
+
+  @@index([userId])
+  @@index([productId])
+  @@index([variantId])
+  @@index([status])
+  @@map("internal_licenses")
+}
+
+model LicenseActivation {
+  id               String                  @id @default(uuid())
+  licenseId        String                  @map("license_id")
+  userId           String                  @map("user_id")
+  normalizedDomain String                  @map("normalized_domain")
+  status           LicenseActivationStatus @default(ACTIVE)
+  activatedAt      DateTime                @default(now()) @map("activated_at")
+  deactivatedAt    DateTime?               @map("deactivated_at")
+  lastValidatedAt  DateTime?               @map("last_validated_at")
+  metadata         Json?
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  license InternalLicense @relation(fields: [licenseId], references: [id], onDelete: Restrict)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([licenseId])
+  @@index([userId])
+  @@index([status])
+  @@index([normalizedDomain])
+  @@map("license_activations")
 }

@@ -19,9 +19,11 @@
     "acceptance:phase4": "ts-node scripts/phase4-acceptance.ts",
     "acceptance:phase5": "ts-node scripts/phase5-acceptance.ts",
     "acceptance:phase6": "ts-node scripts/phase6-acceptance.ts",
+    "acceptance:phase7": "ts-node scripts/phase7-acceptance.ts",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {
+    "@nexus/contracts": "workspace:*",
     "@nexus/utils": "workspace:*",
     "@prisma/client": "^6.4.1",
     "dotenv": "^16.4.7"

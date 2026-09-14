@@ -6,6 +6,10 @@ import { processSystemJob } from "./processor";
 import { processOutboxEvents } from "./outbox-processor";
 import { expireDueEntitlements } from "./entitlement-issuer";
 import { reconcileExternalAllocations } from "./allocation-reconciler";
+import {
+  provisionInternalLicenses,
+  reconcileInternalLicenses,
+} from "./license-provisioner";
 
 
 // Load root .env file
@@ -89,6 +93,12 @@ const runPollingTick = async () => {
 
     // 3. Authoritative reconciliation of external allocations whose parent entitlement is REVOKED or EXPIRED
     await reconcileExternalAllocations({ workerId });
+
+    // 4. Authoritative provisioning of internal licenses for active INTERNAL_LICENSE entitlements
+    await provisionInternalLicenses({ workerId });
+
+    // 5. Authoritative reconciliation of internal licenses whose parent entitlement is REVOKED or EXPIRED
+    await reconcileInternalLicenses({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({
