@@ -110,9 +110,21 @@ async function apiGet(endpoint: string, token?: string) {
   return { status: res.status, ok: res.ok, data };
 }
 
+async function apiPatch(endpoint: string, body: any, token?: string) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const data: any = await res.json().catch(() => null);
+  return { status: res.status, ok: res.ok, data };
+}
+
 async function runPhase6Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 6 — ELEMENTOR EXTERNAL LICENSE LIVE ACCEPTANCE (22 GATES)");
+  console.log("PHASE 6 — ELEMENTOR EXTERNAL LICENSE LIVE ACCEPTANCE (30 GATES)");
   console.log("==================================================");
 
   // [Gate 1] Health & Worker Runtime
@@ -676,8 +688,318 @@ async function runPhase6Acceptance() {
   }
   console.log("✓ Gate 22 passed: Zero provider credentials or secrets exposed in API responses");
 
+  // [Gate 23] DEACTIVATION_PENDING still consumes provider seat
+  console.log("\n[Gate 23] Verifying DEACTIVATION_PENDING still consumes provider seat...");
+  const paGate23Res = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Elementor 2-Seat DeactPending Test ${runId}`,
+      totalCapacity: 2,
+    },
+    adminToken,
+  );
+  const paGate23 = paGate23Res.data;
+
+  const entGate23 = await createTestEntitlement({ userId: customer1Id, maxActivations: 3 });
+  const allocA = (await apiPost(`/entitlements/${entGate23.id}/allocations`, { domain: `deact-pending-a-${runId}.com` }, customer1Token)).data;
+  const allocB = (await apiPost(`/entitlements/${entGate23.id}/allocations`, { domain: `deact-pending-b-${runId}.com` }, customer1Token)).data;
+  const allocC = (await apiPost(`/entitlements/${entGate23.id}/allocations`, { domain: `deact-pending-c-${runId}.com` }, customer1Token)).data;
+
+  // Activate A and B -> consumed = 2/2 -> account becomes EXHAUSTED
+  await apiPost(`/admin/license-allocations/${allocA.id}/activate`, { providerAccountId: paGate23.id }, adminToken);
+  await apiPost(`/admin/license-allocations/${allocB.id}/activate`, { providerAccountId: paGate23.id }, adminToken);
+
+  // Move A to DEACTIVATION_PENDING
+  const deactARes = await apiPost(
+    `/entitlements/${entGate23.id}/allocations/${allocA.id}/request-deactivation`,
+    { reason: "Domain moving" },
+    customer1Token,
+  );
+  if (deactARes.data.status !== "DEACTIVATION_PENDING") {
+    throw new Error(`Gate 23 failed: allocation A not in DEACTIVATION_PENDING: ${JSON.stringify(deactARes.data)}`);
+  }
+
+  // Check provider account: consumed must still be 2, available 0, status EXHAUSTED
+  const checkPa23 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
+  if (checkPa23.activeAllocationsCount !== 2 || checkPa23.availableCapacity !== 0 || checkPa23.status !== "EXHAUSTED") {
+    throw new Error(`Gate 23 failed: expected consumed=2, available=0, status=EXHAUSTED. Got: ${JSON.stringify(checkPa23)}`);
+  }
+
+  // Attempting to activate C must fail with 409 capacity exhausted
+  const actCRes = await apiPost(
+    `/admin/license-allocations/${allocC.id}/activate`,
+    { providerAccountId: paGate23.id },
+    adminToken,
+  );
+  if (actCRes.status !== 409) {
+    throw new Error(`Gate 23 failed: expected 409 capacity exhausted for alloc C, got ${actCRes.status}`);
+  }
+  console.log("✓ Gate 23 passed: DEACTIVATION_PENDING still consumes provider capacity and preserves EXHAUSTED status (409 on new activation)");
+
+  // [Gate 24] confirm DEACTIVATED releases provider seat
+  console.log("\n[Gate 24] Verifying confirm DEACTIVATED releases provider seat...");
+  // Confirm deactivation of A -> A becomes DEACTIVATED
+  const confDeactARes = await apiPost(
+    `/admin/license-allocations/${allocA.id}/confirm-deactivated`,
+    { notes: "Removed from dashboard" },
+    adminToken,
+  );
+  if (confDeactARes.data.status !== "DEACTIVATED") {
+    throw new Error(`Gate 24 failed: allocation A not DEACTIVATED: ${JSON.stringify(confDeactARes.data)}`);
+  }
+
+  // Check provider account: consumed is now 1, available is 1, status is ACTIVE
+  const checkPa24 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
+  if (checkPa24.activeAllocationsCount !== 1 || checkPa24.availableCapacity !== 1 || checkPa24.status !== "ACTIVE") {
+    throw new Error(`Gate 24 failed: expected consumed=1, available=1, status=ACTIVE. Got: ${JSON.stringify(checkPa24)}`);
+  }
+
+  // Now activation of C must succeed!
+  const actCSuccessRes = await apiPost(
+    `/admin/license-allocations/${allocC.id}/activate`,
+    { providerAccountId: paGate23.id },
+    adminToken,
+  );
+  if (!actCSuccessRes.ok || actCSuccessRes.data.status !== "ACTIVE") {
+    throw new Error(`Gate 24 failed: expected alloc C to activate, got status ${actCSuccessRes.status}`);
+  }
+
+  const finalPa24 = (await apiGet(`/admin/provider-accounts/${paGate23.id}`, adminToken)).data;
+  if (finalPa24.activeAllocationsCount !== 2 || finalPa24.availableCapacity !== 0 || finalPa24.status !== "EXHAUSTED") {
+    throw new Error(`Gate 24 failed: expected consumed=2, available=0, status=EXHAUSTED. Got: ${JSON.stringify(finalPa24)}`);
+  }
+  console.log("✓ Gate 24 passed: Confirming DEACTIVATED released provider capacity (consumed 1, available 1, account restored to ACTIVE) and allowed new activation");
+
+  // [Gate 25] Activation vs Entitlement Revoke true live PostgreSQL race
+  console.log("\n[Gate 25] Testing live race: Admin Activate vs Entitlement Revoke...");
+  const entRace25 = await createTestEntitlement({ userId: customer1Id, maxActivations: 2, status: EntitlementStatus.ACTIVE });
+  const allocRace25 = (await apiPost(`/entitlements/${entRace25.id}/allocations`, { domain: `race-activate-revoke-${runId}.com` }, customer1Token)).data;
+
+  // Run activation and revocation simultaneously
+  const [raceActResult, raceRevResult] = await Promise.all([
+    apiPost(`/admin/license-allocations/${allocRace25.id}/activate`, { providerAccountId: mainAccount.id }, adminToken),
+    apiPost(`/admin/entitlements/${entRace25.id}/revoke`, { reason: "Security violation" }, adminToken),
+  ]);
+
+  const dbEnt25 = await prisma.entitlement.findUniqueOrThrow({ where: { id: entRace25.id } });
+  const dbAlloc25 = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: allocRace25.id } });
+
+  if (raceActResult.ok) {
+    // Activation serialized first: allocation became ACTIVE, then entitlement was REVOKED
+    if (dbEnt25.status !== "REVOKED") {
+      throw new Error(`Gate 25 failed: entitlement expected REVOKED, got ${dbEnt25.status}`);
+    }
+    // Reconciliation worker must sweep this ACTIVE allocation to DEACTIVATION_PENDING
+    const recon25 = await reconcileExternalAllocations({ workerId: "acceptance-race-worker" });
+    const postReconAlloc = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: allocRace25.id } });
+    if (postReconAlloc.status !== "DEACTIVATION_PENDING") {
+      throw new Error(`Gate 25 failed: allocation not swept to DEACTIVATION_PENDING by worker, status: ${postReconAlloc.status}`);
+    }
+    console.log("✓ Gate 25 passed (Activation won first): Allocation activated, entitlement revoked, worker deterministically swept to DEACTIVATION_PENDING");
+  } else {
+    // Revocation serialized first: activation failed with 409
+    if (raceActResult.status !== 409) {
+      throw new Error(`Gate 25 failed: expected activation 409, got ${raceActResult.status}`);
+    }
+    if (dbEnt25.status !== "REVOKED") {
+      throw new Error(`Gate 25 failed: entitlement expected REVOKED, got ${dbEnt25.status}`);
+    }
+    if (dbAlloc25.status !== "PENDING") {
+      throw new Error(`Gate 25 failed: allocation was corrupted, status: ${dbAlloc25.status}`);
+    }
+    console.log("✓ Gate 25 passed (Revocation won first): Activation rejected with 409, allocation remained PENDING");
+  }
+
+  // [Gate 26] Reduce provider capacity below consumed -> 409
+  console.log("\n[Gate 26] Verifying reducing provider capacity below consumed seats fails with 409...");
+  const paGate26Res = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Elementor Capacity Reduce Test ${runId}`,
+      totalCapacity: 3,
+    },
+    adminToken,
+  );
+  const paGate26 = paGate26Res.data;
+
+  const entGate26 = await createTestEntitlement({ userId: customer1Id, maxActivations: 3 });
+  const alloc26A = (await apiPost(`/entitlements/${entGate26.id}/allocations`, { domain: `cap-reduce-a-${runId}.com` }, customer1Token)).data;
+  const alloc26B = (await apiPost(`/entitlements/${entGate26.id}/allocations`, { domain: `cap-reduce-b-${runId}.com` }, customer1Token)).data;
+
+  await apiPost(`/admin/license-allocations/${alloc26A.id}/activate`, { providerAccountId: paGate26.id }, adminToken);
+  await apiPost(`/admin/license-allocations/${alloc26B.id}/activate`, { providerAccountId: paGate26.id }, adminToken);
+  // Consumed = 2 (alloc26A ACTIVE, alloc26B ACTIVE)
+
+  // Attempt to reduce totalCapacity to 1 (below consumed 2)
+  const reduceRes = await apiPatch(
+    `/admin/provider-accounts/${paGate26.id}`,
+    { totalCapacity: 1 },
+    adminToken,
+  );
+  if (reduceRes.status !== 409) {
+    throw new Error(`Gate 26 failed: expected 409 Conflict reducing capacity below consumed, got ${reduceRes.status}`);
+  }
+
+  // Verify in DB totalCapacity remains 3
+  const dbPa26 = await prisma.providerAccount.findUniqueOrThrow({ where: { id: paGate26.id } });
+  if (dbPa26.totalCapacity !== 3) {
+    throw new Error(`Gate 26 failed: DB totalCapacity was corrupted to ${dbPa26.totalCapacity}`);
+  }
+
+  // Reduce totalCapacity to 2 (equal to consumed) -> must succeed and become EXHAUSTED
+  const reduceTo2Res = await apiPatch(
+    `/admin/provider-accounts/${paGate26.id}`,
+    { totalCapacity: 2 },
+    adminToken,
+  );
+  if (!reduceTo2Res.ok || reduceTo2Res.data.status !== "EXHAUSTED" || reduceTo2Res.data.totalCapacity !== 2) {
+    throw new Error(`Gate 26 failed: reducing to 2 expected status EXHAUSTED, got ${JSON.stringify(reduceTo2Res.data)}`);
+  }
+  console.log("✓ Gate 26 passed: Capacity reduction below consumed strictly rejected with 409; valid reduction to consumed transitioned account to EXHAUSTED");
+
+  // [Gate 27] Concurrent capacity update vs activation race
+  console.log("\n[Gate 27] Testing concurrent race: Capacity Reduction vs Allocation Activation...");
+  const paGate27Res = await apiPost(
+    "/admin/provider-accounts",
+    {
+      providerId: provider.id,
+      name: `Elementor Capacity vs Activation Race ${runId}`,
+      totalCapacity: 2,
+    },
+    adminToken,
+  );
+  const paGate27 = paGate27Res.data;
+
+  const entGate27 = await createTestEntitlement({ userId: customer1Id, maxActivations: 2 });
+  const alloc27A = (await apiPost(`/entitlements/${entGate27.id}/allocations`, { domain: `race27-a-${runId}.com` }, customer1Token)).data;
+  const alloc27B = (await apiPost(`/entitlements/${entGate27.id}/allocations`, { domain: `race27-b-${runId}.com` }, customer1Token)).data;
+
+  // Activate 1 seat -> capacity=2, consumed=1, available=1
+  await apiPost(`/admin/license-allocations/${alloc27A.id}/activate`, { providerAccountId: paGate27.id }, adminToken);
+
+  // Concurrently: Activate second seat vs Reduce capacity to 1
+  const [race27Act, race27Patch] = await Promise.all([
+    apiPost(`/admin/license-allocations/${alloc27B.id}/activate`, { providerAccountId: paGate27.id }, adminToken),
+    apiPatch(`/admin/provider-accounts/${paGate27.id}`, { totalCapacity: 1 }, adminToken),
+  ]);
+
+  const dbPa27 = await prisma.providerAccount.findUniqueOrThrow({ where: { id: paGate27.id } });
+  const consumedInDb27 = await prisma.licenseAllocation.count({
+    where: {
+      providerAccountId: paGate27.id,
+      status: { in: ["ACTIVE", "DEACTIVATION_PENDING"] },
+    },
+  });
+
+  if (consumedInDb27 > dbPa27.totalCapacity) {
+    throw new Error(`Gate 27 failed: DB capacity invariant violated: consumed (${consumedInDb27}) > totalCapacity (${dbPa27.totalCapacity})`);
+  }
+
+  const oneSucceededOneFailed =
+    (race27Act.ok && race27Patch.status === 409) ||
+    (!race27Act.ok && race27Act.status === 409 && race27Patch.ok);
+
+  if (!oneSucceededOneFailed) {
+    throw new Error(`Gate 27 failed: expected serialization with 1 success and 1 409 conflict, got act=${race27Act.status}, patch=${race27Patch.status}`);
+  }
+  console.log(`✓ Gate 27 passed: Concurrent race serialized (consumed=${consumedInDb27}, capacity=${dbPa27.totalCapacity}, consumed <= capacity strictly preserved)`);
+
+  // [Gate 28] Provider secret-like metadata rejected
+  console.log("\n[Gate 28] Verifying provider secret-like metadata is strictly rejected (400 Bad Request)...");
+  const secretSamples = [
+    { apiToken: "super-secret-token" },
+    { secret: "super-secret" },
+    { apiKey: "12345" },
+    { clientSecret: "abcde" },
+    { authorization: "Bearer xyz" },
+  ];
+
+  for (const meta of secretSamples) {
+    const secRes = await apiPost(
+      "/admin/provider-accounts",
+      {
+        providerId: provider.id,
+        name: `Secret Account Test ${runId}`,
+        totalCapacity: 5,
+        metadata: meta,
+      },
+      adminToken,
+    );
+    if (secRes.status !== 400) {
+      throw new Error(`Gate 28 failed: secret metadata ${JSON.stringify(meta)} expected 400, got ${secRes.status}`);
+    }
+  }
+  console.log("✓ Gate 28 passed: Root-level secret-like metadata keys strictly rejected with 400 Bad Request");
+
+  // [Gate 29] Nested secret-like metadata rejected
+  console.log("\n[Gate 29] Verifying nested secret-like metadata is strictly rejected (400 Bad Request)...");
+  const nestedSecretSamples = [
+    { upstream: { password: "admin-password" } },
+    { config: { credentials: { privateKey: "-----BEGIN RSA PRIVATE KEY-----" } } },
+    { auth: { tokens: [{ accessToken: "tok-123" }] } },
+  ];
+
+  for (const meta of nestedSecretSamples) {
+    const secRes = await apiPost(
+      "/admin/provider-accounts",
+      {
+        providerId: provider.id,
+        name: `Nested Secret Test ${runId}`,
+        totalCapacity: 5,
+        metadata: meta,
+      },
+      adminToken,
+    );
+    if (secRes.status !== 400) {
+      throw new Error(`Gate 29 failed: nested secret metadata ${JSON.stringify(meta)} expected 400, got ${secRes.status}`);
+    }
+  }
+  console.log("✓ Gate 29 passed: Deeply nested secret-like metadata keys strictly rejected with 400 Bad Request");
+
+  // [Gate 30] Audit / DB / API contain no provider secret
+  console.log("\n[Gate 30] Verifying audit logs, DB records, and API responses contain no provider secrets...");
+  const forbiddenSubstrings = [
+    "super-secret-token",
+    "super-secret",
+    "admin-password",
+    "BEGIN RSA PRIVATE KEY",
+    "tok-123",
+  ];
+
+  // 1. Verify provider_accounts table in DB
+  const allPasInDb = await prisma.providerAccount.findMany();
+  const dbPaJson = JSON.stringify(allPasInDb);
+  for (const sub of forbiddenSubstrings) {
+    if (dbPaJson.includes(sub)) {
+      throw new Error(`Gate 30 failed: secret substring '${sub}' found in provider_accounts database table!`);
+    }
+  }
+
+  // 2. Verify audit_logs table in DB
+  const paAuditLogs = await prisma.auditLog.findMany({
+    where: { entity: "ProviderAccount" },
+  });
+  const auditJson = JSON.stringify(paAuditLogs);
+  for (const sub of forbiddenSubstrings) {
+    if (auditJson.includes(sub)) {
+      throw new Error(`Gate 30 failed: secret substring '${sub}' found in audit_logs database table!`);
+    }
+  }
+
+  // 3. Verify API list responses
+  const paListRes = await apiGet("/admin/provider-accounts", adminToken);
+  const paListJson = JSON.stringify(paListRes.data);
+  for (const sub of forbiddenSubstrings) {
+    if (paListJson.includes(sub)) {
+      throw new Error(`Gate 30 failed: secret substring '${sub}' found in /admin/provider-accounts API response!`);
+    }
+  }
+  console.log("✓ Gate 30 passed: Full verification complete: zero submitted secrets found in database, audit logs, or API responses");
+
   console.log("\n==================================================");
-  console.log("ALL 22 PHASE 6 LIVE RUNTIME GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 30 PHASE 6 LIVE RUNTIME GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 
   stopChildProcesses();

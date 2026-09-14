@@ -50,6 +50,11 @@ export interface LicenseProviderDto {
   updatedAt: string;
 }
 
+export const PROVIDER_CAPACITY_CONSUMING_STATUSES = [
+  "ACTIVE",
+  "DEACTIVATION_PENDING",
+] as const;
+
 export interface ProviderAccountDto {
   id: string;
   providerId: string;
@@ -57,6 +62,7 @@ export interface ProviderAccountDto {
   externalReference?: string | null;
   totalCapacity: number;
   activeAllocationsCount?: number;
+  consumedAllocationsCount?: number;
   availableCapacity?: number;
   status: ProviderAccountStatus;
   metadata?: Record<string, any> | null;

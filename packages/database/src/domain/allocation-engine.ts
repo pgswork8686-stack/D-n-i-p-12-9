@@ -8,6 +8,52 @@ import {
 import { prisma } from "../client";
 import { normalizeDomain } from "@nexus/utils";
 
+export const PROVIDER_CAPACITY_CONSUMING_STATUSES: AllocationStatus[] = [
+  AllocationStatus.ACTIVE,
+  AllocationStatus.DEACTIVATION_PENDING,
+];
+
+export const FORBIDDEN_SECRET_PATTERNS = [
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "apikey",
+  "accesstoken",
+  "refreshtoken",
+  "credential",
+  "authorization",
+  "privatekey",
+  "clientsecret",
+];
+
+export function assertSafeMetadata(metadata: unknown, path = ""): void {
+  if (!metadata || typeof metadata !== "object") {
+    return;
+  }
+
+  if (Array.isArray(metadata)) {
+    for (let i = 0; i < metadata.length; i++) {
+      assertSafeMetadata(metadata[i], path ? `${path}[${i}]` : `[${i}]`);
+    }
+    return;
+  }
+
+  for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
+    const normalizedKey = key.toLowerCase().replace(/[-_]/g, "");
+    for (const forbidden of FORBIDDEN_SECRET_PATTERNS) {
+      if (normalizedKey.includes(forbidden)) {
+        const fullPath = path ? `${path}.${key}` : key;
+        throw new AllocationEngineError(
+          `Security violation: metadata contains prohibited credential or secret-like field '${fullPath}'`,
+          400,
+        );
+      }
+    }
+    assertSafeMetadata(value, path ? `${path}.${key}` : key);
+  }
+}
+
 export interface RequestAllocationParams {
   entitlementId: string;
   userId: string;
@@ -45,6 +91,16 @@ export interface AdminConfirmDeactivatedParams {
   metadata?: Record<string, any>;
 }
 
+export interface AdminUpdateProviderAccountParams {
+  providerAccountId: string;
+  actorId: string;
+  name?: string;
+  totalCapacity?: number;
+  externalReference?: string | null;
+  status?: ProviderAccountStatus;
+  metadata?: Record<string, any>;
+}
+
 export interface ReconcileExternalAllocationsParams {
   batchSize?: number;
   workerId?: string;
@@ -68,6 +124,10 @@ export async function requestDomainAllocation(
   params: RequestAllocationParams,
   db: PrismaClient = prisma,
 ) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
   const normalized = normalizeDomain(params.domain);
   const providerCode = params.providerCode || "ELEMENTOR";
 
@@ -264,6 +324,10 @@ export async function adminActivateAllocation(
   params: AdminActivateAllocationParams,
   db: PrismaClient = prisma,
 ) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
   return db.$transaction(async (tx) => {
     // 1. Lock Allocation row FOR UPDATE
     const lockedAllocations = await tx.$queryRaw<Array<{
@@ -301,21 +365,54 @@ export async function adminActivateAllocation(
       );
     }
 
-    // 2. Validate parent entitlement is still active
-    const entitlement = await tx.entitlement.findUnique({
-      where: { id: allocation.entitlement_id },
-    });
+    // 2. Lock parent entitlement row FOR UPDATE & validate authoritative state
+    const lockedEntitlements = await tx.$queryRaw<Array<{
+      id: string;
+      status: EntitlementStatus;
+      fulfillment_type: FulfillmentType;
+      expires_at: Date | null;
+      max_activations: number | null;
+    }>>`
+      SELECT id, status, fulfillment_type, expires_at, max_activations
+      FROM entitlements
+      WHERE id = ${allocation.entitlement_id}
+      FOR UPDATE
+    `;
 
-    if (!entitlement || entitlement.status !== EntitlementStatus.ACTIVE) {
+    if (!lockedEntitlements || lockedEntitlements.length === 0) {
+      throw new AllocationEngineError("Parent entitlement not found", 404);
+    }
+
+    const entitlement = lockedEntitlements[0];
+
+    if (entitlement.status !== EntitlementStatus.ACTIVE) {
       throw new AllocationEngineError(
-        `Cannot activate allocation: Parent entitlement is not active (${entitlement?.status || "NOT_FOUND"})`,
+        `Cannot activate allocation: Parent entitlement is not active (${entitlement.status})`,
         409,
       );
     }
 
-    if (entitlement.expiresAt && new Date(entitlement.expiresAt) < new Date()) {
+    if (entitlement.expires_at && new Date(entitlement.expires_at) <= new Date()) {
       throw new AllocationEngineError(
         "Cannot activate allocation: Parent entitlement has expired",
+        409,
+      );
+    }
+
+    if (entitlement.fulfillment_type !== FulfillmentType.EXTERNAL_MANAGED) {
+      throw new AllocationEngineError(
+        `Cannot activate allocation: Entitlement fulfillment type is ${entitlement.fulfillment_type}, expected EXTERNAL_MANAGED`,
+        400,
+      );
+    }
+
+    if (
+      typeof entitlement.max_activations !== "number" ||
+      !Number.isInteger(entitlement.max_activations) ||
+      entitlement.max_activations <= 0
+    ) {
+      throw new AllocationEngineError(
+        "Cannot activate allocation: Entitlement maxActivations is missing or invalid",
         409,
       );
     }
@@ -354,22 +451,22 @@ export async function adminActivateAllocation(
       );
     }
 
-    // 4. Count current ACTIVE allocations on this provider account
-    const activeOnAccount = await tx.licenseAllocation.count({
+    // 4. Count current consumed allocations (ACTIVE + DEACTIVATION_PENDING) on this provider account
+    const consumedOnAccount = await tx.licenseAllocation.count({
       where: {
         providerAccountId: account.id,
-        status: AllocationStatus.ACTIVE,
+        status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
       },
     });
 
-    if (activeOnAccount >= account.total_capacity) {
+    if (consumedOnAccount >= account.total_capacity) {
       // Mark account as EXHAUSTED if not already
       await tx.providerAccount.update({
         where: { id: account.id },
         data: { status: ProviderAccountStatus.EXHAUSTED },
       });
       throw new AllocationEngineError(
-        `Provider account capacity exhausted: total capacity is ${account.total_capacity} (active: ${activeOnAccount})`,
+        `Provider account capacity exhausted: total capacity is ${account.total_capacity} (consumed: ${consumedOnAccount})`,
         409,
       );
     }
@@ -412,7 +509,7 @@ export async function adminActivateAllocation(
     });
 
     // If this activation filled the last seat, update account status to EXHAUSTED
-    if (activeOnAccount + 1 >= account.total_capacity) {
+    if (consumedOnAccount + 1 >= account.total_capacity) {
       await tx.providerAccount.update({
         where: { id: account.id },
         data: { status: ProviderAccountStatus.EXHAUSTED },
@@ -646,14 +743,14 @@ export async function adminConfirmDeactivated(
       });
 
       if (account && account.status === ProviderAccountStatus.EXHAUSTED) {
-        const remainingActive = await tx.licenseAllocation.count({
+        const remainingConsumed = await tx.licenseAllocation.count({
           where: {
             providerAccountId: account.id,
-            status: AllocationStatus.ACTIVE,
+            status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
           },
         });
 
-        if (remainingActive < account.totalCapacity) {
+        if (remainingConsumed < account.totalCapacity) {
           await tx.providerAccount.update({
             where: { id: account.id },
             data: { status: ProviderAccountStatus.ACTIVE },
@@ -747,6 +844,123 @@ export async function reconcileExternalAllocations(
     return {
       transitionedCount: candidateRows.length,
       allocationIds,
+    };
+  });
+}
+
+/**
+ * Admin updates provider account.
+ * Concurrency-safe: locks ProviderAccount row FOR UPDATE.
+ * Enforces: totalCapacity cannot be reduced below current consumed seats (ACTIVE + DEACTIVATION_PENDING).
+ * Enforces safe metadata with zero secrets.
+ * Enforces whitelisted audit logging.
+ */
+export async function adminUpdateProviderAccount(
+  params: AdminUpdateProviderAccountParams,
+  db: PrismaClient = prisma,
+) {
+  if (params.metadata !== undefined && params.metadata !== null) {
+    assertSafeMetadata(params.metadata);
+  }
+
+  return db.$transaction(async (tx) => {
+    // 1. Lock provider account row FOR UPDATE
+    const lockedRows = await tx.$queryRaw<Array<{
+      id: string;
+      provider_id: string;
+      name: string;
+      external_reference: string | null;
+      total_capacity: number;
+      status: ProviderAccountStatus;
+      metadata: any;
+    }>>`
+      SELECT id, provider_id, name, external_reference, total_capacity, status, metadata
+      FROM provider_accounts
+      WHERE id = ${params.providerAccountId}
+      FOR UPDATE
+    `;
+
+    if (!lockedRows || lockedRows.length === 0) {
+      throw new AllocationEngineError("Provider account not found", 404);
+    }
+
+    const account = lockedRows[0];
+
+    // 2. Count current consumed allocations (ACTIVE + DEACTIVATION_PENDING)
+    const consumedCount = await tx.licenseAllocation.count({
+      where: {
+        providerAccountId: account.id,
+        status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES },
+      },
+    });
+
+    const newCapacity =
+      params.totalCapacity !== undefined ? params.totalCapacity : account.total_capacity;
+
+    if (newCapacity < consumedCount) {
+      throw new AllocationEngineError(
+        `Cannot reduce totalCapacity to ${newCapacity}: current consumed seats is ${consumedCount} (ACTIVE + DEACTIVATION_PENDING)`,
+        409,
+      );
+    }
+
+    // 3. Resolve status
+    // SUSPENDED is an explicit admin override
+    let resolvedStatus: ProviderAccountStatus;
+    if (params.status === ProviderAccountStatus.SUSPENDED) {
+      resolvedStatus = ProviderAccountStatus.SUSPENDED;
+    } else if (account.status === ProviderAccountStatus.SUSPENDED && params.status === undefined) {
+      // If currently SUSPENDED and status wasn't explicitly changed, keep SUSPENDED
+      resolvedStatus = ProviderAccountStatus.SUSPENDED;
+    } else {
+      // Derived from capacity
+      resolvedStatus =
+        consumedCount >= newCapacity
+          ? ProviderAccountStatus.EXHAUSTED
+          : ProviderAccountStatus.ACTIVE;
+    }
+
+    const previousCapacity = account.total_capacity;
+    const previousStatus = account.status;
+    const externalRefChanged =
+      params.externalReference !== undefined &&
+      params.externalReference !== account.external_reference;
+
+    const data: any = {};
+    if (params.name !== undefined) data.name = params.name;
+    if (params.totalCapacity !== undefined) data.totalCapacity = params.totalCapacity;
+    if (params.externalReference !== undefined)
+      data.externalReference = params.externalReference;
+    data.status = resolvedStatus;
+    if (params.metadata !== undefined) data.metadata = params.metadata;
+
+    const updated = await tx.providerAccount.update({
+      where: { id: account.id },
+      data,
+    });
+
+    // 4. Record transactional audit log with explicit whitelisted fields only
+    await tx.auditLog.create({
+      data: {
+        action: "PROVIDER_ACCOUNT_UPDATED",
+        entity: "ProviderAccount",
+        entityId: account.id,
+        actorId: params.actorId,
+        details: {
+          name: updated.name,
+          previousTotalCapacity: previousCapacity,
+          newTotalCapacity: updated.totalCapacity,
+          previousStatus,
+          newStatus: updated.status,
+          externalReferenceChanged: externalRefChanged,
+        },
+      },
+    });
+
+    return {
+      account: updated,
+      consumedCount,
+      availableCapacity: Math.max(0, updated.totalCapacity - consumedCount),
     };
   });
 }

@@ -13,6 +13,7 @@ import {
   adminRejectAllocation,
   requestAllocationDeactivation,
   adminConfirmDeactivated,
+  adminUpdateProviderAccount,
   AllocationEngineError,
   prisma,
 } from "@nexus/database";
@@ -26,6 +27,7 @@ jest.mock("@nexus/database", () => {
     adminRejectAllocation: jest.fn(),
     requestAllocationDeactivation: jest.fn(),
     adminConfirmDeactivated: jest.fn(),
+    adminUpdateProviderAccount: jest.fn(),
     prisma: {
       licenseProvider: {
         findUnique: jest.fn(),
@@ -277,6 +279,65 @@ describe("AllocationsService", () => {
 
       expect(result.status).toBe("DEACTIVATED");
       expect(result.deactivatedAt).toBe("2026-09-14T02:00:00.000Z");
+    });
+  });
+
+  describe("provider accounts & security", () => {
+    it("rejects provider account creation with secret in metadata", async () => {
+      await expect(
+        service.adminCreateProviderAccount(
+          {
+            providerId: "prov-1",
+            name: "Test PA",
+            totalCapacity: 5,
+            metadata: { apiToken: "super-secret" },
+          },
+          "admin-1",
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("rejects provider account creation with nested password in metadata", async () => {
+      await expect(
+        service.adminCreateProviderAccount(
+          {
+            providerId: "prov-1",
+            name: "Test PA",
+            totalCapacity: 5,
+            metadata: { upstream: { password: "secret" } },
+          },
+          "admin-1",
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("delegates adminUpdateProviderAccount to domain engine and maps result", async () => {
+      (adminUpdateProviderAccount as jest.Mock).mockResolvedValue({
+        account: {
+          id: "pa-1",
+          providerId: "prov-1",
+          name: "Updated PA",
+          externalReference: "EXT-1",
+          totalCapacity: 10,
+          status: "ACTIVE",
+          metadata: { env: "prod" },
+          createdAt: new Date("2026-09-14T00:00:00.000Z"),
+          updatedAt: new Date("2026-09-14T01:00:00.000Z"),
+        },
+        consumedCount: 3,
+        availableCapacity: 7,
+      });
+
+      const result = await service.adminUpdateProviderAccount(
+        "pa-1",
+        { name: "Updated PA", totalCapacity: 10 },
+        "admin-1",
+      );
+
+      expect(result.id).toBe("pa-1");
+      expect(result.totalCapacity).toBe(10);
+      expect(result.activeAllocationsCount).toBe(3);
+      expect(result.availableCapacity).toBe(7);
     });
   });
 });

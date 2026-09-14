@@ -14,6 +14,9 @@ import {
   adminRejectAllocation as engineRejectAllocation,
   requestAllocationDeactivation as engineRequestDeactivation,
   adminConfirmDeactivated as engineConfirmDeactivated,
+  adminUpdateProviderAccount,
+  assertSafeMetadata,
+  PROVIDER_CAPACITY_CONSUMING_STATUSES,
   ProviderAccountStatus,
   AllocationStatus,
 } from "@nexus/database";
@@ -42,6 +45,11 @@ export class AllocationsService {
   constructor(private readonly auditService: AuditService) {}
 
   private handleEngineError(error: any): never {
+    if (error instanceof NotFoundException || error instanceof ForbiddenException) {
+      throw error;
+    }
+
+    // 1. Explicit domain engine errors
     if (error instanceof AllocationEngineError) {
       switch (error.statusCode) {
         case 400:
@@ -56,19 +64,34 @@ export class AllocationsService {
           throw new BadRequestException(error.message);
       }
     }
-    if (error instanceof Error) {
-      if (
-        error.message.includes("Unique constraint failed") ||
-        error.message.includes("unique_active_provider_domain") ||
-        error.message.includes("unique_non_terminal_entitlement_domain")
-      ) {
-        throw new ConflictException(
-          "Duplicate domain allocation conflict detected in database",
-        );
-      }
-      throw new BadRequestException(error.message);
+
+    // 2. Prisma P2002 Unique Constraint violation
+    if (
+      error?.code === "P2002" ||
+      (typeof error?.message === "string" &&
+        (error.message.includes("Unique constraint failed") ||
+          error.message.includes("unique_active_provider_domain") ||
+          error.message.includes("unique_non_terminal_entitlement_domain")))
+    ) {
+      throw new ConflictException(
+        "Duplicate resource conflict detected: unique constraint violated",
+      );
     }
-    throw new InternalServerErrorException("Unexpected allocation error");
+
+    // 3. Log unexpected server-side errors safely without leaking DB internals
+    console.error(
+      JSON.stringify({
+        level: "error",
+        service: "api-allocations",
+        event: "unexpected_allocation_error",
+        error: error instanceof Error ? error.stack || error.message : String(error),
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    throw new InternalServerErrorException(
+      "An unexpected error occurred while processing the allocation request",
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -224,7 +247,7 @@ export class AllocationsService {
         _count: {
           select: {
             allocations: {
-              where: { status: AllocationStatus.ACTIVE },
+              where: { status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES } },
             },
           },
         },
@@ -233,15 +256,16 @@ export class AllocationsService {
     });
 
     return accounts.map((acc) => {
-      const activeCount = acc._count.allocations;
-      const available = Math.max(0, acc.totalCapacity - activeCount);
+      const consumedCount = acc._count.allocations;
+      const available = Math.max(0, acc.totalCapacity - consumedCount);
       return {
         id: acc.id,
         providerId: acc.providerId,
         name: acc.name,
         externalReference: acc.externalReference,
         totalCapacity: acc.totalCapacity,
-        activeAllocationsCount: activeCount,
+        activeAllocationsCount: consumedCount,
+        consumedAllocationsCount: consumedCount,
         availableCapacity: available,
         status: acc.status,
         metadata: (acc.metadata as any) || null,
@@ -255,50 +279,61 @@ export class AllocationsService {
     dto: CreateProviderAccountDto,
     actorId: string,
   ): Promise<ProviderAccountDto> {
-    const provider = await prisma.licenseProvider.findUnique({
-      where: { id: dto.providerId },
-    });
+    try {
+      if (dto.metadata !== undefined && dto.metadata !== null) {
+        assertSafeMetadata(dto.metadata);
+      }
 
-    if (!provider) {
-      throw new NotFoundException("License provider not found");
+      const provider = await prisma.licenseProvider.findUnique({
+        where: { id: dto.providerId },
+      });
+
+      if (!provider) {
+        throw new NotFoundException("License provider not found");
+      }
+
+      const account = await prisma.providerAccount.create({
+        data: {
+          providerId: dto.providerId,
+          name: dto.name,
+          totalCapacity: dto.totalCapacity,
+          externalReference: dto.externalReference || null,
+          status: dto.status || ProviderAccountStatus.ACTIVE,
+          metadata: dto.metadata || {},
+        },
+      });
+
+      // Whitelisted audit log only - never log arbitrary metadata
+      await this.auditService.logAction({
+        action: "PROVIDER_ACCOUNT_CREATED",
+        entity: "ProviderAccount",
+        entityId: account.id,
+        actorId,
+        details: {
+          providerId: dto.providerId,
+          name: dto.name,
+          totalCapacity: dto.totalCapacity,
+          status: account.status,
+        },
+      });
+
+      return {
+        id: account.id,
+        providerId: account.providerId,
+        name: account.name,
+        externalReference: account.externalReference,
+        totalCapacity: account.totalCapacity,
+        activeAllocationsCount: 0,
+        consumedAllocationsCount: 0,
+        availableCapacity: account.totalCapacity,
+        status: account.status,
+        metadata: (account.metadata as any) || null,
+        createdAt: account.createdAt.toISOString(),
+        updatedAt: account.updatedAt.toISOString(),
+      };
+    } catch (err) {
+      this.handleEngineError(err);
     }
-
-    const account = await prisma.providerAccount.create({
-      data: {
-        providerId: dto.providerId,
-        name: dto.name,
-        totalCapacity: dto.totalCapacity,
-        externalReference: dto.externalReference || null,
-        status: dto.status || ProviderAccountStatus.ACTIVE,
-        metadata: dto.metadata || {},
-      },
-    });
-
-    await this.auditService.logAction({
-      action: "PROVIDER_ACCOUNT_CREATED",
-      entity: "ProviderAccount",
-      entityId: account.id,
-      actorId,
-      details: {
-        providerId: dto.providerId,
-        name: dto.name,
-        totalCapacity: dto.totalCapacity,
-      },
-    });
-
-    return {
-      id: account.id,
-      providerId: account.providerId,
-      name: account.name,
-      externalReference: account.externalReference,
-      totalCapacity: account.totalCapacity,
-      activeAllocationsCount: 0,
-      availableCapacity: account.totalCapacity,
-      status: account.status,
-      metadata: (account.metadata as any) || null,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-    };
   }
 
   async adminGetProviderAccount(id: string): Promise<ProviderAccountDto> {
@@ -308,7 +343,7 @@ export class AllocationsService {
         _count: {
           select: {
             allocations: {
-              where: { status: AllocationStatus.ACTIVE },
+              where: { status: { in: PROVIDER_CAPACITY_CONSUMING_STATUSES } },
             },
           },
         },
@@ -319,8 +354,8 @@ export class AllocationsService {
       throw new NotFoundException("Provider account not found");
     }
 
-    const activeCount = account._count.allocations;
-    const available = Math.max(0, account.totalCapacity - activeCount);
+    const consumedCount = account._count.allocations;
+    const available = Math.max(0, account.totalCapacity - consumedCount);
 
     return {
       id: account.id,
@@ -328,7 +363,8 @@ export class AllocationsService {
       name: account.name,
       externalReference: account.externalReference,
       totalCapacity: account.totalCapacity,
-      activeAllocationsCount: activeCount,
+      activeAllocationsCount: consumedCount,
+      consumedAllocationsCount: consumedCount,
       availableCapacity: available,
       status: account.status,
       metadata: (account.metadata as any) || null,
@@ -342,60 +378,34 @@ export class AllocationsService {
     dto: UpdateProviderAccountDto,
     actorId: string,
   ): Promise<ProviderAccountDto> {
-    const existing = await prisma.providerAccount.findUnique({
-      where: { id },
-    });
+    try {
+      const result = await adminUpdateProviderAccount({
+        providerAccountId: id,
+        actorId,
+        name: dto.name,
+        totalCapacity: dto.totalCapacity,
+        externalReference: dto.externalReference,
+        status: dto.status,
+        metadata: dto.metadata,
+      });
 
-    if (!existing) {
-      throw new NotFoundException("Provider account not found");
+      return {
+        id: result.account.id,
+        providerId: result.account.providerId,
+        name: result.account.name,
+        externalReference: result.account.externalReference,
+        totalCapacity: result.account.totalCapacity,
+        activeAllocationsCount: result.consumedCount,
+        consumedAllocationsCount: result.consumedCount,
+        availableCapacity: result.availableCapacity,
+        status: result.account.status,
+        metadata: (result.account.metadata as any) || null,
+        createdAt: result.account.createdAt.toISOString(),
+        updatedAt: result.account.updatedAt.toISOString(),
+      };
+    } catch (err) {
+      this.handleEngineError(err);
     }
-
-    const data: any = {};
-    if (dto.name !== undefined) data.name = dto.name;
-    if (dto.totalCapacity !== undefined) data.totalCapacity = dto.totalCapacity;
-    if (dto.externalReference !== undefined)
-      data.externalReference = dto.externalReference;
-    if (dto.status !== undefined) data.status = dto.status;
-    if (dto.metadata !== undefined) data.metadata = dto.metadata;
-
-    const updated = await prisma.providerAccount.update({
-      where: { id },
-      data,
-      include: {
-        _count: {
-          select: {
-            allocations: {
-              where: { status: AllocationStatus.ACTIVE },
-            },
-          },
-        },
-      },
-    });
-
-    await this.auditService.logAction({
-      action: "PROVIDER_ACCOUNT_UPDATED",
-      entity: "ProviderAccount",
-      entityId: id,
-      actorId,
-      details: dto,
-    });
-
-    const activeCount = updated._count.allocations;
-    const available = Math.max(0, updated.totalCapacity - activeCount);
-
-    return {
-      id: updated.id,
-      providerId: updated.providerId,
-      name: updated.name,
-      externalReference: updated.externalReference,
-      totalCapacity: updated.totalCapacity,
-      activeAllocationsCount: activeCount,
-      availableCapacity: available,
-      status: updated.status,
-      metadata: (updated.metadata as any) || null,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
-    };
   }
 
   // ---------------------------------------------------------------------------
