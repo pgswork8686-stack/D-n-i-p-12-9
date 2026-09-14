@@ -25,7 +25,6 @@ export interface RevealLicenseResponse {
 export interface ActivateLicenseRequest {
   licenseKey: string;
   domain: string;
-  metadata?: Record<string, any>;
 }
 
 export interface ActivateLicenseResponse {
@@ -50,7 +49,6 @@ export interface ValidateLicenseResponse {
   expiresAt?: string | null;
   updatesUntil?: string | null;
   supportUntil?: string | null;
-  error?: string;
 }
 
 export interface DeactivateLicenseRequest {

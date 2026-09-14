@@ -93,7 +93,6 @@ export class LicensesService {
       return await activateInternalLicense({
         licenseKey: dto.licenseKey,
         domain: dto.domain,
-        metadata: dto.metadata,
       });
     } catch (err) {
       this.handleError(err);

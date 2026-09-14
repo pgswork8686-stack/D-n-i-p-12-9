@@ -18,10 +18,13 @@ export interface EncryptedLicenseKey {
   authTag: string;
 }
 
+export const LICENSE_KEY_REGEX = /^NXS-(?:[0-9A-F]{4}-){7}[0-9A-F]{4}$/;
+
 /**
  * Normalizes an incoming raw license key.
  * Trims whitespace, converts to uppercase.
- * Rejects empty, non-string, or malformed prefixes.
+ * Rejects empty, non-string, or malformed formats.
+ * Enforces strict Phase 7 format: NXS-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX.
  */
 export function normalizeLicenseKey(rawKey: string | null | undefined): string {
   if (!rawKey || typeof rawKey !== "string") {
@@ -34,8 +37,10 @@ export function normalizeLicenseKey(rawKey: string | null | undefined): string {
   }
 
   const upper = trimmed.toUpperCase();
-  if (!upper.startsWith("NXS-")) {
-    throw new Error("Invalid license key format: key must begin with 'NXS-'");
+  if (!LICENSE_KEY_REGEX.test(upper)) {
+    throw new Error(
+      "Invalid license key format: key must match NXS-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
+    );
   }
 
   return upper;

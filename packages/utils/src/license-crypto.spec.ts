@@ -33,11 +33,14 @@ describe("License Crypto Utilities", () => {
   });
 
   describe("normalizeLicenseKey", () => {
-    it("should trim and uppercase valid license keys", () => {
+    it("should trim and uppercase valid license keys while rejecting non-hex characters", () => {
       const key = "  nxs-1234-abcd-5678-ef90-1111-2222-3333-4444  ";
       expect(normalizeLicenseKey(key)).toBe(
         "NXS-1234-ABCD-5678-EF90-1111-2222-3333-4444",
       );
+      expect(() =>
+        normalizeLicenseKey("NXS-123G-ABCD-5678-EF90-1111-2222-3333-4444"),
+      ).toThrow("Invalid license key format");
     });
 
     it("should reject empty or null inputs", () => {
@@ -47,10 +50,16 @@ describe("License Crypto Utilities", () => {
       expect(() => normalizeLicenseKey("   ")).toThrow("cannot be empty");
     });
 
-    it("should reject keys without NXS- prefix", () => {
+    it("should reject keys without NXS- prefix or with invalid chunk lengths", () => {
       expect(() => normalizeLicenseKey("ABCD-1234")).toThrow(
-        "key must begin with 'NXS-'",
+        "Invalid license key format",
       );
+      expect(() => normalizeLicenseKey("NXS-1234-5678")).toThrow(
+        "Invalid license key format",
+      );
+      expect(() =>
+        normalizeLicenseKey("NXS-123G-ABCD-5678-EF90-1111-2222-3333-4444"),
+      ).toThrow("Invalid license key format");
     });
   });
 

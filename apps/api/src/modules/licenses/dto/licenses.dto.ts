@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsOptional, IsObject } from "class-validator";
+import { IsNotEmpty, IsString, IsOptional } from "class-validator";
 import {
   ActivateLicenseRequest,
   ValidateLicenseRequest,
@@ -13,10 +13,6 @@ export class ActivateLicenseDto implements ActivateLicenseRequest {
   @IsNotEmpty({ message: "domain is required" })
   @IsString({ message: "domain must be a string" })
   domain!: string;
-
-  @IsOptional()
-  @IsObject({ message: "metadata must be an object" })
-  metadata?: Record<string, any>;
 }
 
 export class ValidateLicenseDto implements ValidateLicenseRequest {

@@ -24,7 +24,6 @@ import {
   DeactivateLicenseResponse,
   AdminLicenseDto,
 } from "@nexus/contracts";
-import { assertSafeMetadata } from "./allocation-engine";
 
 export class InternalLicenseEngineError extends Error {
   constructor(
@@ -145,7 +144,6 @@ export async function provisionInternalLicenses(
 export interface ActivateInternalLicenseParams {
   licenseKey: string;
   domain: string;
-  metadata?: Record<string, any>;
 }
 
 /**
@@ -162,8 +160,8 @@ export async function activateInternalLicense(
   let normalizedDomain: string;
   try {
     normalizedDomain = normalizeDomain(params.domain);
-  } catch (err: any) {
-    throw new InternalLicenseEngineError(err.message, 400);
+  } catch {
+    throw new InternalLicenseEngineError("Invalid license key or domain", 400);
   }
 
   // 2. Normalize key and hash
@@ -171,20 +169,12 @@ export async function activateInternalLicense(
   try {
     normalizedKey = normalizeLicenseKey(params.licenseKey);
   } catch {
-    throw new InternalLicenseEngineError(
-      "Invalid license key or domain format",
-      400,
-    );
+    throw new InternalLicenseEngineError("Invalid license key or domain", 400);
   }
   const keyHash = hashLicenseKey(normalizedKey);
 
-  // 3. Check metadata
-  if (params.metadata) {
-    assertSafeMetadata(params.metadata);
-  }
-
   return db.$transaction(async (tx) => {
-    // 4. Lock InternalLicense by keyHash
+    // 3. Lock InternalLicense by keyHash
     const licenseRows = await tx.$queryRaw<
       Array<{
         id: string;
@@ -207,7 +197,7 @@ export async function activateInternalLicense(
     }
     const license = licenseRows[0];
 
-    // 5. Lock parent Entitlement
+    // 4. Lock parent Entitlement
     const entRows = await tx.$queryRaw<
       Array<{
         id: string;
@@ -230,28 +220,28 @@ export async function activateInternalLicense(
     }
     const entitlement = entRows[0];
 
-    // 6. Enforce Authoritative Rights
+    // 5. Enforce Authoritative Rights (Fail Closed with anti-enumeration message)
     if (license.status !== "ACTIVE") {
-      throw new InternalLicenseEngineError("License is not active", 400);
+      throw new InternalLicenseEngineError("Invalid license key or domain", 400);
     }
     if (entitlement.status !== "ACTIVE") {
-      throw new InternalLicenseEngineError("License entitlement is not active", 400);
+      throw new InternalLicenseEngineError("Invalid license key or domain", 400);
     }
     if (entitlement.fulfillment_type !== "INTERNAL_LICENSE") {
-      throw new InternalLicenseEngineError("Invalid license fulfillment type", 400);
+      throw new InternalLicenseEngineError("Invalid license key or domain", 400);
     }
     if (entitlement.expires_at && new Date(entitlement.expires_at) <= new Date()) {
-      throw new InternalLicenseEngineError("License entitlement has expired", 400);
+      throw new InternalLicenseEngineError("Invalid license key or domain", 400);
     }
     if (
       entitlement.max_activations === null ||
       entitlement.max_activations === undefined ||
       entitlement.max_activations <= 0
     ) {
-      throw new InternalLicenseEngineError("License has no activation capacity", 400);
+      throw new InternalLicenseEngineError("Invalid license key or domain", 400);
     }
 
-    // 7. Same-Domain Idempotency Check
+    // 6. Same-Domain Idempotency Check
     const existingActiveActivation = await tx.licenseActivation.findFirst({
       where: {
         licenseId: license.id,
@@ -273,7 +263,7 @@ export async function activateInternalLicense(
       };
     }
 
-    // 8. Capacity Check
+    // 7. Capacity Check
     const activeCount = await tx.licenseActivation.count({
       where: {
         licenseId: license.id,
@@ -288,7 +278,7 @@ export async function activateInternalLicense(
       );
     }
 
-    // 9. Re-activate existing DEACTIVATED record OR create new LicenseActivation
+    // 8. Re-activate existing DEACTIVATED record OR create new LicenseActivation
     const existingRecord = await tx.licenseActivation.findFirst({
       where: {
         licenseId: license.id,
@@ -305,7 +295,7 @@ export async function activateInternalLicense(
           activatedAt: new Date(),
           deactivatedAt: null,
           lastValidatedAt: new Date(),
-          metadata: params.metadata || {},
+          metadata: {},
         },
       });
     } else {
@@ -317,7 +307,7 @@ export async function activateInternalLicense(
           status: "ACTIVE",
           activatedAt: new Date(),
           lastValidatedAt: new Date(),
-          metadata: params.metadata || {},
+          metadata: {},
         },
       });
     }
@@ -369,14 +359,14 @@ export async function validateInternalLicense(
   try {
     normalizedDomain = normalizeDomain(params.domain);
   } catch {
-    return { valid: false, error: "Invalid license or domain" };
+    return { valid: false };
   }
 
   let normalizedKey: string;
   try {
     normalizedKey = normalizeLicenseKey(params.licenseKey);
   } catch {
-    return { valid: false, error: "Invalid license or domain" };
+    return { valid: false };
   }
   const keyHash = hashLicenseKey(normalizedKey);
 
@@ -394,30 +384,35 @@ export async function validateInternalLicense(
   });
 
   if (!license) {
-    return { valid: false, error: "Invalid license or domain" };
+    return { valid: false };
   }
 
   // 1. License status check
   if (license.status !== "ACTIVE") {
-    return { valid: false, error: "License is not active" };
+    return { valid: false };
   }
 
   // 2. Entitlement status check
   if (license.entitlement.status !== "ACTIVE") {
-    return { valid: false, error: "Entitlement is not active" };
+    return { valid: false };
   }
 
-  // 3. Expiration check
+  // 3. Fulfillment type check (Authoritative internal license)
+  if (license.entitlement.fulfillmentType !== "INTERNAL_LICENSE") {
+    return { valid: false };
+  }
+
+  // 4. Expiration check
   if (
     license.entitlement.expiresAt &&
     new Date(license.entitlement.expiresAt) <= new Date()
   ) {
-    return { valid: false, error: "Entitlement has expired" };
+    return { valid: false };
   }
 
-  // 4. Matching active domain activation check
+  // 5. Matching active domain activation check
   if (!license.activations || license.activations.length === 0) {
-    return { valid: false, error: "Domain is not activated for this license" };
+    return { valid: false };
   }
 
   const activation = license.activations[0];
@@ -450,7 +445,8 @@ export interface DeactivateInternalLicenseParams {
 /**
  * Public deactivation endpoint domain function:
  * Releases capacity for a previously activated domain.
- * Idempotent: repeated deactivations succeed deterministically.
+ * Anti-enumeration: returns success for unknown keys or unactivated domains.
+ * Atomic CAS via updateMany ensuring exactly-once transition audit.
  */
 export async function deactivateInternalLicense(
   params: DeactivateInternalLicenseParams,
@@ -459,15 +455,15 @@ export async function deactivateInternalLicense(
   let normalizedDomain: string;
   try {
     normalizedDomain = normalizeDomain(params.domain);
-  } catch (err: any) {
-    throw new InternalLicenseEngineError(err.message, 400);
+  } catch {
+    throw new InternalLicenseEngineError("Invalid license key or domain", 400);
   }
 
   let normalizedKey: string;
   try {
     normalizedKey = normalizeLicenseKey(params.licenseKey);
   } catch {
-    throw new InternalLicenseEngineError("Invalid license key", 400);
+    throw new InternalLicenseEngineError("Invalid license key or domain", 400);
   }
   const keyHash = hashLicenseKey(normalizedKey);
 
@@ -477,19 +473,7 @@ export async function deactivateInternalLicense(
     });
 
     if (!license) {
-      throw new InternalLicenseEngineError("Invalid license key", 400);
-    }
-
-    const activation = await tx.licenseActivation.findFirst({
-      where: {
-        licenseId: license.id,
-        normalizedDomain,
-        status: "ACTIVE",
-      },
-    });
-
-    if (!activation) {
-      // Idempotent: already deactivated or never activated
+      // Anti-enumeration: return success for unknown keys without leaking key existence
       return {
         success: true,
         domain: normalizedDomain,
@@ -497,34 +481,50 @@ export async function deactivateInternalLicense(
       };
     }
 
-    const updated = await tx.licenseActivation.update({
-      where: { id: activation.id },
+    // Atomic CAS: only transitions if status is currently ACTIVE
+    const deactivationTime = new Date();
+    const updateResult = await tx.licenseActivation.updateMany({
+      where: {
+        licenseId: license.id,
+        normalizedDomain,
+        status: "ACTIVE",
+      },
       data: {
         status: "DEACTIVATED",
-        deactivatedAt: new Date(),
+        deactivatedAt: deactivationTime,
       },
     });
 
-    // Record transactional audit log
-    await tx.auditLog.create({
-      data: {
-        action: "LICENSE_DEACTIVATED",
-        entity: "LicenseActivation",
-        entityId: updated.id,
-        actorId: license.userId,
-        details: {
+    // Record transactional audit log ONLY if an active activation was transitioned (exactly once)
+    if (updateResult.count > 0) {
+      const actRecord = await tx.licenseActivation.findFirst({
+        where: {
           licenseId: license.id,
-          entitlementId: license.entitlementId,
           normalizedDomain,
-          keyLast4: license.keyLast4,
         },
-      },
-    });
+        select: { id: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: "LICENSE_DEACTIVATED",
+          entity: "LicenseActivation",
+          entityId: actRecord?.id ?? license.id,
+          actorId: license.userId,
+          details: {
+            licenseId: license.id,
+            entitlementId: license.entitlementId,
+            normalizedDomain,
+            keyLast4: license.keyLast4,
+          },
+        },
+      });
+    }
 
     return {
       success: true,
       domain: normalizedDomain,
-      deactivatedAt: (updated.deactivatedAt ?? new Date()).toISOString(),
+      deactivatedAt: deactivationTime.toISOString(),
     };
   });
 }
@@ -671,42 +671,59 @@ export async function adminRevokeLicense(
   db: PrismaClient = prisma,
 ): Promise<AdminLicenseDto> {
   return db.$transaction(async (tx) => {
-    const license = await tx.internalLicense.findUnique({
-      where: { id: params.licenseId },
-      include: {
-        entitlement: true,
-        activations: { where: { status: "ACTIVE" } },
-      },
-    });
+    const licenseRows = await tx.$queryRaw<
+      Array<{
+        id: string;
+        entitlement_id: string;
+        user_id: string;
+        product_id: string;
+        variant_id: string;
+        status: LicenseStatus;
+        key_last4: string;
+        created_at: Date;
+        updated_at: Date;
+        revoked_at: Date | null;
+      }>
+    >`
+      SELECT id, entitlement_id, user_id, product_id, variant_id, status, key_last4, created_at, updated_at, revoked_at
+      FROM internal_licenses
+      WHERE id = ${params.licenseId}
+      FOR UPDATE
+    `;
 
-    if (!license) {
+    if (!licenseRows || licenseRows.length === 0) {
       throw new InternalLicenseEngineError("License not found", 404);
     }
+    const license = licenseRows[0];
+
+    const ent = await tx.entitlement.findUnique({
+      where: { id: license.entitlement_id },
+    });
 
     if (license.status === "REVOKED") {
       return {
         id: license.id,
-        entitlementId: license.entitlementId,
-        userId: license.userId,
-        productId: license.productId,
-        variantId: license.variantId,
+        entitlementId: license.entitlement_id,
+        userId: license.user_id,
+        productId: license.product_id,
+        variantId: license.variant_id,
         status: license.status,
-        keyLast4: license.keyLast4,
-        maxActivations: license.entitlement.maxActivations,
+        keyLast4: license.key_last4,
+        maxActivations: ent?.maxActivations ?? null,
         activeActivations: 0,
-        createdAt: license.createdAt.toISOString(),
-        updatedAt: license.updatedAt.toISOString(),
-        revokedAt: license.revokedAt?.toISOString() ?? null,
+        createdAt: license.created_at.toISOString(),
+        updatedAt: license.updated_at.toISOString(),
+        revokedAt: license.revoked_at?.toISOString() ?? null,
       };
     }
 
+    const now = new Date();
     const updated = await tx.internalLicense.update({
       where: { id: license.id },
       data: {
         status: "REVOKED",
-        revokedAt: new Date(),
+        revokedAt: now,
       },
-      include: { entitlement: true },
     });
 
     // Deactivate all active activations
@@ -717,11 +734,11 @@ export async function adminRevokeLicense(
       },
       data: {
         status: "DEACTIVATED",
-        deactivatedAt: new Date(),
+        deactivatedAt: now,
       },
     });
 
-    // Record transactional audit log
+    // Record transactional audit log (exactly once)
     await tx.auditLog.create({
       data: {
         action: "INTERNAL_LICENSE_REVOKED",
@@ -730,8 +747,8 @@ export async function adminRevokeLicense(
         actorId: params.actorId,
         details: {
           licenseId: license.id,
-          entitlementId: license.entitlementId,
-          keyLast4: license.keyLast4,
+          entitlementId: license.entitlement_id,
+          keyLast4: license.key_last4,
           reason: params.reason || "Administrative revocation",
         },
       },
@@ -745,7 +762,7 @@ export async function adminRevokeLicense(
       variantId: updated.variantId,
       status: updated.status,
       keyLast4: updated.keyLast4,
-      maxActivations: updated.entitlement.maxActivations,
+      maxActivations: ent?.maxActivations ?? null,
       activeActivations: 0,
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),

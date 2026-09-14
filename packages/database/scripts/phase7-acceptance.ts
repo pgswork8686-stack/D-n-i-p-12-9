@@ -138,7 +138,7 @@ async function apiGet(endpoint: string, token?: string) {
 
 async function runPhase7Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 7 — INTERNAL LICENSE ENGINE LIVE ACCEPTANCE (28 GATES)");
+  console.log("PHASE 7 — INTERNAL LICENSE ENGINE LIVE ACCEPTANCE (38 GATES)");
   console.log("==================================================");
 
   // [Gate 1] Health & Worker Runtime
@@ -721,8 +721,330 @@ async function runPhase7Acceptance() {
   }
   console.log("✓ Gate 28 passed: Admin revoked license, and subsequent client validation failed closed");
 
+  // [Gate 29] Public activation rejects or strips arbitrary metadata
+  console.log("\n[Gate 29] Testing public activation rejects or strips arbitrary metadata...");
+  const metaEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 2,
+  });
+  let metaLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    metaLic = await prisma.internalLicense.findUnique({ where: { entitlementId: metaEnt.id } });
+    if (metaLic) break;
+    await sleep(500);
+  }
+  const metaKey = decryptLicenseKey(metaLic.keyCiphertext, metaLic.keyIv, metaLic.keyAuthTag, TEST_ENCRYPTION_KEY);
+  const metaPayload = {
+    licenseKey: metaKey,
+    domain: "metadata-probe.com",
+    metadata: { note: metaKey, attackerSecret: "malicious_payload" },
+  };
+  const metaActRes = await apiPost("/v1/licenses/activate", metaPayload);
+  if (!metaActRes.ok || !metaActRes.data.valid) {
+    throw new Error(`Activation failed: ${JSON.stringify(metaActRes.data)}`);
+  }
+  const metaRow = await prisma.licenseActivation.findFirst({
+    where: { licenseId: metaLic.id, normalizedDomain: "metadata-probe.com" },
+  });
+  if (!metaRow) {
+    throw new Error("Activation row not found!");
+  }
+  const rowMetaStr = JSON.stringify(metaRow.metadata ?? {});
+  if (rowMetaStr.includes("NXS-") || rowMetaStr.includes("malicious_payload")) {
+    throw new Error(`CRITICAL SECURITY FAILURE: Metadata leaked into DB: ${rowMetaStr}`);
+  }
+  console.log("✓ Gate 29 passed: Arbitrary metadata stripped / never stored in DB activation record");
+
+  // [Gate 30] Live secret injection verification across entire DB
+  console.log("\n[Gate 30] Verifying zero plaintext license keys across DB activations metadata and audit logs...");
+  const allActivations = await prisma.licenseActivation.findMany();
+  for (const act of allActivations) {
+    const actMetaStr = JSON.stringify(act.metadata ?? {});
+    if (/NXS-(?:[0-9A-F]{4}-){7}[0-9A-F]{4}/.test(actMetaStr)) {
+      throw new Error(`CRITICAL: Found plaintext license key in license_activations id=${act.id}`);
+    }
+  }
+  const allAudits = await prisma.auditLog.findMany({
+    where: {
+      action: {
+        in: [
+          "INTERNAL_LICENSE_CREATED",
+          "LICENSE_ACTIVATED",
+          "LICENSE_DEACTIVATED",
+          "INTERNAL_LICENSE_REVOKED",
+          "LICENSE_KEY_REVEALED",
+        ],
+      },
+    },
+  });
+  for (const audit of allAudits) {
+    const auditDetailsStr = JSON.stringify(audit.details ?? {});
+    if (/NXS-(?:[0-9A-F]{4}-){7}[0-9A-F]{4}/.test(auditDetailsStr)) {
+      throw new Error(`CRITICAL: Found plaintext license key in audit_logs id=${audit.id}`);
+    }
+  }
+  console.log("✓ Gate 30 passed: Zero plaintext license keys found in activations metadata or audit details");
+
+  // [Gate 31] All invalid validate states return strictly { valid: false } without error leakage
+  console.log("\n[Gate 31] Testing non-enumerating validation across all invalid failure modes...");
+  const invalidCases = [
+    { label: "Non-existent valid-format key", body: { licenseKey: "NXS-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-1111-2222", domain: "test.com" } },
+    { label: "Malformed key format", body: { licenseKey: "INVALID-KEY-123", domain: "test.com" } },
+    { label: "Malformed domain", body: { licenseKey: metaKey, domain: "http://invalid domain!#.com" } },
+    { label: "Unactivated domain", body: { licenseKey: metaKey, domain: "never-activated-mode.com" } },
+    { label: "Revoked license", body: { licenseKey: rightsKey, domain: "rights-test.com" } },
+    { label: "Expired entitlement", body: { licenseKey: expKey, domain: "exp-test.com" } },
+  ];
+  for (const testCase of invalidCases) {
+    const res = await apiPost("/v1/licenses/validate", testCase.body);
+    if (!res.ok) {
+      throw new Error(`Expected 200 OK with valid: false for ${testCase.label}, received status ${res.status}`);
+    }
+    if (res.data.valid !== false || res.data.error !== undefined || res.data.status !== undefined) {
+      throw new Error(`Enumeration leak on ${testCase.label}: received ${JSON.stringify(res.data)}`);
+    }
+  }
+  console.log("✓ Gate 31 passed: All invalid validation modes returned { valid: false } with zero enumeration");
+
+  // [Gate 32] True concurrent dual-worker provisioning race
+  console.log("\n[Gate 32] Testing true concurrent dual-worker provisioning race...");
+  const batchEnts: any[] = [];
+  for (let i = 0; i < 5; i++) {
+    const ent = await createTestEntitlement({
+      userId: customer1Id,
+      maxActivations: 1,
+    });
+    batchEnts.push(ent);
+  }
+  const [workerResult1, workerResult2] = await Promise.all([
+    provisionInternalLicenses({ workerId: "worker-race-1", batchSize: 10 }),
+    provisionInternalLicenses({ workerId: "worker-race-2", batchSize: 10 }),
+  ]);
+  await sleep(1000);
+  for (const ent of batchEnts) {
+    const count = await prisma.internalLicense.count({ where: { entitlementId: ent.id } });
+    if (count !== 1) {
+      throw new Error(`Entitlement ${ent.id} has ${count} internal licenses (expected exactly 1)`);
+    }
+  }
+  console.log(`✓ Gate 32 passed: Dual-worker race provisioned cleanly (W1: ${workerResult1.provisionedCount}, W2: ${workerResult2.provisionedCount}, total 5 unique)`);
+
+  // [Gate 33] Concurrent deactivation CAS: 8 parallel calls -> exactly 1 audit log
+  console.log("\n[Gate 33] Testing concurrent deactivation CAS (8 parallel calls, exactly 1 audit log)...");
+  const casEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 2,
+  });
+  let casLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    casLic = await prisma.internalLicense.findUnique({ where: { entitlementId: casEnt.id } });
+    if (casLic) break;
+    await sleep(500);
+  }
+  const casKey = decryptLicenseKey(casLic.keyCiphertext, casLic.keyIv, casLic.keyAuthTag, TEST_ENCRYPTION_KEY);
+  await apiPost("/v1/licenses/activate", { licenseKey: casKey, domain: "cas-deactivate.com" });
+
+  const casActRecord = await prisma.licenseActivation.findFirst({
+    where: { licenseId: casLic.id, normalizedDomain: "cas-deactivate.com" },
+  });
+
+  const deactParallelResults = await Promise.all(
+    Array.from({ length: 8 }, () =>
+      apiPost("/v1/licenses/deactivate", {
+        licenseKey: casKey,
+        domain: "cas-deactivate.com",
+      }),
+    ),
+  );
+  for (const res of deactParallelResults) {
+    if (!res.ok || !res.data.success) {
+      throw new Error(`Concurrent deactivation returned failure: ${JSON.stringify(res.data)}`);
+    }
+  }
+  const deactAuditsAfter = await prisma.auditLog.count({
+    where: {
+      entity: "LicenseActivation",
+      entityId: casActRecord?.id,
+      action: "LICENSE_DEACTIVATED",
+    },
+  });
+  if (deactAuditsAfter !== 1) {
+    throw new Error(`CAS violation: Expected exactly 1 LICENSE_DEACTIVATED audit log, found ${deactAuditsAfter}`);
+  }
+  console.log("✓ Gate 33 passed: 8 concurrent deactivations produced exactly 1 audit log (atomic CAS)");
+
+  // [Gate 34] Concurrent admin revoke CAS: 5 parallel calls -> exactly 1 audit log
+  console.log("\n[Gate 34] Testing concurrent admin revoke CAS (5 parallel calls, exactly 1 audit log)...");
+  const revokeEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 1,
+  });
+  let revokeLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    revokeLic = await prisma.internalLicense.findUnique({ where: { entitlementId: revokeEnt.id } });
+    if (revokeLic) break;
+    await sleep(500);
+  }
+
+  const revokeParallelResults = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      apiPost(
+        `/admin/internal-licenses/${revokeLic.id}/revoke`,
+        { reason: "Concurrent revoke test" },
+        adminToken,
+      ),
+    ),
+  );
+  for (const res of revokeParallelResults) {
+    if (!res.ok || res.data.status !== "REVOKED") {
+      throw new Error(`Concurrent admin revoke returned failure: ${JSON.stringify(res.data)}`);
+    }
+  }
+  const revokeAudits = await prisma.auditLog.count({
+    where: {
+      entity: "InternalLicense",
+      entityId: revokeLic.id,
+      action: "INTERNAL_LICENSE_REVOKED",
+    },
+  });
+  if (revokeAudits !== 1) {
+    throw new Error(`CAS violation: Expected exactly 1 INTERNAL_LICENSE_REVOKED audit log, found ${revokeAudits}`);
+  }
+  console.log("✓ Gate 34 passed: 5 concurrent admin revokes produced exactly 1 audit log (atomic CAS)");
+
+  // [Gate 35] Live race: Activate vs Entitlement Revoke
+  console.log("\n[Gate 35] Testing live race between Activate and Entitlement Revoke...");
+  const raceRevEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 2,
+  });
+  let raceRevLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    raceRevLic = await prisma.internalLicense.findUnique({ where: { entitlementId: raceRevEnt.id } });
+    if (raceRevLic) break;
+    await sleep(500);
+  }
+  const raceRevKey = decryptLicenseKey(raceRevLic.keyCiphertext, raceRevLic.keyIv, raceRevLic.keyAuthTag, TEST_ENCRYPTION_KEY);
+
+  await Promise.all([
+    prisma.entitlement.update({
+      where: { id: raceRevEnt.id },
+      data: { status: EntitlementStatus.REVOKED, revokedAt: new Date() },
+    }),
+    apiPost("/v1/licenses/activate", {
+      licenseKey: raceRevKey,
+      domain: "race-revoke-test.com",
+    }),
+  ]);
+
+  await reconcileInternalLicenses();
+  const raceValRes = await apiPost("/v1/licenses/validate", {
+    licenseKey: raceRevKey,
+    domain: "race-revoke-test.com",
+  });
+  if (raceValRes.data.valid !== false) {
+    throw new Error("Live race allowed activation to remain valid on revoked entitlement!");
+  }
+  console.log("✓ Gate 35 passed: Live race between activate and revoke securely resolved to valid: false");
+
+  // [Gate 36] Live race: Activate vs Deactivate same domain
+  console.log("\n[Gate 36] Testing live race between Activate and Deactivate on the same domain...");
+  const actDeactEnt = await createTestEntitlement({
+    userId: customer1Id,
+    maxActivations: 2,
+  });
+  let actDeactLic: any = null;
+  for (let i = 0; i < 20; i++) {
+    actDeactLic = await prisma.internalLicense.findUnique({ where: { entitlementId: actDeactEnt.id } });
+    if (actDeactLic) break;
+    await sleep(500);
+  }
+  const actDeactKey = decryptLicenseKey(actDeactLic.keyCiphertext, actDeactLic.keyIv, actDeactLic.keyAuthTag, TEST_ENCRYPTION_KEY);
+
+  await apiPost("/v1/licenses/activate", { licenseKey: actDeactKey, domain: "race-act-deact.com" });
+
+  const [actResult, deactResult] = await Promise.all([
+    apiPost("/v1/licenses/activate", { licenseKey: actDeactKey, domain: "race-act-deact.com" }),
+    apiPost("/v1/licenses/deactivate", { licenseKey: actDeactKey, domain: "race-act-deact.com" }),
+  ]);
+  if (actResult.status === 500 || deactResult.status === 500) {
+    throw new Error(`Race returned 500: act=${actResult.status}, deact=${deactResult.status}`);
+  }
+  const activeCountInDb = await prisma.licenseActivation.count({
+    where: { licenseId: actDeactLic.id, normalizedDomain: "race-act-deact.com", status: "ACTIVE" },
+  });
+  if (activeCountInDb > 1) {
+    throw new Error(`Inconsistent state: ${activeCountInDb} active records for same domain`);
+  }
+  console.log(`✓ Gate 36 passed: Simultaneous activate & deactivate serialized cleanly (DB active count: ${activeCountInDb})`);
+
+  // [Gate 37] Authoritative fulfillment type check: non-INTERNAL_LICENSE fails closed
+  console.log("\n[Gate 37] Testing authoritative fulfillment type check (non-INTERNAL_LICENSE fails closed)...");
+  const wrongTypeEnt = await createTestEntitlement({
+    userId: customer1Id,
+    fulfillmentType: FulfillmentType.EXTERNAL_MANAGED,
+  });
+  const fakePlaintext = generateLicenseKey();
+  const fakeEnc = encryptLicenseKey(fakePlaintext, TEST_ENCRYPTION_KEY);
+  await prisma.internalLicense.create({
+    data: {
+      entitlementId: wrongTypeEnt.id,
+      userId: customer1Id,
+      productId: wrongTypeEnt.productId,
+      variantId: wrongTypeEnt.variantId,
+      keyHash: hashLicenseKey(fakePlaintext),
+      keyCiphertext: fakeEnc.ciphertext,
+      keyIv: fakeEnc.iv,
+      keyAuthTag: fakeEnc.authTag,
+      keyLast4: extractKeyLast4(fakePlaintext),
+      status: LicenseStatus.ACTIVE,
+    },
+  });
+
+  const wrongValRes = await apiPost("/v1/licenses/validate", {
+    licenseKey: fakePlaintext,
+    domain: "wrong-fulfillment.com",
+  });
+  if (wrongValRes.data.valid !== false) {
+    throw new Error("Validation succeeded for non-INTERNAL_LICENSE entitlement!");
+  }
+  const wrongActRes = await apiPost("/v1/licenses/activate", {
+    licenseKey: fakePlaintext,
+    domain: "wrong-fulfillment.com",
+  });
+  if (wrongActRes.status !== 400 || !JSON.stringify(wrongActRes.data).includes("Invalid license key or domain")) {
+    throw new Error(`Expected 400 'Invalid license key or domain', received ${wrongActRes.status}: ${JSON.stringify(wrongActRes.data)}`);
+  }
+  console.log("✓ Gate 37 passed: Non-INTERNAL_LICENSE entitlement fails validation (valid: false) and activation (400 generic)");
+
+  // [Gate 38] Malformed license key regex validation
+  console.log("\n[Gate 38] Testing strict regex enforcement on malformed license keys...");
+  const malformedKeys = [
+    "NXS-1234",
+    "NXS-GGGG-2222-3333-4444-5555-6666-7777-8888",
+    "NXS-ZZZZ-2222-3333-4444-5555-6666-7777-8888",
+    "1111-2222-3333-4444-5555-6666-7777-8888",
+    "NXS-1111-2222-3333-4444-5555-6666-7777",
+    "NXS-11111-2222-3333-4444-5555-6666-7777-8888",
+  ];
+  for (const mKey of malformedKeys) {
+    const actRes = await apiPost("/v1/licenses/activate", { licenseKey: mKey, domain: "valid-domain.com" });
+    if (actRes.status !== 400) {
+      throw new Error(`Expected 400 for malformed key '${mKey}', got ${actRes.status}`);
+    }
+    const valRes = await apiPost("/v1/licenses/validate", { licenseKey: mKey, domain: "valid-domain.com" });
+    if (valRes.data.valid !== false) {
+      throw new Error(`Expected valid: false for malformed key '${mKey}', got ${JSON.stringify(valRes.data)}`);
+    }
+    const deactRes = await apiPost("/v1/licenses/deactivate", { licenseKey: mKey, domain: "valid-domain.com" });
+    if (deactRes.status !== 400) {
+      throw new Error(`Expected 400 for deactivation with malformed key '${mKey}', got ${deactRes.status}`);
+    }
+  }
+  console.log("✓ Gate 38 passed: All malformed license keys rejected generically across activate, validate, and deactivate");
+
   console.log("\n==================================================");
-  console.log("ALL 28 PHASE 7 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 38 PHASE 7 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 
