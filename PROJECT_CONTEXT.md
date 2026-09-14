@@ -180,28 +180,44 @@ Customer
 
 Side-effects như email, license generation, affiliate commission chạy qua outbox/worker.
 
-## License nội bộ
-Dự kiến:
-- POST /v1/licenses/activate
-- POST /v1/licenses/deactivate
-- POST /v1/licenses/validate
-- GET /v1/account/licenses
+## License nội bộ (Phase 7 Implemented)
+Kiến trúc Internal License Engine:
+- Mã bản quyền chuẩn định dạng `NXS-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX` (128-bit cryptographic entropy).
+- Khóa lưu trữ an toàn: Plaintext key chỉ trả về 1 lần duy nhất cho khách hàng sở hữu tại `POST /licenses/:id/reveal`. Database chỉ lưu ciphertext mã hóa bằng AES-256-GCM (`encryptedKey`, IV, auth tag) và `keyHash` (SHA-256) cho tra cứu nhanh không khả nghịch. Khóa plaintext tuyệt đối KHÔNG bao giờ xuất hiện trong audit logs hay error payloads.
+- Endpoints:
+  - `POST /v1/licenses/activate`: Kích hoạt domain, kiểm tra sức chứa `maxActivations`, chuẩn hóa canonical domain (loại bỏ protocol, trailing slash, port, query params), idempotent cho cùng domain. Chống race condition kích hoạt đồng thời vượt quá số ghế.
+  - `POST /v1/licenses/validate`: Thẩm định trạng thái license và domain theo thời gian thực. Chống vét cạn (anti-enumeration): mọi trạng thái không hợp lệ (key sai, domain sai, entitlement hết hạn/bị thu hồi) đều trả về `{ valid: false }` với HTTP 200 không tiết lộ nguyên nhân.
+  - `POST /v1/licenses/deactivate`: Hủy kích hoạt domain, giải phóng ghế cho domain mới. CAS nguyên tử, idempotent.
+  - `GET /licenses`: Khách hàng tra cứu danh sách license thuộc sở hữu với masked key (`NXS-****-...-XXXX`).
+  - `POST /licenses/:id/reveal`: Khách hàng giải mã và xem plaintext key của license họ sở hữu (yêu cầu AuthGuard và quyền sở hữu).
+  - Admin management: `GET /admin/internal-licenses`, `POST /admin/internal-licenses/:id/revoke` (bảo vệ chống license key injection vào audit log).
+- Worker tự động hóa:
+  - Worker nền tự động phát hiện `Entitlement` loại `INTERNAL_LICENSE` ở trạng thái `ACTIVE` để tạo `InternalLicense` tự động, idempotent, an toàn khi nhiều worker chạy song song.
+  - Worker định kỳ đối soát thu hồi giấy phép (`reconcileInternalLicenses`) khi Entitlement tương ứng bị `REVOKED` hoặc `EXPIRED`.
 
-Domain phải normalize trước khi so sánh; activation limit kiểm tra ở backend.
-
-## Download Engine
-```text
-Customer click Download
-→ POST /v1/downloads/request
-→ check auth
-→ check entitlement
-→ check version permission
-→ check rate limit
-→ signed R2 URL TTL 2–5 phút
-→ log download event
-```
-
-Không render permanent private ZIP URL.
+## Download & Version Engine (Phase 8 Implemented)
+Kiến trúc quản lý phiên bản phần mềm & cấp quyền tải an toàn:
+- Quản lý phiên bản chuẩn SemVer 2.0.0 (`major.minor.patch[-prerelease][+build]`): Thẩm định định dạng, chuẩn hóa, phân tách metadata, so sánh và sắp xếp phiên bản chính xác qua `@nexus/utils/semver`.
+- Object Storage riêng tư: MinIO (local development) / Cloudflare R2 (production) qua S3-compatible abstraction.
+  - Tuyệt đối KHÔNG có URL công khai hoặc URL vĩnh viễn cho tài sản số.
+  - Chữ ký tải file (Signed URLs) là tạm thời với TTL giới hạn nghiêm ngặt từ 120s–300s (mặc định 180s).
+  - Khóa lưu trữ backend tự sinh (`products/{productId}/versions/{version}/{uuid}.zip`), header `Content-Disposition: attachment; filename="safe-filename.zip"` chuẩn RFC 6266.
+- Toàn vẹn dữ liệu:
+  - Xác thực streaming SHA-256 checksum và kích thước `sizeBytes` đối chiếu trực tiếp với storage trước khi file được chuyển sang trạng thái `VERIFIED` và phiên bản sang `PUBLISHED`.
+  - Bất biến (Immutability): Phiên bản và file đã `PUBLISHED` là bất biến. Mọi thao tác cập nhật/xóa sau khi phát hành đều bị chặn (HTTP 409). Thao tác phát hành sử dụng atomic CAS (`DRAFT` -> `PUBLISHED`) ghi nhận đúng 1 audit log duy nhất.
+- Kênh tải khách hàng (`POST /v1/downloads/request`):
+  - Kiểm tra xác thực (AuthGuard), quyền sở hữu Entitlement, trạng thái `ACTIVE` và chưa hết hạn `expiresAt`.
+  - Hỗ trợ cả `DIGITAL_DOWNLOAD` và `INTERNAL_LICENSE`.
+  - Kiểm tra cửa sổ cập nhật: `releasedAt <= updatesUntil`. Nếu `updatesUntil === null`, khách hàng được tải mọi bản phát hành mới nhất khi Entitlement còn hoạt động. Nếu hết hạn cập nhật (`updatesUntil < now`), khách hàng vẫn giữ quyền tải vĩnh viễn các phiên bản được phát hành trong thời gian bản quyền còn hiệu lực (`releasedAt <= updatesUntil`).
+- Giới hạn tần suất tải (Rate Limiting):
+  - Redis Lua script nguyên tử: Tối đa 10 lượt tải trong cửa sổ trượt 600 giây trên mỗi Entitlement.
+  - Nguyên tắc Fail-closed: Nếu Redis gặp sự cố, hệ thống trả về HTTP 503 (Service Unavailable), không mở cổng tải không giới hạn.
+- Kênh cập nhật tự động / WordPress Updater (`POST /v1/updates/check`):
+  - Xác thực qua license key và domain đã chuẩn hóa.
+  - Kiểm tra quyền sở hữu và cửa sổ cập nhật, trả về phiên bản mới nhất mà khách hàng ĐỦ ĐIỀU KIỆN nhận.
+  - Chống vét cạn: license không hợp lệ hoặc không có quyền trả về payload rỗng `{ updateAvailable: false }` thay vì lộ thông tin nội bộ.
+- Bảo mật thông tin:
+  - Signed URLs và tham số chữ ký lưu trữ (`X-Amz-Signature`, `X-Amz-Credential`, v.v.) tuyệt đối KHÔNG bao giờ được ghi vào database, bảng `DownloadEvent`, hay `AuditLog`.
 
 ## CMS riêng
 Không phụ thuộc WordPress.

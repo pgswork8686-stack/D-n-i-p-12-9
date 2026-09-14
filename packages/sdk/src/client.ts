@@ -47,6 +47,15 @@ import {
   CreateProviderAccountRequest,
   UpdateProviderAccountRequest,
   AdminAllocationFilterQuery,
+  ProductVersionDto,
+  ProductVersionFileDto,
+  CreateProductVersionRequest,
+  AddVersionFileRequest,
+  PublishVersionResponse,
+  RequestDownloadRequest,
+  DownloadUrlResponse,
+  CheckUpdateRequest,
+  CheckUpdateResponse,
 } from "@nexus/contracts";
 
 
@@ -990,6 +999,111 @@ export class NexusApiClient {
     return (await res.json()) as LicenseAllocationDto;
   }
 
+  // ----------------------------------------------------
+  // Product Versions (Admin)
+  // ----------------------------------------------------
+
+  async createProductVersion(
+    productId: string,
+    data: CreateProductVersionRequest,
+  ): Promise<ProductVersionDto> {
+    const res = await fetch(`${this.baseUrl}/admin/products/${productId}/versions`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Create product version failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionDto;
+  }
+
+  async listProductVersions(productId: string): Promise<ProductVersionDto[]> {
+    const res = await fetch(`${this.baseUrl}/admin/products/${productId}/versions`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List product versions failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionDto[];
+  }
+
+  async getProductVersion(versionId: string): Promise<ProductVersionDto> {
+    const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get product version failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionDto;
+  }
+
+  async addVersionFile(
+    versionId: string,
+    data: AddVersionFileRequest,
+  ): Promise<ProductVersionFileDto> {
+    const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}/files`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Add version file failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionFileDto;
+  }
+
+  async publishProductVersion(versionId: string): Promise<PublishVersionResponse> {
+    const res = await fetch(`${this.baseUrl}/admin/product-versions/${versionId}/publish`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Publish product version failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PublishVersionResponse;
+  }
+
+  // ----------------------------------------------------
+  // Customer Downloads
+  // ----------------------------------------------------
+
+  async requestDownload(data: RequestDownloadRequest): Promise<DownloadUrlResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/downloads/request`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Request download failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as DownloadUrlResponse;
+  }
+
+  // ----------------------------------------------------
+  // License Updater Check
+  // ----------------------------------------------------
+
+  async checkUpdate(data: CheckUpdateRequest): Promise<CheckUpdateResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/updates/check`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Check update failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CheckUpdateResponse;
+  }
 
   private buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = {

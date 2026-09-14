@@ -6,9 +6,24 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { IStorageService, StorageHealthResult } from "./storage.interface";
+import * as crypto from "crypto";
+import { Readable } from "stream";
+import {
+  IStorageService,
+  StorageHealthResult,
+  StorageObjectMetadata,
+  StorageIntegrityVerificationResult,
+  SignedDownloadUrlOptions,
+} from "./storage.interface";
+import {
+  DOWNLOAD_SIGNED_URL_DEFAULT_TTL,
+  DOWNLOAD_SIGNED_URL_MIN_TTL,
+  DOWNLOAD_SIGNED_URL_MAX_TTL,
+} from "@nexus/contracts";
 
 @Injectable()
 export class S3CompatibleStorageService implements IStorageService {
@@ -84,7 +99,7 @@ export class S3CompatibleStorageService implements IStorageService {
           status: "ok",
           latencyMs: Date.now() - start,
         };
-      } catch (listErr) {
+      } catch (_listErr) {
         const errorMsg =
           headErr instanceof Error ? headErr.message : "Storage unreachable";
         this.logger.warn(
@@ -101,13 +116,41 @@ export class S3CompatibleStorageService implements IStorageService {
 
   async getSignedDownloadUrl(
     key: string,
-    ttlSeconds = 300,
+    ttlSeconds = DOWNLOAD_SIGNED_URL_DEFAULT_TTL,
   ): Promise<string> {
+    return this.createSignedDownloadUrl(key, { ttlSeconds });
+  }
+
+  async createSignedDownloadUrl(
+    key: string,
+    options?: SignedDownloadUrlOptions,
+  ): Promise<string> {
+    let ttl = options?.ttlSeconds ?? DOWNLOAD_SIGNED_URL_DEFAULT_TTL;
+    if (ttl < DOWNLOAD_SIGNED_URL_MIN_TTL) {
+      ttl = DOWNLOAD_SIGNED_URL_MIN_TTL;
+    }
+    if (ttl > DOWNLOAD_SIGNED_URL_MAX_TTL) {
+      ttl = DOWNLOAD_SIGNED_URL_MAX_TTL;
+    }
+
+    let responseContentDisposition: string | undefined;
+    if (options?.filename) {
+      const sanitized = options.filename
+        .replace(/[/\\?%*:|"<>]/g, "_")
+        .replace(/[\r\n]/g, "")
+        .trim();
+      if (sanitized) {
+        responseContentDisposition = `attachment; filename="${sanitized}"`;
+      }
+    }
+
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
+      ResponseContentDisposition: responseContentDisposition,
     });
-    return getSignedUrl(this.s3Client, command, { expiresIn: ttlSeconds });
+
+    return getSignedUrl(this.s3Client, command, { expiresIn: ttl });
   }
 
   async uploadFile(
@@ -123,5 +166,84 @@ export class S3CompatibleStorageService implements IStorageService {
     });
     await this.s3Client.send(command);
     return key;
+  }
+
+  async headObject(key: string): Promise<StorageObjectMetadata | null> {
+    try {
+      const res = await this.s3Client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
+      return {
+        contentLength: res.ContentLength ?? 0,
+        contentType: res.ContentType,
+        etag: res.ETag,
+        lastModified: res.LastModified,
+      };
+    } catch (err: any) {
+      if (
+        err?.name === "NotFound" ||
+        err?.name === "NoSuchKey" ||
+        err?.$metadata?.httpStatusCode === 404
+      ) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    await this.s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      }),
+    );
+  }
+
+  async verifyObjectIntegrity(
+    key: string,
+    expectedSha256?: string,
+    expectedSizeBytes?: number,
+  ): Promise<StorageIntegrityVerificationResult> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+    });
+    const res = await this.s3Client.send(command);
+    const stream = res.Body as Readable;
+    if (!stream) {
+      throw new Error(`Object body empty or invalid stream for key '${key}'`);
+    }
+
+    const hash = crypto.createHash("sha256");
+    let totalBytes = 0;
+
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk: Buffer) => {
+        totalBytes += chunk.length;
+        hash.update(chunk);
+      });
+      stream.on("end", () => resolve());
+      stream.on("error", (err) => reject(err));
+    });
+
+    const actualSha256 = hash.digest("hex");
+    let valid = true;
+
+    if (expectedSha256 && actualSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
+      valid = false;
+    }
+    if (expectedSizeBytes !== undefined && totalBytes !== expectedSizeBytes) {
+      valid = false;
+    }
+
+    return {
+      valid,
+      actualSha256,
+      actualSizeBytes: totalBytes,
+    };
   }
 }

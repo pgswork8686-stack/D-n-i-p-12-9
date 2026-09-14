@@ -6,6 +6,7 @@ export * from "./commerce";
 export * from "./entitlements";
 export * from "./allocations";
 export * from "./licenses";
+export * from "./downloads";
 
 
 
