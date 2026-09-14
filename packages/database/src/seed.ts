@@ -63,7 +63,6 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "profile.read",
     "profile.update",
     "order.read",
-    "license.read",
     "ticket.read",
   ],
   support_agent: [
@@ -352,7 +351,44 @@ export async function seedDevCatalog(db: PrismaClient = prisma): Promise<void> {
     create: { name: "Developer Tools", slug: "developer-tools", description: "Developer software, SDKs, and developer utilities" },
   });
 
-  console.log("[seed] Seeding development products...");
+  console.log("[seed] Seeding development products and license providers...");
+
+  // Phase 6: Elementor License Provider & Provider Account
+  const providerElementor = await db.licenseProvider.upsert({
+    where: { code: "ELEMENTOR" },
+    update: {
+      name: "Elementor Pro",
+      status: "ACTIVE",
+      fulfillmentMode: "MANUAL_EXTERNAL",
+      metadata: { vendor: "Elementor", website: "https://elementor.com" },
+    },
+    create: {
+      code: "ELEMENTOR",
+      name: "Elementor Pro",
+      status: "ACTIVE",
+      fulfillmentMode: "MANUAL_EXTERNAL",
+      metadata: { vendor: "Elementor", website: "https://elementor.com" },
+    },
+  });
+
+  await db.providerAccount.upsert({
+    where: { id: "pa-elementor-main-01" },
+    update: {
+      providerId: providerElementor.id,
+      name: "Elementor Agency Subscription #1",
+      externalReference: "ELE-SUB-AGENCY-001",
+      totalCapacity: 1000,
+      status: "ACTIVE",
+    },
+    create: {
+      id: "pa-elementor-main-01",
+      providerId: providerElementor.id,
+      name: "Elementor Agency Subscription #1",
+      externalReference: "ELE-SUB-AGENCY-001",
+      totalCapacity: 1000,
+      status: "ACTIVE",
+    },
+  });
 
   // 1. Elementor Pro (EXTERNAL_MANAGED_LICENSE, EXTERNAL_MANAGED)
   const pElementor = await db.product.upsert({

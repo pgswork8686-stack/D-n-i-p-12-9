@@ -35,7 +35,20 @@ import {
   EntitlementFilterQuery,
   AdminEntitlementFilterQuery,
   RevokeEntitlementRequest,
+  LicenseAllocationDto,
+  CustomerAllocationDto,
+  LicenseProviderDto,
+  ProviderAccountDto,
+  RequestAllocationRequest,
+  AdminActivateAllocationRequest,
+  AdminRejectAllocationRequest,
+  RequestDeactivationRequest,
+  AdminConfirmDeactivatedRequest,
+  CreateProviderAccountRequest,
+  UpdateProviderAccountRequest,
+  AdminAllocationFilterQuery,
 } from "@nexus/contracts";
+
 
 export interface NexusClientConfig {
   baseUrl: string;
@@ -728,6 +741,255 @@ export class NexusApiClient {
     }
     return (await res.json()) as EntitlementDto;
   }
+
+  // ---------------------------------------------------------------------------
+  // Phase 6 — External Managed License Allocations
+  // ---------------------------------------------------------------------------
+
+  async requestAllocation(
+    entitlementId: string,
+    domain: string,
+  ): Promise<CustomerAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/entitlements/${entitlementId}/allocations`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ domain }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Request allocation failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerAllocationDto;
+  }
+
+  async listAllocations(
+    entitlementId: string,
+  ): Promise<CustomerAllocationDto[]> {
+    const res = await fetch(
+      `${this.baseUrl}/entitlements/${entitlementId}/allocations`,
+      {
+        headers: this.buildHeaders(),
+        cache: "no-store",
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List allocations failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerAllocationDto[];
+  }
+
+  async requestDeactivation(
+    entitlementId: string,
+    allocationId: string,
+    reason?: string,
+  ): Promise<CustomerAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/entitlements/${entitlementId}/allocations/${allocationId}/request-deactivation`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ reason }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Request deactivation failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerAllocationDto;
+  }
+
+  async adminListProviders(): Promise<LicenseProviderDto[]> {
+    const res = await fetch(`${this.baseUrl}/admin/license-providers`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List providers failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as LicenseProviderDto[];
+  }
+
+  async adminListProviderAccounts(
+    providerId?: string,
+  ): Promise<ProviderAccountDto[]> {
+    const url = new URL(`${this.baseUrl}/admin/provider-accounts`);
+    if (providerId) {
+      url.searchParams.set("providerId", providerId);
+    }
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List provider accounts failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProviderAccountDto[];
+  }
+
+  async adminCreateProviderAccount(
+    req: CreateProviderAccountRequest,
+  ): Promise<ProviderAccountDto> {
+    const res = await fetch(`${this.baseUrl}/admin/provider-accounts`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Create provider account failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProviderAccountDto;
+  }
+
+  async adminGetProviderAccount(id: string): Promise<ProviderAccountDto> {
+    const res = await fetch(`${this.baseUrl}/admin/provider-accounts/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get provider account failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProviderAccountDto;
+  }
+
+  async adminUpdateProviderAccount(
+    id: string,
+    req: UpdateProviderAccountRequest,
+  ): Promise<ProviderAccountDto> {
+    const res = await fetch(`${this.baseUrl}/admin/provider-accounts/${id}`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update provider account failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProviderAccountDto;
+  }
+
+  async adminListAllocations(
+    query?: AdminAllocationFilterQuery,
+  ): Promise<PaginatedResponse<LicenseAllocationDto>> {
+    const url = new URL(`${this.baseUrl}/admin/license-allocations`);
+    if (query) {
+      Object.entries(query).forEach(([key, val]) => {
+        if (val !== undefined && val !== null) {
+          url.searchParams.set(key, String(val));
+        }
+      });
+    }
+    const res = await fetch(url.toString(), {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Admin list allocations failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaginatedResponse<LicenseAllocationDto>;
+  }
+
+  async adminGetAllocation(id: string): Promise<LicenseAllocationDto> {
+    const res = await fetch(`${this.baseUrl}/admin/license-allocations/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Admin get allocation failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as LicenseAllocationDto;
+  }
+
+  async adminActivateAllocation(
+    id: string,
+    providerAccountId: string,
+    notes?: string,
+  ): Promise<LicenseAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/admin/license-allocations/${id}/activate`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ providerAccountId, notes }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Admin activate allocation failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as LicenseAllocationDto;
+  }
+
+  async adminRejectAllocation(
+    id: string,
+    reason: string,
+  ): Promise<LicenseAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/admin/license-allocations/${id}/reject`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ reason }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Admin reject allocation failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as LicenseAllocationDto;
+  }
+
+  async adminRequestDeactivation(
+    id: string,
+    reason?: string,
+  ): Promise<LicenseAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/admin/license-allocations/${id}/request-deactivation`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ reason }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(
+        `Admin request deactivation failed (${res.status}): ${err}`,
+      );
+    }
+    return (await res.json()) as LicenseAllocationDto;
+  }
+
+  async adminConfirmDeactivated(
+    id: string,
+    notes?: string,
+  ): Promise<LicenseAllocationDto> {
+    const res = await fetch(
+      `${this.baseUrl}/admin/license-allocations/${id}/confirm-deactivated`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ notes }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(
+        `Admin confirm deactivated failed (${res.status}): ${err}`,
+      );
+    }
+    return (await res.json()) as LicenseAllocationDto;
+  }
+
 
   private buildHeaders(): Record<string, string> {
     const headers: Record<string, string> = {

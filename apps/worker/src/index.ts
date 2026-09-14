@@ -5,6 +5,8 @@ import { prisma } from "@nexus/database";
 import { processSystemJob } from "./processor";
 import { processOutboxEvents } from "./outbox-processor";
 import { expireDueEntitlements } from "./entitlement-issuer";
+import { reconcileExternalAllocations } from "./allocation-reconciler";
+
 
 // Load root .env file
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
@@ -84,6 +86,9 @@ const runPollingTick = async () => {
 
     // 2. Authoritative expiration of active entitlements whose expiresAt <= NOW()
     await expireDueEntitlements({ workerId });
+
+    // 3. Authoritative reconciliation of external allocations whose parent entitlement is REVOKED or EXPIRED
+    await reconcileExternalAllocations({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({
