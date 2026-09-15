@@ -9,6 +9,7 @@ import {
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import Redis from "ioredis";
+import * as dbModule from "../src/index";
 import {
   prisma,
   ProductType,
@@ -17,6 +18,8 @@ import {
   LicenseStatus,
   LicenseActivationStatus,
   publishProductVersion,
+  registerVerifiedUploadedFile,
+  recordDownloadIssuance,
   DownloadVersionEngineError,
 } from "../src/index";
 import {
@@ -25,7 +28,12 @@ import {
   encryptLicenseKey,
   extractKeyLast4,
 } from "@nexus/utils";
-import { resolveDownloadTtl } from "@nexus/contracts";
+import {
+  resolveDownloadTtl,
+  resolveMaxUploadBytes,
+  DEFAULT_MAX_UPLOAD_BYTES,
+  HARD_CEILING_MAX_UPLOAD_BYTES,
+} from "@nexus/contracts";
 
 const TEST_PORT = process.env.API_PORT || process.env.PORT || "4005";
 const API_BASE = `http://localhost:${TEST_PORT}`;
@@ -1031,24 +1039,68 @@ async function runPhase8Acceptance() {
     fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
   });
 
-  const rawKey = generateLicenseKey();
-  const hashedPluginKey = hashLicenseKey(rawKey);
-  const encKey = encryptLicenseKey(rawKey, TEST_ENCRYPTION_KEY);
+  async function createOrUpdateLicense(
+    entitlementId: string,
+    key: string,
+    userId: string,
+    productId: string,
+    variantId: string,
+  ) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        const existing = await prisma.internalLicense.findUnique({
+          where: { entitlementId },
+        });
+        if (existing) {
+          return await prisma.internalLicense.update({
+            where: { id: existing.id },
+            data: {
+              status: LicenseStatus.ACTIVE,
+              keyHash: hashLicenseKey(key),
+              keyCiphertext: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).ciphertext,
+              keyIv: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).iv,
+              keyAuthTag: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).authTag,
+              keyLast4: extractKeyLast4(key),
+            },
+          });
+        }
+        return await prisma.internalLicense.create({
+          data: {
+            entitlementId,
+            userId,
+            productId,
+            variantId,
+            status: LicenseStatus.ACTIVE,
+            keyHash: hashLicenseKey(key),
+            keyCiphertext: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).ciphertext,
+            keyIv: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).iv,
+            keyAuthTag: encryptLicenseKey(key, TEST_ENCRYPTION_KEY).authTag,
+            keyLast4: extractKeyLast4(key),
+          },
+        });
+      } catch (err: any) {
+        if (
+          err.message?.includes("deadlock") ||
+          err.message?.includes("Unique constraint") ||
+          err.code === "40P01"
+        ) {
+          await sleep(100);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(`Failed to create or update license for entitlement ${entitlementId}`);
+  }
 
-  const internalLic = await prisma.internalLicense.create({
-    data: {
-      entitlementId: pluginEnt.id,
-      userId: customer1Id,
-      productId: pluginProd.id,
-      variantId: pluginVar.id,
-      status: LicenseStatus.ACTIVE,
-      keyHash: hashedPluginKey,
-      keyCiphertext: encKey.ciphertext,
-      keyIv: encKey.iv,
-      keyAuthTag: encKey.authTag,
-      keyLast4: extractKeyLast4(rawKey),
-    },
-  });
+  const rawKey = generateLicenseKey();
+  const internalLic = await createOrUpdateLicense(
+    pluginEnt.id,
+    rawKey,
+    customer1Id,
+    pluginProd.id,
+    pluginVar.id,
+  );
 
   await prisma.licenseActivation.create({
     data: {
@@ -1463,20 +1515,13 @@ async function runPhase8Acceptance() {
     fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
   });
   const upRaceKey = generateLicenseKey();
-  const upRaceLic = await prisma.internalLicense.create({
-    data: {
-      entitlementId: upRaceEnt.id,
-      userId: customer1Id,
-      productId: pluginProd.id,
-      variantId: pluginVar.id,
-      status: LicenseStatus.ACTIVE,
-      keyHash: hashLicenseKey(upRaceKey),
-      keyCiphertext: encryptLicenseKey(upRaceKey, TEST_ENCRYPTION_KEY).ciphertext,
-      keyIv: encryptLicenseKey(upRaceKey, TEST_ENCRYPTION_KEY).iv,
-      keyAuthTag: encryptLicenseKey(upRaceKey, TEST_ENCRYPTION_KEY).authTag,
-      keyLast4: extractKeyLast4(upRaceKey),
-    },
-  });
+  const upRaceLic = await createOrUpdateLicense(
+    upRaceEnt.id,
+    upRaceKey,
+    customer1Id,
+    pluginProd.id,
+    pluginVar.id,
+  );
   await prisma.licenseActivation.create({
     data: {
       licenseId: upRaceLic.id,
@@ -1520,20 +1565,13 @@ async function runPhase8Acceptance() {
     fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
   });
   const upLicRaceKey = generateLicenseKey();
-  const upLic50 = await prisma.internalLicense.create({
-    data: {
-      entitlementId: upLicRaceEnt.id,
-      userId: customer1Id,
-      productId: pluginProd.id,
-      variantId: pluginVar.id,
-      status: LicenseStatus.ACTIVE,
-      keyHash: hashLicenseKey(upLicRaceKey),
-      keyCiphertext: encryptLicenseKey(upLicRaceKey, TEST_ENCRYPTION_KEY).ciphertext,
-      keyIv: encryptLicenseKey(upLicRaceKey, TEST_ENCRYPTION_KEY).iv,
-      keyAuthTag: encryptLicenseKey(upLicRaceKey, TEST_ENCRYPTION_KEY).authTag,
-      keyLast4: extractKeyLast4(upLicRaceKey),
-    },
-  });
+  const upLic50 = await createOrUpdateLicense(
+    upLicRaceEnt.id,
+    upLicRaceKey,
+    customer1Id,
+    pluginProd.id,
+    pluginVar.id,
+  );
   await prisma.licenseActivation.create({
     data: {
       licenseId: upLic50.id,
@@ -1640,8 +1678,8 @@ async function runPhase8Acceptance() {
   }
   console.log("✓ Gate 52 passed: Actual updater Redis outage returned 503 with zero grants, events, or URLs issued");
 
-  // [Gate 53] Live sliding-window rate limit validated across time boundaries (max=2, window=2s)
-  console.log("\n[Gate 53] Testing true sliding-window rate limit (max=2, window=2s) via live API...");
+  // [Gate 53] Live sliding-window rate limit validated across time boundaries (max=2, window=4s)
+  console.log("\n[Gate 53] Testing true sliding-window rate limit (max=2, window=4s) via live API...");
   const limiterApiProcess = spawn(
     "node",
     [path.resolve(__dirname, "../../../apps/api/dist/main.js")],
@@ -1652,7 +1690,7 @@ async function runPhase8Acceptance() {
         ...process.env,
         PORT: "4006",
         DOWNLOAD_RATE_LIMIT_MAX: "2",
-        DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: "2",
+        DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: "4",
       },
     },
   );
@@ -1692,10 +1730,10 @@ async function runPhase8Acceptance() {
     throw new Error(`Request A failed: ${reqA.status}`);
   }
 
-  // Wait 1 second (t≈1s)
-  await sleep(1000);
+  // Wait 1.5 seconds (t≈1.5s)
+  await sleep(1500);
 
-  // Request B (t≈1s) -> allow (200)
+  // Request B (t≈1.5s) -> allow (200)
   const reqB = await fetch("http://localhost:4006/v1/downloads/request", {
     method: "POST",
     headers: {
@@ -1729,8 +1767,8 @@ async function runPhase8Acceptance() {
     throw new Error(`Expected 429 for immediate request C, got ${reqC.status}`);
   }
 
-  // Wait 1.2s: now t ≈ 2.2s. Request A (at t=0) is outside the 2s sliding window, but Request B (at t≈1.0s) remains inside.
-  await sleep(1200);
+  // Wait 2.8s: now t ≈ 4.4s. Request A (at t=0) is outside the 4s sliding window, but Request B (at t≈1.5s) remains inside (2.9s ago).
+  await sleep(2800);
 
   // Request D -> allowed (exactly 1 request inside window now)
   const reqD = await fetch("http://localhost:4006/v1/downloads/request", {
@@ -1769,7 +1807,7 @@ async function runPhase8Acceptance() {
   try {
     limiterApiProcess.kill("SIGTERM");
   } catch {}
-  console.log("✓ Gate 53 passed: Live sliding-window rate limit validated across time boundaries (max=2, window=2s)");
+  console.log("✓ Gate 53 passed: Live sliding-window rate limit validated across time boundaries (max=2, window=4s)");
 
   // [Gate 54] Updater rate limit enforced atomically
   console.log("\n[Gate 54] Testing updater rate limiting per entitlement + domain...");
@@ -1940,11 +1978,14 @@ async function runPhase8Acceptance() {
 
   let gate58Threw = false;
   try {
-    await publishProductVersion(prisma as any, {
-      versionId: v58.id,
-      adminUserId: adminId,
-      verifyFileIntegrity: undefined as any,
-    });
+    await publishProductVersion(
+      {
+        productVersionId: v58.id,
+        actorId: adminId,
+        verifyFileIntegrity: undefined as any,
+      },
+      prisma,
+    );
   } catch (err: any) {
     if (err instanceof DownloadVersionEngineError && err.code === "STORAGE_VERIFICATION_REQUIRED" && err.statusCode === 503) {
       gate58Threw = true;
@@ -1959,13 +2000,16 @@ async function runPhase8Acceptance() {
   // Also verify with throwing verifier (e.g. storage verification fails)
   let gate58StorageFailThrew = false;
   try {
-    await publishProductVersion(prisma as any, {
-      versionId: v58.id,
-      adminUserId: adminId,
-      verifyFileIntegrity: async () => {
-        throw new Error("Private storage connection timed out");
+    await publishProductVersion(
+      {
+        productVersionId: v58.id,
+        actorId: adminId,
+        verifyFileIntegrity: async () => {
+          throw new Error("Private storage connection timed out");
+        },
       },
-    });
+      prisma,
+    );
   } catch (err: any) {
     gate58StorageFailThrew = true;
   }
@@ -2399,8 +2443,275 @@ async function runPhase8Acceptance() {
   }
   console.log(`✓ Gate 65 passed: Redis ZSET member matches \${nowMs}:\${nonce} (${memberNowMs}:${nonce.substring(0, 8)}...), score ${score}, drift from Redis TIME is ${driftMs}ms`);
 
+  // [Gate 66] Legacy addVersionFile removed; registerVerifiedUploadedFile requires verifier callback, object existence & prefix validation
+  console.log("\n[Gate 66] Verifying legacy addVersionFile is removed and registerVerifiedUploadedFile fails closed without verifier...");
+  if ((dbModule as any).addVersionFile !== undefined) {
+    throw new Error("Legacy bypass function addVersionFile is still exported from @nexus/database!");
+  }
+
+  const v66Prod = await createTestProduct(FulfillmentType.DIGITAL_DOWNLOAD);
+  const v66 = await prisma.productVersion.create({
+    data: {
+      productId: v66Prod.product.id,
+      version: "6.6.0",
+      status: "DRAFT",
+    },
+  });
+
+  // Attempt 1: calling registerVerifiedUploadedFile without verifyUploadedObject must throw STORAGE_VERIFICATION_REQUIRED (503)
+  let gate66NoVerifierThrew = false;
+  try {
+    await registerVerifiedUploadedFile(
+      {
+        productVersionId: v66.id,
+        storageKey: `products/${v66Prod.product.id}/versions/${v66.id}/test.zip`,
+        fileName: "test.zip",
+        verifyUploadedObject: undefined as any,
+      },
+      prisma,
+    );
+  } catch (err: any) {
+    if (err instanceof DownloadVersionEngineError && err.code === "STORAGE_VERIFICATION_REQUIRED" && err.statusCode === 503) {
+      gate66NoVerifierThrew = true;
+    } else {
+      throw new Error(`Unexpected error without verifier callback: ${err?.message || err}`);
+    }
+  }
+  if (!gate66NoVerifierThrew) {
+    throw new Error("registerVerifiedUploadedFile succeeded without verifyUploadedObject callback!");
+  }
+
+  // Attempt 2: calling registerVerifiedUploadedFile where verifier reports valid: false must throw STORAGE_VERIFICATION_FAILED (400)
+  let gate66NotFoundThrew = false;
+  try {
+    await registerVerifiedUploadedFile(
+      {
+        productVersionId: v66.id,
+        storageKey: `products/${v66Prod.product.id}/versions/${v66.id}/missing.zip`,
+        fileName: "missing.zip",
+        verifyUploadedObject: async () => ({ valid: false, reason: "Storage verification failed: object not found" }),
+      },
+      prisma,
+    );
+  } catch (err: any) {
+    if (err instanceof DownloadVersionEngineError && err.code === "STORAGE_VERIFICATION_FAILED" && err.statusCode === 400) {
+      gate66NotFoundThrew = true;
+    } else {
+      throw new Error(`Unexpected error when storage object not found: ${err?.message || err}`);
+    }
+  }
+  if (!gate66NotFoundThrew) {
+    throw new Error("registerVerifiedUploadedFile succeeded when storage object did not exist!");
+  }
+
+  // Attempt 3: calling registerVerifiedUploadedFile with storageKey outside product/version prefix must throw INVALID_STORAGE_KEY (400)
+  let gate66PrefixThrew = false;
+  try {
+    await registerVerifiedUploadedFile(
+      {
+        productVersionId: v66.id,
+        storageKey: `malicious/path/escape.zip`,
+        fileName: "escape.zip",
+        verifyUploadedObject: async () => ({ valid: true, sizeBytes: 100, sha256: "abc" }),
+      },
+      prisma,
+    );
+  } catch (err: any) {
+    if (err instanceof DownloadVersionEngineError && err.code === "INVALID_STORAGE_KEY" && err.statusCode === 400) {
+      gate66PrefixThrew = true;
+    } else {
+      throw new Error(`Unexpected error when storage key outside prefix: ${err?.message || err}`);
+    }
+  }
+  if (!gate66PrefixThrew) {
+    throw new Error("registerVerifiedUploadedFile accepted storageKey outside prefix!");
+  }
+
+  // Verify zero files created in DB for failed registrations
+  const files66Fail = await prisma.productVersionFile.count({ where: { productVersionId: v66.id } });
+  if (files66Fail !== 0) {
+    throw new Error(`Expected 0 files created for gate 66 failures, found ${files66Fail}`);
+  }
+
+  // Attempt 4: Valid registration with real MinIO upload and verified callback
+  const s3Res66 = await uploadRawObjectToMinio(`products/${v66Prod.product.id}/versions/${v66.id}/valid.zip`, "GATE_66_CONTENT");
+  const file66 = await registerVerifiedUploadedFile(
+    {
+      productVersionId: v66.id,
+      storageKey: `products/${v66Prod.product.id}/versions/${v66.id}/valid.zip`,
+      fileName: "valid.zip",
+      isPrimary: true,
+      actorId: adminId,
+      actorRole: "ADMIN",
+      verifyUploadedObject: async (key: string) => {
+        const head = await s3Client.send(new HeadObjectCommand({ Bucket: S3_BUCKET, Key: key }));
+        return {
+          valid: true,
+          sizeBytes: head.ContentLength || s3Res66.sizeBytes,
+          sha256: s3Res66.sha256,
+        };
+      },
+    },
+    prisma,
+  );
+  if (!file66.verifiedAt || file66.sizeBytes !== s3Res66.sizeBytes || file66.sha256 !== s3Res66.sha256) {
+    throw new Error("registerVerifiedUploadedFile failed to set authoritative verified metadata");
+  }
+  const fileAudits66 = await prisma.auditLog.count({
+    where: { entity: "ProductVersionFile", entityId: file66.id, action: "VERSION_FILE_VERIFIED" },
+  });
+  if (fileAudits66 !== 1) {
+    throw new Error(`Expected exactly 1 VERSION_FILE_VERIFIED audit log, found ${fileAudits66}`);
+  }
+  console.log("✓ Gate 66 passed: Legacy addVersionFile removed; registerVerifiedUploadedFile strictly requires verifier callback, object existence, and prefix validation");
+
+  // [Gate 67] Legacy bypass wrappers removed from @nexus/database
+  console.log("\n[Gate 67] Verifying legacy bypass wrappers are removed from @nexus/database...");
+  if ((dbModule as any).recordDownloadEvent !== undefined) {
+    throw new Error("Legacy bypass function recordDownloadEvent is still exported from @nexus/database!");
+  }
+  if ((dbModule as any).authorizeCustomerDownload !== undefined) {
+    throw new Error("Legacy function authorizeCustomerDownload is still exported from @nexus/database!");
+  }
+  if ((dbModule as any).authorizeLicenseUpdater !== undefined) {
+    throw new Error("Legacy function authorizeLicenseUpdater is still exported from @nexus/database!");
+  }
+  console.log("✓ Gate 67 passed: Legacy bypass functions recordDownloadEvent, authorizeCustomerDownload, and authorizeLicenseUpdater are completely removed");
+
+  // [Gate 68] Malformed MAX_UPLOAD_BYTES rejection and bound enforcement
+  console.log("\n[Gate 68] Testing resolveMaxUploadBytes contract safety and boundary validation...");
+  if (resolveMaxUploadBytes(undefined) !== DEFAULT_MAX_UPLOAD_BYTES) {
+    throw new Error(`Expected undefined to resolve to ${DEFAULT_MAX_UPLOAD_BYTES}, got ${resolveMaxUploadBytes(undefined)}`);
+  }
+  if (resolveMaxUploadBytes(null) !== DEFAULT_MAX_UPLOAD_BYTES) {
+    throw new Error(`Expected null to resolve to ${DEFAULT_MAX_UPLOAD_BYTES}, got ${resolveMaxUploadBytes(null)}`);
+  }
+  if (resolveMaxUploadBytes("") !== DEFAULT_MAX_UPLOAD_BYTES) {
+    throw new Error(`Expected empty string to resolve to ${DEFAULT_MAX_UPLOAD_BYTES}, got ${resolveMaxUploadBytes("")}`);
+  }
+  if (resolveMaxUploadBytes("   ") !== DEFAULT_MAX_UPLOAD_BYTES) {
+    throw new Error(`Expected whitespace string to resolve to ${DEFAULT_MAX_UPLOAD_BYTES}, got ${resolveMaxUploadBytes("   ")}`);
+  }
+  if (resolveMaxUploadBytes("1048576") !== 1048576) {
+    throw new Error(`Expected '1048576' to resolve to 1048576, got ${resolveMaxUploadBytes("1048576")}`);
+  }
+
+  // Verify failure cases (must throw and not return NaN, 0, or negative)
+  const invalidUploadBounds = [
+    "abc",
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "-1",
+    "-100",
+    "0",
+    "1.5",
+    "10e5",
+    "0x10",
+    String(HARD_CEILING_MAX_UPLOAD_BYTES + 1),
+    "999999999999999",
+  ];
+  for (const val of invalidUploadBounds) {
+    let threw = false;
+    try {
+      resolveMaxUploadBytes(val);
+    } catch {
+      threw = true;
+    }
+    if (!threw) {
+      throw new Error(`resolveMaxUploadBytes failed to reject invalid value: "${val}"`);
+    }
+  }
+  console.log("✓ Gate 68 passed: resolveMaxUploadBytes strictly enforces integer bounds, defaults safely, and rejects malformed values (fails closed)");
+
+  // [Gate 69] Concurrent recordDownloadIssuance idempotency: exactly 1 DownloadEvent and 1 AuditLog
+  console.log("\n[Gate 69] Testing 8 concurrent recordDownloadIssuance calls for identical grantId...");
+  const v69Prod = await createTestProduct(FulfillmentType.DIGITAL_DOWNLOAD);
+  const v69Ent = await createTestEntitlement({
+    userId: customer1Id,
+    productId: v69Prod.product.id,
+    variantId: v69Prod.variant.id,
+  });
+  const v69 = await prisma.productVersion.create({
+    data: {
+      productId: v69Prod.product.id,
+      version: "6.9.0",
+      status: "PUBLISHED",
+      releasedAt: new Date(),
+    },
+  });
+  const s3Res69 = await uploadRawObjectToMinio(`products/${v69Prod.product.id}/versions/${v69.id}/v69.zip`, "GATE_69_CONTENT");
+  const file69 = await prisma.productVersionFile.create({
+    data: {
+      productVersionId: v69.id,
+      storageKey: `products/${v69Prod.product.id}/versions/${v69.id}/v69.zip`,
+      fileName: "v69.zip",
+      sizeBytes: s3Res69.sizeBytes,
+      sha256: s3Res69.sha256,
+      isPrimary: true,
+      verifiedAt: new Date(),
+    },
+  });
+
+  const testGrant = await prisma.downloadGrant.create({
+    data: {
+      userId: customer1Id,
+      entitlementId: v69Ent.id,
+      productVersionId: v69.id,
+      fileId: file69.id,
+      channel: "CUSTOMER_PORTAL",
+      expiresAt: new Date(Date.now() + 300000),
+    },
+  });
+
+  const eventsBefore69 = await prisma.downloadEvent.count({ where: { grantId: testGrant.id } });
+  const auditsBefore69 = await prisma.auditLog.count({
+    where: { entity: "DownloadGrant", entityId: testGrant.id, action: "DOWNLOAD_URL_ISSUED" },
+  });
+  if (eventsBefore69 !== 0 || auditsBefore69 !== 0) {
+    throw new Error("Pre-existing events or audits found for fresh test grant!");
+  }
+
+  // Concurrently execute 8 recordDownloadIssuance calls with the same grantId
+  const issuancePromises = Array.from({ length: 8 }, (_, i) =>
+    recordDownloadIssuance(
+      {
+        grantId: testGrant.id,
+        ipAddress: `192.168.1.${i + 1}`,
+        userAgent: `Test-Agent-${i + 1}`,
+      },
+      prisma,
+    ),
+  );
+
+  const issuanceResults = await Promise.all(issuancePromises);
+
+  // All results must return an event
+  if (issuanceResults.length !== 8) {
+    throw new Error(`Expected 8 issuance results, got ${issuanceResults.length}`);
+  }
+  const firstEventId = issuanceResults[0].event.id;
+  for (let i = 1; i < issuanceResults.length; i++) {
+    if (issuanceResults[i].event.id !== firstEventId) {
+      throw new Error(`Issuance result ${i} returned different event ID: ${issuanceResults[i].event.id} vs ${firstEventId}`);
+    }
+  }
+
+  const eventsAfter69 = await prisma.downloadEvent.count({ where: { grantId: testGrant.id } });
+  const auditsAfter69 = await prisma.auditLog.count({
+    where: { entity: "DownloadGrant", entityId: testGrant.id, action: "DOWNLOAD_URL_ISSUED" },
+  });
+
+  if (eventsAfter69 !== 1) {
+    throw new Error(`Expected exactly 1 DownloadEvent created for concurrent issuances, found ${eventsAfter69}`);
+  }
+  if (auditsAfter69 !== 1) {
+    throw new Error(`Expected exactly 1 DOWNLOAD_URL_ISSUED AuditLog created for concurrent issuances, found ${auditsAfter69}`);
+  }
+  console.log(`✓ Gate 69 passed: 8 concurrent recordDownloadIssuance calls resulted in exactly 1 DownloadEvent (${firstEventId}) and 1 DOWNLOAD_URL_ISSUED audit log`);
+
   console.log("\n==================================================");
-  console.log("ALL 65 PHASE 8 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 69 PHASE 8 LIVE ACCEPTANCE GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

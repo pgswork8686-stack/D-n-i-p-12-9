@@ -220,9 +220,9 @@ Kiến trúc quản lý phiên bản phần mềm & cấp quyền tải an toàn
   - Preflight validation: Thẩm định quyền sở hữu Entitlement trước khi chạm Redis để chống spam key rate limit rác.
   - Kiểm tra xác thực (AuthGuard), quyền sở hữu Entitlement, trạng thái `ACTIVE` và chưa hết hạn `expiresAt`. Hỗ trợ cả `DIGITAL_DOWNLOAD` và `INTERNAL_LICENSE`.
   - Kiểm tra cửa sổ cập nhật: `releasedAt <= updatesUntil`. Nếu `updatesUntil === null`, khách hàng được tải mọi bản phát hành mới nhất khi Entitlement còn hoạt động. Nếu hết hạn cập nhật (`updatesUntil < now`), khách hàng vẫn giữ quyền tải vĩnh viễn các phiên bản được phát hành trong thời gian bản quyền còn hiệu lực (`releasedAt <= updatesUntil`).
-- Kênh cập nhật tự động / WordPress Updater (`POST /v1/updates/check` & `POST /v1/updates/download`, channel `LICENSE_UPDATER`):
+- Kênh cập nhật tự động / WordPress Updater (`POST /v1/updates/check`, channel `LICENSE_UPDATER`):
   - Preflight validation: Kiểm tra license `ACTIVE` và có activation `ACTIVE` trên đúng `normalizedDomain` trước khi chạm Redis rate limiter.
-  - Phân giải gói chính bắt buộc (Deterministic primary package resolution): Chỉ chấp nhận file có `isPrimary: true` và đã `verifiedAt`. Nếu phiên bản không có primary file, fail-closed trả về `{ valid: true, updateAvailable: false }`, không cấp quyền và không tạo URL cho file phụ.
+  - Phân giải gói chính bắt buộc (Deterministic primary package resolution): Chỉ chấp nhận file có `isPrimary: true` và đã `verifiedAt`. Nếu phiên bản không có primary file, fail-closed trả về `{ valid: true, updateAvailable: false }`, không cấp quyền và không tạo URL cho file phụ. Khi có bản cập nhật mới, endpoint trả về trực tiếp signed `downloadUrl` và metadata phiên bản mới.
   - Khóa hàng hai tầng (`internal_licenses FOR UPDATE` -> `entitlements FOR UPDATE`) ngăn ngừa race condition thu hồi.
   - Chống vét cạn: license không hợp lệ hoặc không có quyền trả về payload rỗng `{ valid: false, updateAvailable: false }` thay vì lộ thông tin nội bộ.
 - Giới hạn tần suất tải (Atomic Sliding Window Rate Limiting):

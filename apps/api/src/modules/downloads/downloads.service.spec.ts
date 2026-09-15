@@ -21,7 +21,7 @@ jest.mock("@nexus/database", () => {
     createProductVersion: jest.fn(),
     listProductVersions: jest.fn(),
     getProductVersionById: jest.fn(),
-    addVersionFile: jest.fn(),
+    registerVerifiedUploadedFile: jest.fn(),
     publishProductVersion: jest.fn(),
     issueCustomerDownloadGrant: jest.fn(),
     issueUpdaterDownloadGrant: jest.fn(),
@@ -114,11 +114,16 @@ describe("DownloadsService", () => {
 
       mockStorageService.uploadFile.mockResolvedValue("key.zip");
       mockStorageService.verifyObjectIntegrity.mockResolvedValue({ valid: true });
-      (dbEngine.addVersionFile as jest.Mock).mockResolvedValue({
-        id: "f-uploaded",
-        productVersionId: "v-1",
-        fileName: "plugin.zip",
-        isPrimary: true,
+      (dbEngine.registerVerifiedUploadedFile as jest.Mock).mockImplementation(async (params: any) => {
+        if (typeof params.verifyUploadedObject === "function") {
+          await params.verifyUploadedObject(params.storageKey);
+        }
+        return {
+          id: "f-uploaded",
+          productVersionId: "v-1",
+          fileName: "plugin.zip",
+          isPrimary: true,
+        };
       });
 
       const dummyFile = {
@@ -132,7 +137,7 @@ describe("DownloadsService", () => {
       expect(res.id).toBe("f-uploaded");
       expect(mockStorageService.uploadFile).toHaveBeenCalled();
       expect(mockStorageService.verifyObjectIntegrity).toHaveBeenCalled();
-      expect(dbEngine.addVersionFile).toHaveBeenCalled();
+      expect(dbEngine.registerVerifiedUploadedFile).toHaveBeenCalled();
       expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
     });
 
@@ -145,7 +150,7 @@ describe("DownloadsService", () => {
 
       mockStorageService.uploadFile.mockResolvedValue("products/p-1/versions/v-1/uuid-plugin.zip");
       mockStorageService.verifyObjectIntegrity.mockResolvedValue({ valid: true });
-      (dbEngine.addVersionFile as jest.Mock).mockRejectedValue(new Error("DB insertion failed"));
+      (dbEngine.registerVerifiedUploadedFile as jest.Mock).mockRejectedValue(new Error("DB insertion failed"));
 
       const dummyFile = {
         originalname: "plugin.zip",

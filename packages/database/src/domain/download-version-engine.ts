@@ -247,41 +247,64 @@ export async function getProductVersionById(
 /**
  * Admin: Add verified file to version.
  * Published versions are strictly immutable.
- * Backend owns storageKey generation; client-specified storageKeys are rejected.
+/**
+ * Admin: Register verified uploaded file for a DRAFT ProductVersion.
+ * Replaces legacy addVersionFile.
+ *
+ * Mandatory storage verification:
+ * 1. Locks DRAFT ProductVersion (FOR UPDATE)
+ * 2. Verifies storage key belongs to `products/${productId}/versions/${versionId}/...`
+ * 3. Calls mandatory storage verifier
+ * 4. Derives authoritative sizeBytes and sha256 from verifier
+ * 5. Inserts ProductVersionFile
+ * 6. Sets verifiedAt server-side
+ * 7. Creates VERSION_FILE_VERIFIED audit
+ * 8. Commits atomically
+ *
+ * Caller must NOT provide authoritative sizeBytes, sha256, verifiedAt.
  */
-export async function addVersionFile(
+export async function registerVerifiedUploadedFile(
   params: {
     productVersionId: string;
+    storageKey: string;
     fileName: string;
     contentType?: string;
-    sizeBytes: number;
-    sha256: string;
     isPrimary?: boolean;
     actorId: string;
-    storageKey?: string;
-    verifiedAt?: Date;
+    verifyUploadedObject: (storageKey: string) => Promise<{
+      valid: boolean;
+      sha256?: string;
+      sizeBytes?: number;
+      reason?: string;
+    }>;
   },
   db: PrismaClient = defaultPrisma,
 ): Promise<ProductVersionFileDto> {
   const {
     productVersionId,
+    storageKey,
     fileName,
     contentType = "application/zip",
-    sizeBytes,
-    sha256,
     isPrimary = false,
     actorId,
-    verifiedAt = new Date(),
+    verifyUploadedObject,
   } = params;
 
-  if (!fileName || sizeBytes <= 0 || !sha256) {
+  if (!verifyUploadedObject || typeof verifyUploadedObject !== "function") {
+    throw new DownloadVersionEngineError(
+      "Storage verification callback is required",
+      503,
+      "STORAGE_VERIFICATION_REQUIRED",
+    );
+  }
+
+  if (!fileName || !storageKey) {
     throw new DownloadVersionEngineError("Invalid file metadata", 400);
   }
 
-  const safeFileName = sanitizeFilename(fileName);
-
   try {
     const file = await db.$transaction(async (tx) => {
+      // 1. Lock DRAFT ProductVersion
       const vRows = await tx.$queryRaw<
         Array<{ id: string; product_id: string; status: string }>
       >`
@@ -300,10 +323,58 @@ export async function addVersionFile(
         );
       }
 
-      // Backend-generated storageKey
-      const storageKey =
-        params.storageKey ||
-        generateStorageKey(versionRow.product_id, productVersionId, safeFileName);
+      // 2. Verify storage key belongs to products/{productId}/versions/{versionId}/...
+      const expectedPrefix = `products/${versionRow.product_id}/versions/${productVersionId}/`;
+      if (!storageKey.startsWith(expectedPrefix)) {
+        throw new DownloadVersionEngineError(
+          `Storage key '${storageKey}' is invalid; must be rooted under '${expectedPrefix}'`,
+          400,
+          "INVALID_STORAGE_KEY",
+        );
+      }
+
+      // 3. Call mandatory storage verifier
+      let verification: {
+        valid: boolean;
+        sha256?: string;
+        sizeBytes?: number;
+        reason?: string;
+      };
+      try {
+        verification = await verifyUploadedObject(storageKey);
+      } catch (err: any) {
+        throw new DownloadVersionEngineError(
+          `Storage verification error for '${storageKey}': ${err?.message || err}`,
+          503,
+          "STORAGE_VERIFICATION_FAILED",
+        );
+      }
+
+      if (!verification || !verification.valid) {
+        throw new DownloadVersionEngineError(
+          verification?.reason || `Storage verification failed for '${storageKey}'`,
+          400,
+          "STORAGE_VERIFICATION_FAILED",
+        );
+      }
+
+      // 4. Derive authoritative sizeBytes and sha256
+      const sizeBytes = verification.sizeBytes;
+      const sha256 = verification.sha256;
+      if (
+        sizeBytes === undefined ||
+        sizeBytes === null ||
+        typeof sizeBytes !== "number" ||
+        sizeBytes <= 0 ||
+        !sha256 ||
+        typeof sha256 !== "string"
+      ) {
+        throw new DownloadVersionEngineError(
+          "Storage verifier failed to return authoritative sizeBytes and sha256",
+          400,
+          "INVALID_STORAGE_VERIFICATION",
+        );
+      }
 
       // Check storageKey uniqueness
       const existingKey = await tx.productVersionFile.findUnique({
@@ -329,6 +400,10 @@ export async function addVersionFile(
         }
       }
 
+      const safeFileName = sanitizeFilename(fileName);
+      const verifiedAt = new Date();
+
+      // 5. Insert ProductVersionFile with server-side verifiedAt
       const newFile = await tx.productVersionFile.create({
         data: {
           productVersionId,
@@ -342,6 +417,7 @@ export async function addVersionFile(
         },
       });
 
+      // 7. Create VERSION_FILE_VERIFIED audit
       await tx.auditLog.create({
         data: {
           action: "VERSION_FILE_VERIFIED",
@@ -352,9 +428,9 @@ export async function addVersionFile(
             productVersionId,
             storageKey,
             fileName: newFile.fileName,
-            sizeBytes,
+            sizeBytes: newFile.sizeBytes,
             sha256: newFile.sha256,
-            isPrimary,
+            isPrimary: newFile.isPrimary,
           },
         },
       });
@@ -373,6 +449,7 @@ export async function addVersionFile(
     throw err;
   }
 }
+
 
 /**
  * Admin: Publish DRAFT version.
@@ -915,7 +992,9 @@ export async function issueUpdaterDownloadGrant(
 /**
  * Authoritative record of actual download URL issuance (Step C).
  * Called strictly AFTER signed URL generation succeeds.
- * Creates DownloadEvent and AuditLog (action = 'DOWNLOAD_URL_ISSUED') linked to DownloadGrant.
+ * Idempotent: row-locks DownloadGrant; if DownloadEvent already exists for grantId,
+ * returns existing event without emitting duplicate audit log.
+ * Creates DownloadEvent and exactly ONE AuditLog (action = 'DOWNLOAD_URL_ISSUED') linked to DownloadGrant.
  */
 export async function recordDownloadIssuance(
   params: {
@@ -933,184 +1012,93 @@ export async function recordDownloadIssuance(
     ? crypto.createHash("sha256").update(userAgent).digest("hex")
     : null;
 
-  return db.$transaction(async (tx) => {
-    const grant = await tx.downloadGrant.findUnique({
-      where: { id: grantId },
-      include: { productVersion: true },
-    });
-    if (!grant) {
-      throw new DownloadVersionEngineError("Download grant not found", 404);
-    }
+  try {
+    return await db.$transaction(async (tx) => {
+      // 1. Lock DownloadGrant row FOR UPDATE to linearize concurrent Step-C calls for same grant
+      const grantRows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          user_id: string | null;
+          entitlement_id: string;
+          product_version_id: string;
+          file_id: string;
+          channel: string;
+          license_id: string | null;
+          expires_at: Date;
+        }>
+      >`
+        SELECT id, user_id, entitlement_id, product_version_id, file_id, channel, license_id, expires_at
+        FROM download_grants
+        WHERE id = ${grantId}
+        FOR UPDATE
+      `;
+      if (!grantRows || grantRows.length === 0) {
+        throw new DownloadVersionEngineError("Download grant not found", 404);
+      }
+      const grant = grantRows[0];
 
-    const event = await tx.downloadEvent.create({
-      data: {
-        userId: grant.userId,
-        entitlementId: grant.entitlementId,
-        productId: grant.productVersion.productId,
-        productVersionId: grant.productVersionId,
-        fileId: grant.fileId,
-        channel: grant.channel,
-        ipHash,
-        userAgentHash,
-        createdAt: new Date(),
-      },
-    });
+      // 2. Idempotency check: if issuance already recorded for this grant, return existing event
+      const existingEvent = await tx.downloadEvent.findUnique({
+        where: { grantId },
+      });
+      if (existingEvent) {
+        return { event: existingEvent };
+      }
 
-    await tx.auditLog.create({
-      data: {
-        action: "DOWNLOAD_URL_ISSUED",
-        entity: "DownloadGrant",
-        entityId: grant.id,
-        actorId: grant.userId || grant.entitlementId,
-        details: {
+      // 3. Resolve productId from productVersion
+      const version = await tx.productVersion.findUnique({
+        where: { id: grant.product_version_id },
+        select: { productId: true },
+      });
+      const productId = version?.productId || "";
+
+      // 4. Create DownloadEvent linked to grantId
+      const event = await tx.downloadEvent.create({
+        data: {
           grantId: grant.id,
-          eventId: event.id,
-          entitlementId: grant.entitlementId,
-          licenseId: grant.licenseId,
-          productId: grant.productVersion.productId,
-          productVersionId: grant.productVersionId,
-          fileId: grant.fileId,
-          channel: grant.channel,
-          expiresAt: grant.expiresAt.toISOString(),
-        },
-      },
-    });
-
-    return { event };
-  });
-}
-
-/**
- * Authorize Customer Download Request (wrapper calling issueCustomerDownloadGrant).
- */
-export async function authorizeCustomerDownload(
-  params: {
-    userId: string;
-    entitlementId: string;
-    versionId: string;
-    fileId: string;
-    ttlSeconds?: number;
-    ipAddress?: string;
-    userAgent?: string;
-  },
-  db: PrismaClient = defaultPrisma,
-): Promise<{
-  entitlement: any;
-  version: ProductVersion;
-  file: ProductVersionFile;
-  grant: DownloadGrant;
-}> {
-  const result = await issueCustomerDownloadGrant(params, db);
-  const entitlement = await db.entitlement.findUnique({
-    where: { id: params.entitlementId },
-  });
-  return {
-    entitlement,
-    version: result.version,
-    file: result.file,
-    grant: result.grant,
-  };
-}
-
-/**
- * Authorize Licensed Software / WordPress Updater Check (wrapper calling issueUpdaterDownloadGrant).
- */
-export async function authorizeLicenseUpdater(
-  params: {
-    licenseKey: string;
-    domain: string;
-    productId: string;
-    currentVersion: string;
-    ttlSeconds?: number;
-    ipAddress?: string;
-    userAgent?: string;
-  },
-  db: PrismaClient = defaultPrisma,
-): Promise<{
-  valid: boolean;
-  updateAvailable: boolean;
-  eligibleVersion?: ProductVersion;
-  file?: ProductVersionFile;
-  grant?: DownloadGrant;
-  entitlementId?: string;
-  normalizedDomain?: string;
-}> {
-  const result = await issueUpdaterDownloadGrant(params, db);
-  return {
-    valid: result.valid,
-    updateAvailable: result.updateAvailable,
-    eligibleVersion: result.version,
-    file: result.file,
-    grant: result.grant,
-    entitlementId: result.entitlementId,
-    normalizedDomain: result.normalizedDomain,
-  };
-}
-
-/**
- * Records a DownloadEvent and an audit log without storing signed URLs or secrets.
- */
-export async function recordDownloadEvent(
-  params: {
-    userId?: string | null;
-    entitlementId: string;
-    productId: string;
-    productVersionId: string;
-    fileId: string;
-    channel: DownloadChannel;
-    ipAddress?: string;
-    userAgent?: string;
-  },
-  db: PrismaClient = defaultPrisma,
-): Promise<{ id: string }> {
-  const {
-    userId,
-    entitlementId,
-    productId,
-    productVersionId,
-    fileId,
-    channel,
-    ipAddress,
-    userAgent,
-  } = params;
-
-  const ipHash = ipAddress
-    ? crypto.createHash("sha256").update(ipAddress).digest("hex")
-    : null;
-  const userAgentHash = userAgent
-    ? crypto.createHash("sha256").update(userAgent).digest("hex")
-    : null;
-
-  return db.$transaction(async (tx) => {
-    const event = await tx.downloadEvent.create({
-      data: {
-        userId: userId || null,
-        entitlementId,
-        productId,
-        productVersionId,
-        fileId,
-        channel,
-        ipHash,
-        userAgentHash,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        action: "DOWNLOAD_URL_ISSUED",
-        entity: "DownloadEvent",
-        entityId: event.id,
-        actorId: userId || null,
-        details: {
-          entitlementId,
+          userId: grant.user_id,
+          entitlementId: grant.entitlement_id,
           productId,
-          productVersionId,
-          fileId,
-          channel,
+          productVersionId: grant.product_version_id,
+          fileId: grant.file_id,
+          channel: grant.channel as DownloadChannel,
+          ipHash,
+          userAgentHash,
+          createdAt: new Date(),
         },
-      },
-    });
+      });
 
-    return { id: event.id };
-  });
+      // 5. Record exactly ONE DOWNLOAD_URL_ISSUED audit log
+      await tx.auditLog.create({
+        data: {
+          action: "DOWNLOAD_URL_ISSUED",
+          entity: "DownloadGrant",
+          entityId: grant.id,
+          actorId: grant.user_id || grant.entitlement_id,
+          details: {
+            grantId: grant.id,
+            eventId: event.id,
+            entitlementId: grant.entitlement_id,
+            licenseId: grant.license_id,
+            productId,
+            productVersionId: grant.product_version_id,
+            fileId: grant.file_id,
+            channel: grant.channel,
+            expiresAt: grant.expires_at.toISOString(),
+          },
+        },
+      });
+
+      return { event };
+    });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      const existing = await db.downloadEvent.findUnique({ where: { grantId } });
+      if (existing) {
+        return { event: existing };
+      }
+    }
+    throw err;
+  }
 }
+

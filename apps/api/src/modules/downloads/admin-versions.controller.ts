@@ -18,8 +18,7 @@ import {
   CreateProductVersionDto,
   UploadVersionFileDto,
 } from "./dto/downloads.dto";
-
-const DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB safe finite default
+import { resolveMaxUploadBytes } from "@nexus/contracts";
 
 @Controller("admin")
 @UseGuards(AuthGuard, PermissionsGuard)
@@ -54,9 +53,7 @@ export class AdminVersionsController {
   @UseInterceptors(
     FileInterceptor("file", {
       limits: {
-        fileSize: process.env.MAX_UPLOAD_BYTES
-          ? parseInt(process.env.MAX_UPLOAD_BYTES, 10)
-          : DEFAULT_MAX_UPLOAD_BYTES,
+        fileSize: resolveMaxUploadBytes(process.env.MAX_UPLOAD_BYTES),
       },
     }),
   )

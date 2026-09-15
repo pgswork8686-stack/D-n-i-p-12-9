@@ -826,6 +826,7 @@ model ProductVersionFile {
 
 model DownloadEvent {
   id               String          @id @default(uuid())
+  grantId          String?         @unique @map("grant_id")
   userId           String?         @map("user_id")
   entitlementId    String          @map("entitlement_id")
   productId        String          @map("product_id")
@@ -836,6 +837,7 @@ model DownloadEvent {
   userAgentHash    String?         @map("user_agent_hash")
   createdAt        DateTime        @default(now()) @map("created_at")
 
+  grant          DownloadGrant?     @relation(fields: [grantId], references: [id], onDelete: SetNull)
   user           User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   entitlement    Entitlement        @relation(fields: [entitlementId], references: [id], onDelete: Restrict)
   product        Product            @relation(fields: [productId], references: [id], onDelete: Restrict)
@@ -868,6 +870,7 @@ model DownloadGrant {
   productVersion ProductVersion     @relation(fields: [productVersionId], references: [id], onDelete: Restrict)
   file           ProductVersionFile @relation(fields: [fileId], references: [id], onDelete: Restrict)
   license        InternalLicense?   @relation(fields: [licenseId], references: [id], onDelete: SetNull)
+  downloadEvent  DownloadEvent?
 
   @@index([entitlementId, issuedAt])
   @@index([licenseId, issuedAt])

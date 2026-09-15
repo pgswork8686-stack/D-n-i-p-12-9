@@ -17,7 +17,7 @@ import {
   createProductVersion,
   listProductVersions,
   getProductVersionById,
-  addVersionFile,
+  registerVerifiedUploadedFile,
   publishProductVersion,
   issueCustomerDownloadGrant,
   issueUpdaterDownloadGrant,
@@ -39,6 +39,7 @@ import {
   CheckUpdateResponse,
   DOWNLOAD_SIGNED_URL_DEFAULT_TTL,
   resolveDownloadTtl,
+  resolveMaxUploadBytes,
 } from "@nexus/contracts";
 import {
   CreateProductVersionDto,
@@ -118,9 +119,7 @@ export class DownloadsService {
       throw new HttpException("Missing file payload", HttpStatus.BAD_REQUEST);
     }
 
-    const maxUploadBytes = process.env.MAX_UPLOAD_BYTES
-      ? parseInt(process.env.MAX_UPLOAD_BYTES, 10)
-      : 50 * 1024 * 1024;
+    const maxUploadBytes = resolveMaxUploadBytes(process.env.MAX_UPLOAD_BYTES);
     if (file.buffer.length > maxUploadBytes) {
       throw new HttpException("File payload too large", HttpStatus.PAYLOAD_TOO_LARGE);
     }
@@ -150,29 +149,26 @@ export class DownloadsService {
       );
       uploadedStorageKey = storageKey;
 
-      // Verify uploaded object
-      const verification = await this.storageService.verifyObjectIntegrity(
-        storageKey,
-        actualSha256,
-        actualSizeBytes,
-      );
-      if (!verification.valid) {
-        throw new HttpException(
-          "Uploaded file integrity verification failed in storage",
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-
-      return await addVersionFile({
+      // Register verified file using mandatory storage verification callback
+      return await registerVerifiedUploadedFile({
         productVersionId: versionId,
-        fileName: safeFileName,
-        contentType: file.mimetype || "application/zip",
-        sizeBytes: actualSizeBytes,
-        sha256: actualSha256,
-        isPrimary,
         storageKey,
+        fileName: file.originalname,
+        contentType: file.mimetype || "application/zip",
+        isPrimary,
         actorId,
-        verifiedAt: new Date(),
+        verifyUploadedObject: async (key: string) => {
+          const verification = await this.storageService.verifyObjectIntegrity(
+            key,
+            actualSha256,
+            actualSizeBytes,
+          );
+          return {
+            valid: verification.valid,
+            sha256: verification.actualSha256,
+            sizeBytes: verification.actualSizeBytes,
+          };
+        },
       });
     } catch (err: any) {
       if (uploadedStorageKey) {
