@@ -266,6 +266,40 @@ describe("PaymentsService", () => {
         }),
       ).rejects.toThrow("Untrusted redirect URL origin");
     });
+
+    describe("production return URL security", () => {
+      const prodOrder = {
+        id: "order-prod",
+        userId: "user-1",
+        status: OrderStatus.PENDING_PAYMENT,
+        payments: [],
+      };
+
+      beforeEach(() => {
+        process.env.NODE_ENV = "production";
+        process.env.PAYMENT_RETURN_BASE_URL = "https://portal.nexustheme.example";
+        (prisma.order.findUnique as jest.Mock).mockResolvedValue(prodOrder);
+      });
+
+      afterEach(() => {
+        process.env.NODE_ENV = "test";
+        delete process.env.PAYMENT_RETURN_BASE_URL;
+      });
+
+      it.each([
+        ["http://portal.nexustheme.example/success", "Production payment redirect URLs must use a trusted HTTPS origin"],
+        ["javascript:alert(1)", "Production payment redirect URLs must use a trusted HTTPS origin"],
+        ["data:text/html,<script>alert(1)</script>", "Production payment redirect URLs must use a trusted HTTPS origin"],
+        ["//evil.com/steal", "Invalid payment redirect URL"],
+        [":::", "Invalid payment redirect URL"],
+      ])("rejects unsafe production return URL %s", async (unsafeUrl, expectedMessage) => {
+        await expect(
+          service.createPaymentSession("user-1", prodOrder.id, {
+            successUrl: unsafeUrl,
+          }),
+        ).rejects.toThrow(expectedMessage);
+      });
+    });
   });
 
   describe("authoritative provider evidence", () => {
@@ -328,6 +362,20 @@ describe("PaymentsService", () => {
       ).rejects.toThrow("Payment amount mismatch");
     });
 
+    it("rejects currency mismatch", async () => {
+      await expect(
+        invokeAuthoritativeSuccess({
+          provider: "test",
+          externalEventId: "evt-currency-mismatch",
+          paymentId: payment.id,
+          orderId: order.id,
+          providerReference: payment.providerReference,
+          amount: payment.amount,
+          currency: "EUR",
+        }),
+      ).rejects.toThrow("Payment currency mismatch");
+    });
+
     it("rejects provider-reference mismatch", async () => {
       await expect(
         invokeAuthoritativeSuccess({
@@ -372,6 +420,25 @@ describe("PaymentsService", () => {
         currency: payment.currency,
       });
       expect(result.paymentStatus).toBe(PaymentStatus.FAILED);
+      expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+    });
+
+    it("does not resurrect CANCELLED payment attempts", async () => {
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue({
+        ...payment,
+        status: PaymentStatus.CANCELLED,
+      });
+      const result = await invokeAuthoritativeSuccess({
+        provider: "test",
+        externalEventId: "evt-late-success-cancelled",
+        paymentId: payment.id,
+        orderId: order.id,
+        providerReference: payment.providerReference,
+        amount: payment.amount,
+        currency: payment.currency,
+      });
+      expect(result.paymentStatus).toBe(PaymentStatus.CANCELLED);
+      expect(result.orderStatus).toBe(OrderStatus.PENDING_PAYMENT);
       expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
     });
 

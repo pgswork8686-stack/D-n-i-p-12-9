@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
 import {
   prisma,
   OrderStatus,
@@ -206,7 +207,7 @@ async function createCustomerOrder(
 
 async function runPhase9Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 9 — PRODUCTION PAYMENT GATEWAY ACCEPTANCE (56 GATES)");
+  console.log("PHASE 9 — PRODUCTION PAYMENT GATEWAY ACCEPTANCE (73 GATES)");
   console.log("==================================================\n");
 
   // ----------------------------------------------------
@@ -291,13 +292,14 @@ async function runPhase9Acceptance() {
         process.env.STRIPE_SECRET_KEY = 'sk_live_valid_dummy_key';
         process.env.STRIPE_WEBHOOK_SECRET = 'whsec_valid_dummy_key';
         process.env.STRIPE_MOCK_CLIENT = 'false';
-        const { TestPaymentProvider } = require('./apps/api/dist/modules/payments/test-payment.provider');
-        const { PaymentProviderFactory } = require('./apps/api/dist/modules/payments/payment-provider.factory');
-        const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
-        const testProvider = new TestPaymentProvider();
-        const stripeProvider = new StripePaymentProvider();
-        const factory = new PaymentProviderFactory(stripeProvider, testProvider);
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
         try {
+          const { TestPaymentProvider } = require('./apps/api/dist/modules/payments/test-payment.provider');
+          const { PaymentProviderFactory } = require('./apps/api/dist/modules/payments/payment-provider.factory');
+          const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+          const testProvider = new TestPaymentProvider();
+          const stripeProvider = new StripePaymentProvider();
+          const factory = new PaymentProviderFactory(stripeProvider, testProvider);
           factory.getAdapter('test');
           process.exit(1); // Should have thrown!
         } catch (err) {
@@ -1081,6 +1083,12 @@ async function runPhase9Acceptance() {
     ),
   ]);
 
+  if (!resB1.ok || !resB2.ok) {
+    throw new Error(
+      `Gate 28 failed: Concurrent webhooks must both resolve controlled (idempotent) responses, got ${resB1.status}/${resB2.status}`,
+    );
+  }
+
   const dbPaymentB = await prisma.payment.findUniqueOrThrow({
     where: { id: sessionB.paymentId },
   });
@@ -1088,12 +1096,33 @@ async function runPhase9Acceptance() {
     where: { id: orderB.id },
   });
 
-  if (dbPaymentB.status !== PaymentStatus.SUCCEEDED || dbOrderB.status !== OrderStatus.PAID) {
+  // Two concurrent terminal transitions for the SAME PENDING attempt race on the
+  // row lock; whichever transaction commits first legitimately wins the CAS.
+  // There is no ordering guarantee between concurrent webhook deliveries, so the
+  // only real invariant is that the outcome is one of the two CONSISTENT pairs —
+  // never a corrupted mix of the two (e.g. Payment SUCCEEDED but Order still
+  // PENDING_PAYMENT, or Payment FAILED but Order PAID).
+  const succeededConsistently =
+    dbPaymentB.status === PaymentStatus.SUCCEEDED && dbOrderB.status === OrderStatus.PAID;
+  const failedConsistently =
+    dbPaymentB.status === PaymentStatus.FAILED && dbOrderB.status === OrderStatus.PENDING_PAYMENT;
+  if (!succeededConsistently && !failedConsistently) {
     throw new Error(
       `Gate 28 failed: Terminal state safety violated. Payment status: ${dbPaymentB.status}, Order: ${dbOrderB.status}`,
     );
   }
-  console.log("✓ Gate 28 passed: Success won terminal state; Payment remains SUCCEEDED and Order remains PAID");
+  const outboxCountB = await prisma.outboxEvent.count({
+    where: { aggregateId: orderB.id, eventType: "ORDER_PAID" },
+  });
+  const expectedOutboxB = succeededConsistently ? 1 : 0;
+  if (outboxCountB !== expectedOutboxB) {
+    throw new Error(
+      `Gate 28 failed: Expected ${expectedOutboxB} ORDER_PAID outbox event(s) for the winning outcome, found ${outboxCountB}`,
+    );
+  }
+  console.log(
+    `✓ Gate 28 passed: Exactly one consistent terminal outcome won the race (Payment=${dbPaymentB.status}, Order=${dbOrderB.status}); no state corruption`,
+  );
 
   // ----------------------------------------------------
   // Gate 29: Concurrency Scenario C — Two Different Success Events for Same Payment
@@ -1705,6 +1734,9 @@ async function runPhase9Acceptance() {
   if (!duplicateBlocked) {
     throw new Error("Gate 41 failed: PostgreSQL did not reject duplicate ORDER_PAID outbox event on same orderId");
   }
+  // Clean up the synthetic probe row; it references no real Order and would
+  // otherwise sit PENDING forever and pollute worker/outbox observability.
+  await prisma.outboxEvent.deleteMany({ where: { aggregateId: testOrderId } });
   console.log("✓ Gate 41 passed: PostgreSQL partial unique index 'unique_order_paid_outbox' is active and enforced");
 
   // ----------------------------------------------------
@@ -1858,6 +1890,9 @@ async function runPhase9Acceptance() {
 
   // ----------------------------------------------------
   // Gate 44: Cancelled Webhook Event Concurrency & Idempotency
+  // Round 3: a cancelled/expired payment ATTEMPT is terminal for that
+  // attempt only. The Order is NOT a payment attempt and must remain
+  // PENDING_PAYMENT so the customer can retry with a new Payment row.
   // ----------------------------------------------------
   console.log("\n[Gate 44] Executing 10 concurrent identical payment.cancelled webhooks...");
   const { order: orderCancelled, payment: paymentCancelled } = await createCustomerOrder(
@@ -1906,8 +1941,21 @@ async function runPhase9Acceptance() {
   const orderCancelledDb = await prisma.order.findUniqueOrThrow({
     where: { id: orderCancelled.id },
   });
-  if (paymentCancelledDb.status !== PaymentStatus.CANCELLED || orderCancelledDb.status !== OrderStatus.CANCELLED) {
-    throw new Error(`Gate 44 failed: Payment/Order should be CANCELLED, got payment=${paymentCancelledDb.status}, order=${orderCancelledDb.status}`);
+  if (
+    paymentCancelledDb.status !== PaymentStatus.CANCELLED ||
+    orderCancelledDb.status !== OrderStatus.PENDING_PAYMENT
+  ) {
+    throw new Error(
+      `Gate 44 failed: Payment attempt should be CANCELLED and Order should remain PENDING_PAYMENT (retryable), got payment=${paymentCancelledDb.status}, order=${orderCancelledDb.status}`,
+    );
+  }
+  const cancelledOutboxCount = await prisma.outboxEvent.count({
+    where: { aggregateId: orderCancelled.id, eventType: "ORDER_PAID" },
+  });
+  if (cancelledOutboxCount !== 0) {
+    throw new Error(
+      `Gate 44 failed: Expired/cancelled payment attempt must never emit ORDER_PAID outbox, found ${cancelledOutboxCount}`,
+    );
   }
   const cancelledEventCount = await prisma.paymentEvent.count({
     where: { paymentId: sessionCancelledRes.data.paymentId, eventType: "payment.cancelled" },
@@ -1915,7 +1963,7 @@ async function runPhase9Acceptance() {
   if (cancelledEventCount !== 1) {
     throw new Error(`Gate 44 failed: Expected exactly 1 PaymentEvent for cancelled webhooks, got ${cancelledEventCount}`);
   }
-  console.log("✓ Gate 44 passed: 10 concurrent cancelled webhooks processed idempotently without P2002 error");
+  console.log("✓ Gate 44 passed: 10 concurrent cancelled webhooks processed idempotently; payment attempt terminal, Order remains PENDING_PAYMENT for retry");
 
   // ----------------------------------------------------
   // Gate 45: Reconciliation Route RBAC — Unauthenticated 401
@@ -2211,8 +2259,721 @@ async function runPhase9Acceptance() {
   }
   console.log("✓ Gate 56 passed: Active payment session retrieved safely and idempotently without duplicate creation");
 
+  // ======================================================
+  // ROUND 3 HARDENING — GATES 57-73
+  // ======================================================
+
+  // ----------------------------------------------------
+  // Gate 57: Retry After Expired Payment Attempt
+  // Expired/cancelled Payment attempts are terminal for that attempt only;
+  // the customer must be able to retry with a brand-new Payment row while
+  // the Order stays PENDING_PAYMENT and retryable.
+  // ----------------------------------------------------
+  console.log("\n[Gate 57] Verifying retry creates a new Payment attempt after an expired session...");
+  const { order: order57 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session57aRes = await apiPost(
+    `/v1/orders/${order57.id}/payment-session`,
+    { provider: "stripe" },
+    customerToken,
+  );
+  const session57a = session57aRes.data;
+
+  const expireEvent57 = JSON.stringify({
+    id: `evt_57_expire_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.expired",
+    data: {
+      object: {
+        id: session57a.sessionId,
+        client_reference_id: order57.id,
+        amount_total: order57.totalAmount,
+        currency: order57.currency.toLowerCase(),
+        metadata: { orderId: order57.id, paymentId: session57a.paymentId },
+      },
+    },
+  });
+  const expire57Res = await apiPost(
+    "/v1/webhooks/payments/stripe",
+    expireEvent57,
+    undefined,
+    API_BASE,
+    { "stripe-signature": generateStripeSignature(expireEvent57, STRIPE_TEST_SECRET) },
+  );
+  if (!expire57Res.ok) {
+    throw new Error(`Gate 57 failed: Expiration webhook rejected: ${JSON.stringify(expire57Res.data)}`);
+  }
+
+  const orderAfterExpiry57 = await prisma.order.findUniqueOrThrow({ where: { id: order57.id } });
+  if (orderAfterExpiry57.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error(`Gate 57 failed: Order should remain PENDING_PAYMENT after expiry, got ${orderAfterExpiry57.status}`);
+  }
+
+  const session57bRes = await apiPost(
+    `/v1/orders/${order57.id}/payment-session`,
+    { provider: "stripe" },
+    customerToken,
+  );
+  if (!session57bRes.ok) {
+    throw new Error(`Gate 57 failed: Retry session creation rejected: ${JSON.stringify(session57bRes.data)}`);
+  }
+  const session57b = session57bRes.data;
+  if (session57b.paymentId === session57a.paymentId || session57b.sessionId === session57a.sessionId) {
+    throw new Error("Gate 57 failed: Retry reused the terminal (cancelled) Payment attempt instead of creating a new one");
+  }
+  if (session57b.orderId !== order57.id) {
+    throw new Error("Gate 57 failed: Retry attempt bound to a different Order");
+  }
+
+  const oldAttempt57 = await prisma.payment.findUniqueOrThrow({ where: { id: session57a.paymentId } });
+  if (oldAttempt57.status !== PaymentStatus.CANCELLED) {
+    throw new Error(`Gate 57 failed: Old attempt should remain terminal CANCELLED, got ${oldAttempt57.status}`);
+  }
+  const pendingCount57 = await prisma.payment.count({
+    where: { orderId: order57.id, status: PaymentStatus.PENDING },
+  });
+  if (pendingCount57 !== 1) {
+    throw new Error(`Gate 57 failed: Expected exactly 1 current PENDING payment attempt, found ${pendingCount57}`);
+  }
+  console.log("✓ Gate 57 passed: Expired attempt terminalized; retry created a new Payment attempt on the same retryable Order");
+
+  // ----------------------------------------------------
+  // Gate 58: Stale Success Event For A Superseded Attempt
+  // A delayed authoritative success event that references the OLD
+  // (terminal) attempt must never mark the Order PAID and must never
+  // disturb the new current PENDING attempt.
+  // ----------------------------------------------------
+  console.log("\n[Gate 58] Verifying a stale success event for a superseded attempt cannot resurrect it or affect the new attempt...");
+  const staleSuccess58 = JSON.stringify({
+    id: `evt_58_stale_success_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session57a.sessionId,
+        client_reference_id: order57.id,
+        amount_total: order57.totalAmount,
+        currency: order57.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order57.id, paymentId: session57a.paymentId },
+      },
+    },
+  });
+  const stale58Res = await apiPost(
+    "/v1/webhooks/payments/stripe",
+    staleSuccess58,
+    undefined,
+    API_BASE,
+    { "stripe-signature": generateStripeSignature(staleSuccess58, STRIPE_TEST_SECRET) },
+  );
+  if (!stale58Res.ok) {
+    throw new Error(`Gate 58 failed: Stale success webhook rejected unexpectedly: ${JSON.stringify(stale58Res.data)}`);
+  }
+
+  const staleOldAttempt58 = await prisma.payment.findUniqueOrThrow({ where: { id: session57a.paymentId } });
+  const staleNewAttempt58 = await prisma.payment.findUniqueOrThrow({ where: { id: session57b.paymentId } });
+  const staleOrder58 = await prisma.order.findUniqueOrThrow({ where: { id: order57.id } });
+
+  if (staleOldAttempt58.status !== PaymentStatus.CANCELLED) {
+    throw new Error(`Gate 58 failed: Superseded attempt resurrected to ${staleOldAttempt58.status}`);
+  }
+  if (staleNewAttempt58.status !== PaymentStatus.PENDING) {
+    throw new Error(`Gate 58 failed: Current attempt was disturbed, status is ${staleNewAttempt58.status}`);
+  }
+  if (staleOrder58.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error(`Gate 58 failed: Order was marked ${staleOrder58.status} via a stale superseded attempt`);
+  }
+  const staleOutbox58 = await prisma.outboxEvent.count({
+    where: { aggregateId: order57.id, eventType: "ORDER_PAID" },
+  });
+  if (staleOutbox58 !== 0) {
+    throw new Error("Gate 58 failed: Stale event for superseded attempt emitted ORDER_PAID outbox");
+  }
+  console.log("✓ Gate 58 passed: Stale success event for a superseded attempt was recorded without resurrecting it or affecting the new attempt");
+
+  // ----------------------------------------------------
+  // Gate 59: FAILED Payment Cannot Resurrect
+  // ----------------------------------------------------
+  console.log("\n[Gate 59] Verifying a FAILED payment attempt cannot be resurrected by a later success event...");
+  const { order: order59 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session59Res = await apiPost(`/v1/orders/${order59.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session59 = session59Res.data;
+
+  const failEvent59 = JSON.stringify({
+    id: `evt_59_fail_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.async_payment_failed",
+    data: {
+      object: {
+        id: session59.sessionId,
+        client_reference_id: order59.id,
+        amount_total: order59.totalAmount,
+        currency: order59.currency.toLowerCase(),
+        metadata: { orderId: order59.id, paymentId: session59.paymentId },
+      },
+    },
+  });
+  await apiPost("/v1/webhooks/payments/stripe", failEvent59, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(failEvent59, STRIPE_TEST_SECRET),
+  });
+  const failed59 = await prisma.payment.findUniqueOrThrow({ where: { id: session59.paymentId } });
+  if (failed59.status !== PaymentStatus.FAILED) {
+    throw new Error(`Gate 59 setup failed: expected FAILED, got ${failed59.status}`);
+  }
+
+  const lateSuccess59 = JSON.stringify({
+    id: `evt_59_late_success_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session59.sessionId,
+        client_reference_id: order59.id,
+        amount_total: order59.totalAmount,
+        currency: order59.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order59.id, paymentId: session59.paymentId },
+      },
+    },
+  });
+  const lateSuccess59Res = await apiPost("/v1/webhooks/payments/stripe", lateSuccess59, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(lateSuccess59, STRIPE_TEST_SECRET),
+  });
+  if (!lateSuccess59Res.ok) {
+    throw new Error(`Gate 59 failed: Late success webhook errored: ${JSON.stringify(lateSuccess59Res.data)}`);
+  }
+  const finalFailed59 = await prisma.payment.findUniqueOrThrow({ where: { id: session59.paymentId } });
+  const finalOrder59 = await prisma.order.findUniqueOrThrow({ where: { id: order59.id } });
+  if (finalFailed59.status !== PaymentStatus.FAILED || finalOrder59.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error(`Gate 59 failed: FAILED payment resurrected! payment=${finalFailed59.status}, order=${finalOrder59.status}`);
+  }
+  const outbox59 = await prisma.outboxEvent.count({ where: { aggregateId: order59.id, eventType: "ORDER_PAID" } });
+  if (outbox59 !== 0) {
+    throw new Error("Gate 59 failed: Resurrected FAILED payment emitted an ORDER_PAID outbox event");
+  }
+  console.log("✓ Gate 59 passed: FAILED payment attempt could not be resurrected by a later authoritative success event");
+
+  // ----------------------------------------------------
+  // Gate 60: CANCELLED Payment Cannot Resurrect
+  // ----------------------------------------------------
+  console.log("\n[Gate 60] Verifying a CANCELLED payment attempt cannot be resurrected by a later success event...");
+  const { order: order60 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session60Res = await apiPost(`/v1/orders/${order60.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session60 = session60Res.data;
+
+  const expireEvent60 = JSON.stringify({
+    id: `evt_60_expire_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.expired",
+    data: {
+      object: {
+        id: session60.sessionId,
+        client_reference_id: order60.id,
+        amount_total: order60.totalAmount,
+        currency: order60.currency.toLowerCase(),
+        metadata: { orderId: order60.id, paymentId: session60.paymentId },
+      },
+    },
+  });
+  await apiPost("/v1/webhooks/payments/stripe", expireEvent60, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(expireEvent60, STRIPE_TEST_SECRET),
+  });
+  const cancelled60 = await prisma.payment.findUniqueOrThrow({ where: { id: session60.paymentId } });
+  if (cancelled60.status !== PaymentStatus.CANCELLED) {
+    throw new Error(`Gate 60 setup failed: expected CANCELLED, got ${cancelled60.status}`);
+  }
+
+  const lateSuccess60 = JSON.stringify({
+    id: `evt_60_late_success_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session60.sessionId,
+        client_reference_id: order60.id,
+        amount_total: order60.totalAmount,
+        currency: order60.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order60.id, paymentId: session60.paymentId },
+      },
+    },
+  });
+  const lateSuccess60Res = await apiPost("/v1/webhooks/payments/stripe", lateSuccess60, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(lateSuccess60, STRIPE_TEST_SECRET),
+  });
+  if (!lateSuccess60Res.ok) {
+    throw new Error(`Gate 60 failed: Late success webhook errored: ${JSON.stringify(lateSuccess60Res.data)}`);
+  }
+  const finalCancelled60 = await prisma.payment.findUniqueOrThrow({ where: { id: session60.paymentId } });
+  const finalOrder60 = await prisma.order.findUniqueOrThrow({ where: { id: order60.id } });
+  if (finalCancelled60.status !== PaymentStatus.CANCELLED || finalOrder60.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error(`Gate 60 failed: CANCELLED payment resurrected! payment=${finalCancelled60.status}, order=${finalOrder60.status}`);
+  }
+  const outbox60 = await prisma.outboxEvent.count({ where: { aggregateId: order60.id, eventType: "ORDER_PAID" } });
+  if (outbox60 !== 0) {
+    throw new Error("Gate 60 failed: Resurrected CANCELLED payment emitted an ORDER_PAID outbox event");
+  }
+  console.log("✓ Gate 60 passed: CANCELLED payment attempt could not be resurrected by a later authoritative success event");
+
+  // ----------------------------------------------------
+  // Gate 61: Cross-Provider Evidence Fails Closed
+  // ----------------------------------------------------
+  console.log("\n[Gate 61] Verifying cross-provider evidence fails closed (Payment.provider mismatch)...");
+  const { order: order61 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session61Res = await apiPost(`/v1/orders/${order61.id}/payment-session`, { provider: "test" }, customerToken);
+  if (!session61Res.ok) {
+    throw new Error(`Gate 61 setup failed: could not create test-provider session: ${JSON.stringify(session61Res.data)}`);
+  }
+  const session61 = session61Res.data;
+  if (session61.provider !== "test") {
+    throw new Error(`Gate 61 setup failed: expected test provider, got ${session61.provider}`);
+  }
+
+  const mismatchProviderEvent61 = JSON.stringify({
+    id: `evt_61_provider_mismatch_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: `cs_stripe_impersonation_${Date.now()}`,
+        client_reference_id: order61.id,
+        amount_total: order61.totalAmount,
+        currency: order61.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order61.id, paymentId: session61.paymentId },
+      },
+    },
+  });
+  const mismatch61Res = await apiPost("/v1/webhooks/payments/stripe", mismatchProviderEvent61, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(mismatchProviderEvent61, STRIPE_TEST_SECRET),
+  });
+  if (mismatch61Res.status !== 400 || !mismatch61Res.data?.message?.includes("Payment provider mismatch")) {
+    throw new Error(`Gate 61 failed: Expected 400 Payment provider mismatch, got ${mismatch61Res.status}: ${JSON.stringify(mismatch61Res.data)}`);
+  }
+  const untouched61 = await prisma.payment.findUniqueOrThrow({ where: { id: session61.paymentId } });
+  const untouchedOrder61 = await prisma.order.findUniqueOrThrow({ where: { id: order61.id } });
+  if (untouched61.status !== PaymentStatus.PENDING || untouchedOrder61.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error("Gate 61 failed: Cross-provider webhook mutated Payment/Order state");
+  }
+  console.log("✓ Gate 61 passed: Cross-provider authoritative evidence strictly fails closed without mutating state");
+
+  // ----------------------------------------------------
+  // Gate 62: Cross-Order/Payment Evidence Fails Closed
+  // ----------------------------------------------------
+  console.log("\n[Gate 62] Verifying evidence bound to a different Order/Payment fails closed for both...");
+  const { order: order62A } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const { order: order62B } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session62ARes = await apiPost(`/v1/orders/${order62A.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session62BRes = await apiPost(`/v1/orders/${order62B.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session62A = session62ARes.data;
+  const session62B = session62BRes.data;
+
+  const crossEvidence62 = JSON.stringify({
+    id: `evt_62_cross_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session62A.sessionId,
+        client_reference_id: order62B.id,
+        amount_total: order62B.totalAmount,
+        currency: order62B.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order62B.id, paymentId: session62B.paymentId },
+      },
+    },
+  });
+  const cross62Res = await apiPost("/v1/webhooks/payments/stripe", crossEvidence62, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(crossEvidence62, STRIPE_TEST_SECRET),
+  });
+  if (cross62Res.status !== 400) {
+    throw new Error(`Gate 62 failed: Expected 400 for cross-order/payment evidence, got ${cross62Res.status}: ${JSON.stringify(cross62Res.data)}`);
+  }
+  const untouchedA62 = await prisma.payment.findUniqueOrThrow({ where: { id: session62A.paymentId } });
+  const untouchedB62 = await prisma.payment.findUniqueOrThrow({ where: { id: session62B.paymentId } });
+  if (untouchedA62.status !== PaymentStatus.PENDING || untouchedB62.status !== PaymentStatus.PENDING) {
+    throw new Error("Gate 62 failed: Cross-order evidence mutated an unrelated Payment");
+  }
+  const untouchedOrderA62 = await prisma.order.findUniqueOrThrow({ where: { id: order62A.id } });
+  const untouchedOrderB62 = await prisma.order.findUniqueOrThrow({ where: { id: order62B.id } });
+  if (untouchedOrderA62.status !== OrderStatus.PENDING_PAYMENT || untouchedOrderB62.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error("Gate 62 failed: Cross-order evidence mutated an unrelated Order");
+  }
+  console.log("✓ Gate 62 passed: Evidence bound to a different Order/Payment strictly fails closed; neither party affected");
+
+  // ----------------------------------------------------
+  // Gate 63: One PENDING Payment Per Order Under Real Concurrency
+  // ----------------------------------------------------
+  console.log("\n[Gate 63] Verifying exactly one PENDING payment attempt survives 20 concurrent session-creation requests...");
+  const { order: order63 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const concurrentSessionCalls63 = Array.from({ length: 20 }).map(() =>
+    apiPost(`/v1/orders/${order63.id}/payment-session`, { provider: "stripe" }, customerToken),
+  );
+  const results63 = await Promise.all(concurrentSessionCalls63);
+  const failures63 = results63.filter((r) => !r.ok);
+  if (failures63.length > 0) {
+    throw new Error(`Gate 63 failed: ${failures63.length} concurrent session requests failed uncontrolled: ${JSON.stringify(failures63[0].data)}`);
+  }
+  const distinctPaymentIds63 = new Set(results63.map((r) => r.data.paymentId));
+  if (distinctPaymentIds63.size !== 1) {
+    throw new Error(`Gate 63 failed: Concurrent requests produced ${distinctPaymentIds63.size} distinct Payment IDs, expected exactly 1`);
+  }
+  const pendingRowCount63: any[] = await prisma.$queryRawUnsafe(
+    `SELECT COUNT(*)::int AS count FROM "payments" WHERE "order_id" = $1 AND "status" = 'PENDING'`,
+    order63.id,
+  );
+  if (pendingRowCount63[0].count !== 1) {
+    throw new Error(`Gate 63 failed: Database has ${pendingRowCount63[0].count} PENDING payments for one Order, expected exactly 1`);
+  }
+  console.log("✓ Gate 63 passed: PostgreSQL partial unique index enforced exactly one PENDING payment attempt under 20-way concurrency");
+
+  // ----------------------------------------------------
+  // Gate 64: Production Return URL Security Matrix
+  // ----------------------------------------------------
+  console.log("\n[Gate 64] Verifying production return URL validation rejects unsafe schemes and accepts trusted HTTPS...");
+  const gate64Result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `
+        process.env.NODE_ENV = 'production';
+        process.env.STRIPE_MOCK_CLIENT = 'false';
+        process.env.STRIPE_SECRET_KEY = 'sk_live_valid_dummy_key';
+        process.env.STRIPE_WEBHOOK_SECRET = 'whsec_valid_dummy_key';
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
+        delete process.env.ALLOWED_REDIRECT_ORIGINS;
+        delete process.env.FRONTEND_URL;
+        delete process.env.PORTAL_URL;
+        const { TestPaymentProvider } = require('./apps/api/dist/modules/payments/test-payment.provider');
+        const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+        const { PaymentProviderFactory } = require('./apps/api/dist/modules/payments/payment-provider.factory');
+        const { PaymentsService } = require('./apps/api/dist/modules/payments/payments.service');
+        const testProvider = new TestPaymentProvider();
+        const stripeProvider = new StripePaymentProvider();
+        const factory = new PaymentProviderFactory(stripeProvider, testProvider);
+        const service = new PaymentsService({}, testProvider, factory);
+
+        const badUrls = [
+          'http://example.com/success',
+          'javascript:alert(1)',
+          'data:text/html,<script>alert(1)</script>',
+          '//evil.com/steal',
+          'not-a-valid-url-::::',
+        ];
+        const accepted = [];
+        for (const url of badUrls) {
+          try {
+            service.validateRedirectUrl(url);
+            accepted.push(url);
+          } catch (e) {
+            // expected rejection
+          }
+        }
+        let validOk = false;
+        try {
+          service.validateRedirectUrl('https://portal.nexustheme.example/orders/success');
+          validOk = true;
+        } catch (e) {
+          validOk = false;
+        }
+        console.log(JSON.stringify({ accepted, validOk }));
+        process.exit(accepted.length === 0 && validOk ? 0 : 1);
+        `,
+      ],
+      { cwd: path.resolve(__dirname, "../../..") },
+    );
+    let stdout = "";
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.on("exit", (code) => resolve({ ok: code === 0, detail: stdout.trim() }));
+  });
+  if (!gate64Result.ok) {
+    throw new Error(`Gate 64 failed: Production return URL validation matrix failed: ${gate64Result.detail}`);
+  }
+  console.log("✓ Gate 64 passed: Production return URL validation rejects unsafe schemes/origins and accepts trusted HTTPS");
+
+  // ----------------------------------------------------
+  // Gate 65: Migration Non-Destructive History Preservation
+  // ----------------------------------------------------
+  console.log("\n[Gate 65] Verifying Phase 9 migrations are non-destructive and historical payment rows survive...");
+  const migrationsDir65 = path.resolve(__dirname, "../prisma/migrations");
+  const migrationDirs65 = fs
+    .readdirSync(migrationsDir65)
+    .filter((name) => name.toLowerCase().includes("phase9"));
+  if (migrationDirs65.length === 0) {
+    throw new Error("Gate 65 failed: No Phase 9 migrations found to audit");
+  }
+  const destructivePattern65 = /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b/i;
+  for (const dir of migrationDirs65) {
+    const sqlPath = path.join(migrationsDir65, dir, "migration.sql");
+    if (!fs.existsSync(sqlPath)) continue;
+    const raw = fs.readFileSync(sqlPath, "utf8");
+    const withoutComments = raw
+      .split("\n")
+      .map((line) => line.replace(/--.*$/, ""))
+      .join("\n");
+    if (destructivePattern65.test(withoutComments)) {
+      throw new Error(`Gate 65 failed: Destructive statement found in ${dir}/migration.sql`);
+    }
+  }
+  const historicalTerminalCount65 = await prisma.payment.count({
+    where: { status: { in: [PaymentStatus.FAILED, PaymentStatus.CANCELLED] } },
+  });
+  if (historicalTerminalCount65 === 0) {
+    throw new Error("Gate 65 failed: Expected prior FAILED/CANCELLED payment history to still exist, found none");
+  }
+  console.log(
+    `✓ Gate 65 passed: Phase 9 migrations contain no destructive statements; ${historicalTerminalCount65} historical terminal payment rows intact`,
+  );
+
+  // ----------------------------------------------------
+  // Gate 66: No Secrets Leak Into AuditLog
+  // ----------------------------------------------------
+  console.log("\n[Gate 66] Verifying no secrets leaked into AuditLog entries...");
+  const recentAuditLogs66 = await prisma.auditLog.findMany({
+    where: { entity: { in: ["Order", "Payment"] } },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  const auditSensitivePatterns66 = [
+    /sk_live_/i,
+    /sk_test_/i,
+    /whsec_/i,
+    /bearer\s+/i,
+    /authorization/i,
+    /4111\s?1111/i,
+  ];
+  for (const log of recentAuditLogs66) {
+    const serialized = JSON.stringify(log.details || {});
+    for (const pattern of auditSensitivePatterns66) {
+      if (pattern.test(serialized)) {
+        throw new Error(`Gate 66 failed: AuditLog ${log.id} matched sensitive pattern ${pattern}`);
+      }
+    }
+  }
+  console.log(`✓ Gate 66 passed: ${recentAuditLogs66.length} recent AuditLog entries scanned, zero secrets found`);
+
+  // ----------------------------------------------------
+  // Gate 67: Malformed Known Event Fails Closed
+  // ----------------------------------------------------
+  console.log("\n[Gate 67] Verifying a malformed checkout.session.completed event fails closed instead of being silently accepted...");
+  const { order: order67 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const malformedEvent67 = JSON.stringify({
+    id: `evt_67_malformed_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: `cs_malformed_${Date.now()}`,
+        amount_total: order67.totalAmount,
+        currency: order67.currency.toLowerCase(),
+        payment_status: "paid",
+      },
+    },
+  });
+  const malformed67Res = await apiPost("/v1/webhooks/payments/stripe", malformedEvent67, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(malformedEvent67, STRIPE_TEST_SECRET),
+  });
+  if (malformed67Res.status !== 400) {
+    throw new Error(`Gate 67 failed: Expected 400 for malformed/incomplete evidence, got ${malformed67Res.status}: ${JSON.stringify(malformed67Res.data)}`);
+  }
+  const untouchedOrder67 = await prisma.order.findUniqueOrThrow({ where: { id: order67.id } });
+  if (untouchedOrder67.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error("Gate 67 failed: Malformed event mutated Order state");
+  }
+  console.log("✓ Gate 67 passed: Malformed known event with incomplete evidence fails closed with 400 Bad Request");
+
+  // ----------------------------------------------------
+  // Gate 68: Unknown/Unrelated Event Type Ignored Safely
+  // ----------------------------------------------------
+  console.log("\n[Gate 68] Verifying a completely unrelated Stripe event type is ignored safely...");
+  const unrelatedEvent68 = JSON.stringify({
+    id: `evt_68_unrelated_${Date.now()}`,
+    object: "event",
+    type: "customer.created",
+    data: {
+      object: {
+        id: `cus_unrelated_${Date.now()}`,
+        email: "someone@example.com",
+      },
+    },
+  });
+  const unrelated68Res = await apiPost("/v1/webhooks/payments/stripe", unrelatedEvent68, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(unrelatedEvent68, STRIPE_TEST_SECRET),
+  });
+  if (!unrelated68Res.ok || unrelated68Res.data?.message !== "Webhook event type is ignored") {
+    throw new Error(`Gate 68 failed: Expected ignored response for unrelated event type, got ${JSON.stringify(unrelated68Res.data)}`);
+  }
+  console.log("✓ Gate 68 passed: Unrelated Stripe event type ignored safely with zero side effects");
+
+  // ----------------------------------------------------
+  // Gate 69: Full Pipeline Idempotency (Repeat Causes Zero Duplicates)
+  // ----------------------------------------------------
+  console.log("\n[Gate 69] Verifying full pipeline idempotency: repeat webhook + repeat worker run cause zero duplicate entitlements...");
+  const { order: order69 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session69Res = await apiPost(`/v1/orders/${order69.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session69 = session69Res.data;
+  const successEvent69 = JSON.stringify({
+    id: `evt_69_success_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session69.sessionId,
+        client_reference_id: order69.id,
+        amount_total: order69.totalAmount,
+        currency: order69.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order69.id, paymentId: session69.paymentId },
+      },
+    },
+  });
+  const sig69 = generateStripeSignature(successEvent69, STRIPE_TEST_SECRET);
+  const first69Res = await apiPost("/v1/webhooks/payments/stripe", successEvent69, undefined, API_BASE, { "stripe-signature": sig69 });
+  if (!first69Res.ok || first69Res.data.orderStatus !== OrderStatus.PAID) {
+    throw new Error(`Gate 69 failed: Initial webhook did not mark Order PAID: ${JSON.stringify(first69Res.data)}`);
+  }
+  await processOutboxEvents({ workerId: "acceptance_worker_phase9_gate69", batchSize: 50 });
+  const entitlementsAfterFirst69 = await prisma.entitlement.count({ where: { orderId: order69.id } });
+  if (entitlementsAfterFirst69 === 0) {
+    throw new Error("Gate 69 failed: No entitlement issued after first successful pipeline run");
+  }
+
+  await apiPost("/v1/webhooks/payments/stripe", successEvent69, undefined, API_BASE, { "stripe-signature": sig69 });
+  await processOutboxEvents({ workerId: "acceptance_worker_phase9_gate69", batchSize: 50 });
+  await apiPost(`/v1/payments/${session69.paymentId}/reconcile`, { reason: "authoritative_query" }, adminToken);
+
+  const entitlementsAfterRepeat69 = await prisma.entitlement.count({ where: { orderId: order69.id } });
+  const outboxAfterRepeat69 = await prisma.outboxEvent.count({
+    where: { aggregateId: order69.id, eventType: "ORDER_PAID" },
+  });
+  if (entitlementsAfterRepeat69 !== entitlementsAfterFirst69) {
+    throw new Error(
+      `Gate 69 failed: Repeat processing created duplicate entitlements (${entitlementsAfterFirst69} -> ${entitlementsAfterRepeat69})`,
+    );
+  }
+  if (outboxAfterRepeat69 !== 1) {
+    throw new Error(`Gate 69 failed: Expected exactly 1 ORDER_PAID outbox event after repeat processing, found ${outboxAfterRepeat69}`);
+  }
+  console.log("✓ Gate 69 passed: Full pipeline is idempotent end-to-end; repeat webhook/worker/reconcile cause zero duplicates");
+
+  // ----------------------------------------------------
+  // Gate 70: No Generic Admin Payment-Status Mutation Endpoint
+  // ----------------------------------------------------
+  console.log("\n[Gate 70] Verifying no generic admin endpoint can directly mutate Payment/Order status...");
+  const { order: order70 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session70Res = await apiPost(`/v1/orders/${order70.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const paymentId70 = session70Res.data.paymentId;
+
+  const patchAttempt70 = await fetch(`${API_BASE}/v1/payments/${paymentId70}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: "SUCCEEDED" }),
+  });
+  const putAttempt70 = await fetch(`${API_BASE}/v1/payments/${paymentId70}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ status: "SUCCEEDED" }),
+  });
+  if (patchAttempt70.status < 400 || putAttempt70.status < 400) {
+    throw new Error(
+      `Gate 70 failed: Generic mutation route unexpectedly accepted (PATCH=${patchAttempt70.status}, PUT=${putAttempt70.status})`,
+    );
+  }
+  const untouchedPayment70 = await prisma.payment.findUniqueOrThrow({ where: { id: paymentId70 } });
+  if (untouchedPayment70.status !== PaymentStatus.PENDING) {
+    throw new Error("Gate 70 failed: Payment status was mutated via a generic route");
+  }
+  console.log("✓ Gate 70 passed: No generic PATCH/PUT route can mutate Payment status; authority remains the verified webhook/reconcile path");
+
+  // ----------------------------------------------------
+  // Gate 71: Success Redirect URL Hit Directly Never Marks Paid
+  // ----------------------------------------------------
+  console.log("\n[Gate 71] Verifying hitting the resolved success redirect URL directly never marks the Order paid...");
+  const { order: order71 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session71Res = await apiPost(`/v1/orders/${order71.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session71 = session71Res.data;
+
+  const redirectLookup71 = await apiGet(
+    `/orders/${order71.id}?session_id=${session71.sessionId}&status=success`,
+    customerToken,
+  );
+  if (redirectLookup71.data?.status === OrderStatus.PAID) {
+    throw new Error("Gate 71 failed: Hitting the success redirect URL directly marked the Order PAID");
+  }
+  const dbOrder71 = await prisma.order.findUniqueOrThrow({ where: { id: order71.id } });
+  if (dbOrder71.status !== OrderStatus.PENDING_PAYMENT) {
+    throw new Error(`Gate 71 failed: Order status is ${dbOrder71.status} after a mere redirect visit, expected PENDING_PAYMENT`);
+  }
+  console.log("✓ Gate 71 passed: Visiting the success redirect URL directly is read-only and never marks the Order paid");
+
+  // ----------------------------------------------------
+  // Gate 72: Already-PAID Order Cannot Be Paid Again By A Second Attempt
+  // ----------------------------------------------------
+  console.log("\n[Gate 72] Verifying an already-PAID Order cannot be paid again by a second independent payment attempt...");
+  const { order: order72 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session72ARes = await apiPost(`/v1/orders/${order72.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session72A = session72ARes.data;
+  const successEvent72A = JSON.stringify({
+    id: `evt_72_a_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: session72A.sessionId,
+        client_reference_id: order72.id,
+        amount_total: order72.totalAmount,
+        currency: order72.currency.toLowerCase(),
+        payment_status: "paid",
+        metadata: { orderId: order72.id, paymentId: session72A.paymentId },
+      },
+    },
+  });
+  const first72Res = await apiPost("/v1/webhooks/payments/stripe", successEvent72A, undefined, API_BASE, {
+    "stripe-signature": generateStripeSignature(successEvent72A, STRIPE_TEST_SECRET),
+  });
+  if (!first72Res.ok || first72Res.data.orderStatus !== OrderStatus.PAID) {
+    throw new Error(`Gate 72 setup failed: initial payment did not mark Order PAID: ${JSON.stringify(first72Res.data)}`);
+  }
+
+  const secondAttempt72Res = await apiPost(`/v1/orders/${order72.id}/payment-session`, { provider: "stripe" }, customerToken);
+  if (secondAttempt72Res.status < 400) {
+    throw new Error(
+      `Gate 72 failed: Creating a payment session against an already-PAID Order was not rejected (status ${secondAttempt72Res.status})`,
+    );
+  }
+  const outboxCount72 = await prisma.outboxEvent.count({ where: { aggregateId: order72.id, eventType: "ORDER_PAID" } });
+  if (outboxCount72 !== 1) {
+    throw new Error(`Gate 72 failed: Expected exactly 1 ORDER_PAID outbox event, found ${outboxCount72}`);
+  }
+  console.log("✓ Gate 72 passed: An already-PAID Order strictly cannot be paid again; new attempt creation is rejected");
+
+  // ----------------------------------------------------
+  // Gate 73: Reconciliation Is Fail-Safe When Provider Has No Record
+  // ----------------------------------------------------
+  console.log("\n[Gate 73] Verifying reconciliation reports no-transition when the provider has no record of the reference (fail-safe, not fail-open)...");
+  const { order: order73 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const orphanPayment73 = await prisma.payment.create({
+    data: {
+      orderId: order73.id,
+      provider: "stripe",
+      providerReference: `cs_unknown_reference_${Date.now()}`,
+      status: PaymentStatus.PENDING,
+      amount: order73.totalAmount,
+      currency: order73.currency,
+    },
+  });
+  const reconcile73Res = await apiPost(`/v1/payments/${orphanPayment73.id}/reconcile`, { reason: "scheduled_sweep" }, adminToken);
+  if (!reconcile73Res.ok || reconcile73Res.data.transitioned) {
+    throw new Error(`Gate 73 failed: Reconciliation transitioned despite provider having no record of the reference: ${JSON.stringify(reconcile73Res.data)}`);
+  }
+  const untouched73 = await prisma.payment.findUniqueOrThrow({ where: { id: orphanPayment73.id } });
+  if (untouched73.status !== PaymentStatus.PENDING) {
+    throw new Error(`Gate 73 failed: Payment status changed to ${untouched73.status} despite missing provider record`);
+  }
+  console.log("✓ Gate 73 passed: Reconciliation is fail-safe (no transition), never fail-open, when the provider has no record of the reference");
+
   console.log("\n==================================================");
-  console.log("ALL 56 PHASE 9 LIVE ACCEPTANCE GATES PASSED!");
+  console.log("ALL 73 PHASE 9 LIVE ACCEPTANCE GATES PASSED!");
   console.log("==================================================");
 }
 
