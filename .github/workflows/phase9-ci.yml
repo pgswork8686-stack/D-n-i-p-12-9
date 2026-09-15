@@ -61,13 +61,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Start PostgreSQL, Redis and MinIO
+      - name: Start PostgreSQL and Redis
         run: |
-          docker compose up -d postgres redis minio
+          docker compose up -d postgres redis
           for i in {1..40}; do
             if docker exec nexustheme-postgres pg_isready -U postgres -d marketplace >/dev/null 2>&1 && \
-               docker exec nexustheme-redis redis-cli ping | grep -q PONG && \
-               curl -fsS http://localhost:9000/minio/health/live >/dev/null; then
+               docker exec nexustheme-redis redis-cli ping | grep -q PONG; then
               exit 0
             fi
             sleep 2
@@ -75,9 +74,25 @@ jobs:
           docker compose ps
           exit 1
 
+      - name: Start private MinIO
+        run: |
+          docker run -d --name nexustheme-minio \
+            -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:latest server /data --console-address ':9001'
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs nexustheme-minio
+          exit 1
+
       - name: Create private MinIO bucket
         run: |
-          docker run --rm --network host minio/mc:latest sh -c '
+          docker run --rm --network host quay.io/minio/mc:latest sh -c '
             mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
             mc mb --ignore-existing local/marketplace-dev
           '
@@ -128,4 +143,5 @@ jobs:
         if: failure()
         run: |
           docker compose ps || true
-          docker compose logs --tail=200 postgres redis minio || true
+          docker compose logs --tail=200 postgres redis || true
+          docker logs nexustheme-minio || true
