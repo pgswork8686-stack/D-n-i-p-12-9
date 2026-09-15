@@ -1,0 +1,131 @@
+name: Phase 9 Verification
+
+on:
+  push:
+    branches:
+      - feature/phase-9-production-payment
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/api/**'
+      - 'apps/worker/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/phase9-ci.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marketplace
+      REDIS_URL: redis://localhost:6379
+      STORAGE_PROVIDER: minio
+      STORAGE_ENDPOINT: http://localhost:9000
+      STORAGE_BUCKET: marketplace-dev
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      STORAGE_REGION: auto
+      WEB_URL: http://localhost:3000
+      PORTAL_URL: http://localhost:3001
+      ADMIN_URL: http://localhost:3002
+      API_URL: http://localhost:4000
+      PAYMENT_RETURN_BASE_URL: http://localhost:3001
+      STRIPE_MOCK_CLIENT: 'true'
+      STRIPE_SECRET_KEY: sk_test_placeholder_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci_test_secret
+      STRIPE_WEBHOOK_TOLERANCE_SECONDS: '300'
+      ENABLE_TEST_PAYMENT_PROVIDER: 'true'
+      TEST_PAYMENT_WEBHOOK_SECRET: ci-test-payment-secret
+      LICENSE_KEY_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      SEED_DEV_USERS: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start PostgreSQL, Redis and MinIO
+        run: |
+          docker compose up -d postgres redis minio
+          for i in {1..40}; do
+            if docker exec nexustheme-postgres pg_isready -U postgres -d marketplace >/dev/null 2>&1 && \
+               docker exec nexustheme-redis redis-cli ping | grep -q PONG && \
+               curl -fsS http://localhost:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          exit 1
+
+      - name: Create private MinIO bucket
+        run: |
+          docker run --rm --network host minio/mc:latest sh -c '
+            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
+            mc mb --ignore-existing local/marketplace-dev
+          '
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      - name: Seed local acceptance data
+        run: pnpm db:seed:local
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build --concurrency=2
+
+      - name: Worker smoke
+        run: pnpm worker:smoke
+
+      - name: Phase 4 acceptance
+        run: pnpm test:acceptance:phase4
+
+      - name: Phase 5 acceptance
+        run: pnpm test:acceptance:phase5
+
+      - name: Phase 6 acceptance
+        run: pnpm test:acceptance:phase6
+
+      - name: Phase 7 acceptance
+        run: pnpm test:acceptance:phase7
+
+      - name: Phase 8 acceptance
+        run: pnpm test:acceptance:phase8
+
+      - name: Phase 9 acceptance
+        run: pnpm test:acceptance:phase9
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose ps || true
+          docker compose logs --tail=200 postgres redis minio || true
