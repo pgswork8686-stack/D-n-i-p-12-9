@@ -284,13 +284,62 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 6. Phase 6 — Elementor External License (Upstream capacity, customer domain allocation, lifecycle management)
 7. Phase 7 — Internal License (Offline activation, cryptographically verifiable tokens, domain limits)
 8. Phase 8 — Download & Version (Private asset versioning, signed R2 download tokens, rate limits)
-9. Phase 9 — Production Payment (Stripe, VietQR, OpenBanking, automated reconciliations)
+9. Phase 9 — Production Payment (Stripe Checkout sessions, signed webhooks, fail-closed binding, atomic outbox, reconciler, raw_payload_hash)
 10. Phase 10 — Customer Portal (License center, download hub, domain binding GUI)
 11. Phase 11 — CMS & SEO (Editorial content, programmatic SEO, dynamic metadata)
 12. Phase 12 — n8n Automation (AI-assisted drafts, operational notifications)
 13. Phase 13 — Affiliate & Membership (Tiered access, recurring entitlements, referral tracking)
 14. Phase 14 — Hosting Integration (cPanel/DirectAdmin/Cloudflare automation)
 15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
+
+## Phase 9 — Production Payment Gateway Architecture
+- **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events.
+- **Option 1 Event Model**: Only `checkout.session.completed` with `payment_status === "paid"` triggers `SUCCEEDED`. All `payment_intent.*` events are **strictly ignored** at the webhook layer. `checkout.session.async_payment_failed` → `FAILED`. `checkout.session.expired` → `CANCELLED`.
+- **Provider-Neutral Abstraction**: `PaymentProviderAdapter` interface and `PaymentProviderFactory` resolving gateway adapters dynamically.
+- **Strict Production Isolation (Fail-Closed Config)**:
+  - `STRIPE_MOCK_CLIENT=true` is **strictly prohibited** when `NODE_ENV=production`.
+  - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are **required** in production; placeholder or missing values cause startup failure.
+  - Test payment provider is preserved for local/testing only and strictly blocked when `NODE_ENV === 'production'`.
+- **Authenticated Session Creation**: `POST /v1/orders/:orderId/payment-session` enforces user ownership, `PENDING_PAYMENT` order status, and immutable pricing/currency from database. Validates redirect URLs and rejects untrusted external origins.
+- **Idempotent Session Reuse**: If an active session already exists for the same provider, the provider's `getPaymentSession()` is called to retrieve the existing `sessionUrl` without creating duplicates.
+- **Provider Switch Prevention**: Once a payment has an active `providerReference` on one provider, switching to another provider is rejected with 409 Conflict.
+- **Webhook Security**:
+  - `POST /v1/webhooks/payments/:provider` immediately rejects non-Buffer or empty `rawBody` (length === 0) with 400 `BadRequestException("Missing or empty raw webhook payload")`.
+  - HMAC-SHA256 signature verification via `stripe.webhooks.constructEvent` with configurable timestamp tolerance (default 300s, max 900s).
+  - Causes ZERO DB mutations on rejected signatures.
+- **Exact Provider Reference Matching**: Webhook `session.id` must exactly match `payment.providerReference` — zero `cs_* <-> pi_*` cross-matching exceptions.
+- **Fail-Closed Binding Verification**: Validates expected amount, currency, orderId, and providerReference before mutating state.
+- **Atomic Success Transaction**: Single transaction executes: Check/Insert `PaymentEvent` (`@@unique([provider, externalEventId])`), CAS transition Payment to `SUCCEEDED`, CAS transition Order to `PAID`, insert `ORDER_PAID` Outbox event (protected by `unique_order_paid_outbox` partial unique index), and insert `AuditLog`. Rollback on any failure.
+- **Duplicate Payment Detection**: If webhook arrives for an order already in `PAID` status, the duplicate is detected, a `DUPLICATE_PAYMENT_DETECTED` audit anomaly is logged, and no second `ORDER_PAID` outbox event is emitted.
+- **Terminal State Safety**: `SUCCEEDED`, `FAILED`, and `CANCELLED` are terminal states and are strictly preserved via CAS.
+- **Concurrent Race Idempotency**: Concurrent `payment.failed` and `payment.cancelled` webhooks are handled idempotently via Prisma P2002 catch, returning the current DB state without error.
+- **Secret Hygiene**: Zero credit card PAN, CVV, provider secrets, or auth headers stored. Error messages are generic (`"Upstream payment provider failure"`) without leaking Stripe internal errors. `raw_payload_hash` stored on `payment_events` for cryptographic non-repudiation.
+- **RBAC**:
+  - `GET /v1/payments/:id` requires authentication; non-staff users can only access their own payments (returns 404 for cross-user); sensitive metadata fields stripped for non-staff.
+  - `POST /v1/payments/:id/reconcile` requires `payment.manage` permission.
+  - Permissions `payment.read` and `payment.manage` seeded for `finance`, `ops`, `admin`, `super_admin` roles.
+- **Active Reconciliation**: `reconcilePayment()` enforces exact `providerReference`, `amount`, and `currency` binding checks before processing. Supports typed `PaymentReconcileReason` enum (`scheduled_sweep`, `ops_manual`, `abandoned_check`, `authoritative_query`).
+- **ORDER_PAID Outbox Constraint**: PostgreSQL partial unique index `unique_order_paid_outbox` on `outbox_events(aggregate_id) WHERE aggregate_type = 'Order' AND event_type = 'ORDER_PAID'` guarantees exactly-once outbox delivery at the database level.
+- **Read-Only Frontend Checks**: `GET /v1/payments/:id` and order lookups are strictly read-only and never mark orders as paid.
+
+### Phase 9 Round 3 — Authoritative Payment Hardening
+- **Browser evidence is never authoritative**: a browser redirect to the resolved success/cancel URL, a bare `session_id` query parameter, or the mere existence of a provider Checkout Session never marks an Order `PAID`. Only a verified, signature-checked provider event (webhook) or an actively queried authoritative provider status (reconciliation) — both routed through the single private `processAuthoritativePaymentEvent` authority in `PaymentsService` — can transition state.
+- **`checkout.session.completed` alone is not proof of payment**: the adapter only emits `payment.succeeded` when `payment_status === "paid"`; a completed session with a different `payment_status` is parsed as `ignored` and cannot reach the authority function.
+- **Expired/cancelled payment ATTEMPT ≠ cancelled Order**: when a Stripe Checkout Session expires (`checkout.session.expired`) the corresponding `Payment` row transitions `PENDING → CANCELLED`, but the `Order` deliberately stays `PENDING_PAYMENT`. A `Payment` attempt is not the `Order`; the customer must be able to retry the same `Order` with a brand-new `Payment` row. `Order` only ever reaches `CANCELLED` through the legacy Phase 4 test-provider flow, never through Phase 9 production Stripe webhooks.
+- **Terminal payment attempts never resurrect**: `SUCCEEDED`, `FAILED`, and `CANCELLED` are permanently terminal per `Payment` row. A delayed/out-of-order/stale authoritative event for a terminal `Payment` (including one superseded by a newer retry attempt on the same `Order`) is recorded as a `PaymentEvent` for audit purposes but never mutates state and never emits a second `ORDER_PAID` outbox event.
+- **One live attempt per Order**: PostgreSQL partial unique index `unique_pending_payment_per_order` on `payments(order_id) WHERE status = 'PENDING'` guarantees at most one active `PENDING` `Payment` row per `Order` even under concurrent session-creation requests; application code additionally reuses the existing `PENDING` row instead of relying solely on a pre-check.
+- **Deterministic lock order**: the authoritative transition function always locks `Payment` then `Order` (`SELECT ... FOR UPDATE`) inside one transaction before validating invariants, so concurrent webhook/webhook, webhook/reconciliation, and session-retry/webhook races serialize cleanly with zero duplicate outbox events or corrupted mixed state.
+- **Reconciliation shares the webhook's authority**: `reconcilePayment()` never applies its own weaker "status string" logic — it queries the provider, builds the same evidence shape, and calls the identical private authority function used by the webhook path. A missing/unavailable provider record or a still-pending provider status yields `transitioned: false` (fail-safe), never a false success.
+- **Migrations are additive and non-destructive**: Phase 9 migrations never `DELETE`/`TRUNCATE`/`DROP` historical rows; the `unique_pending_payment_per_order` / `unique_order_paid_outbox` migration fails loudly (`RAISE EXCEPTION`) if pre-existing dirty data would violate the new invariant, requiring an explicit audited data repair instead of silent cleanup.
+- **No generic status-mutation endpoint**: there is no `PATCH`/`PUT` route on `/v1/payments/:id` or elsewhere that lets any caller (including admin) set a `Payment`/`Order` status directly; the only two paths that can ever reach `SUCCEEDED`/`PAID` are the signed webhook and the RBAC-gated reconciliation authority.
+
+### Phase 9 Round 4 — Stripe Live-Mode Boundary
+- **Production requires a genuine live Stripe secret key**: `STRIPE_SECRET_KEY` must start with `sk_live_` when `NODE_ENV === "production"`; any `sk_test_*` key — placeholder or a real-looking test key — fails provider initialization closed. A production deployment can never boot against Stripe's test environment.
+- **`livemode` is authoritative provider evidence, not just the key prefix**: `StripeConfig.expectedLivemode` is `true` only in production and `false` everywhere else (mock mode is exempt — it never touches the real Stripe network and is itself forbidden in production). Every place the adapter receives a Stripe-originated object checks `object.livemode === expectedLivemode` before trusting it.
+- **A valid signature alone is insufficient**: `verifyWebhook()` checks `event.livemode` immediately after HMAC signature verification and *before* the event reaches `parseWebhookEvent`/business processing. A signature-valid webhook whose `livemode` does not match the configured environment is rejected with zero `PaymentEvent`, `Payment`, `Order`, outbox, or audit mutation — a test-mode event can never pay a production Order even with a correctly signed payload.
+- **Checkout Session creation is mode-checked before persistence**: after `stripe.checkout.sessions.create()`, `createPaymentSession()` verifies `session.livemode === expectedLivemode` before returning the session to the caller. On mismatch it fails closed (generic `BadGatewayException`); `PaymentsService` only persists `providerReference` after the adapter call succeeds, so `Payment` stays `PENDING` with no reference and `Order` stays `PENDING_PAYMENT`.
+- **Session retrieval and reconciliation are mode-checked the same way**: `getPaymentSession()` returns `null` (never fabricating a URL) and `queryPaymentStatus()` returns `null` (never a false status) whenever the retrieved Stripe object's `livemode` does not match `expectedLivemode`. Because `reconcilePayment()` treats a `null` provider status as "no provider status available", a test-mode Session — even one reporting `payment_status: "paid"` — can never transition a production Payment; the outcome is `transitioned: false`, fail-safe.
+- **Mock mode remains the only non-production shortcut**: all of the above checks are skipped when `config.isMock` is true, which is itself impossible in production (`STRIPE_MOCK_CLIENT=true` still fails closed at startup). This keeps the entire Phase 4–73 acceptance suite, which runs Stripe in mock mode, unaffected by the live-mode boundary.
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

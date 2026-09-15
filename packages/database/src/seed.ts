@@ -54,6 +54,10 @@ export const SEED_PERMISSIONS = [
   // Audit
   { name: "audit.read", displayName: "Read Audit Logs", module: "audit", description: "View system audit trail" },
 
+  // Payment
+  { name: "payment.read", displayName: "Read Payments", module: "payment", description: "View payments and payment details" },
+  { name: "payment.manage", displayName: "Manage Payments", module: "payment", description: "Reconcile and manage payments" },
+
   // Settings
   { name: "settings.manage", displayName: "Manage Settings", module: "settings", description: "Manage platform settings" },
 ];
@@ -92,6 +96,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "order.read",
     "order.manage",
     "order.refund",
+    "payment.read",
+    "payment.manage",
     "finance.read",
     "audit.read",
   ],
@@ -104,6 +110,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "license.manage",
     "ticket.read",
     "ticket.manage",
+    "payment.read",
+    "payment.manage",
     "audit.read",
   ],
   admin: [
@@ -121,6 +129,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "entitlement.manage",
     "license.read",
     "license.manage",
+    "payment.read",
+    "payment.manage",
     "content.read",
     "content.write",
     "content.publish",
@@ -145,6 +155,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "entitlement.manage",
     "license.read",
     "license.manage",
+    "payment.read",
+    "payment.manage",
     "content.read",
     "content.write",
     "content.publish",

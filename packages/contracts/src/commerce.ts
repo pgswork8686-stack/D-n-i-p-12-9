@@ -144,3 +144,71 @@ export interface OrderFilterQuery {
   status?: OrderStatus;
   userId?: string;
 }
+
+export interface CreatePaymentSessionRequest {
+  provider?: string;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface PaymentSessionResponse {
+  sessionId: string;
+  sessionUrl: string;
+  provider: string;
+  providerReference: string;
+  paymentId: string;
+  orderId: string;
+  amount: number;
+  currency: Currency;
+}
+
+export interface PaymentWebhookResponse {
+  success: boolean;
+  duplicate: boolean;
+  paymentStatus: PaymentStatus;
+  orderStatus: OrderStatus;
+  message: string;
+}
+
+export interface ReconcilePaymentResponse {
+  success: boolean;
+  transitioned: boolean;
+  paymentStatus: PaymentStatus;
+  orderStatus: OrderStatus;
+  message: string;
+}
+
+export const DEFAULT_STRIPE_WEBHOOK_TOLERANCE = 300;
+export const MAX_STRIPE_WEBHOOK_TOLERANCE = 900;
+
+export function resolveStripeWebhookTolerance(
+  val?: string | number | null,
+): number {
+  if (val === undefined || val === null || val === "") {
+    return DEFAULT_STRIPE_WEBHOOK_TOLERANCE;
+  }
+  const num = typeof val === "number" ? val : Number(val);
+  if (
+    !Number.isFinite(num) ||
+    !Number.isInteger(num) ||
+    num <= 0 ||
+    num > MAX_STRIPE_WEBHOOK_TOLERANCE
+  ) {
+    throw new Error(
+      `Invalid STRIPE_WEBHOOK_TOLERANCE_SECONDS '${val}': must be a positive integer between 1 and ${MAX_STRIPE_WEBHOOK_TOLERANCE} seconds`,
+    );
+  }
+  return num;
+}
+
+export enum PaymentReconcileReason {
+  SCHEDULED_SWEEP = "scheduled_sweep",
+  OPS_MANUAL = "ops_manual",
+  ABANDONED_CHECK = "abandoned_check",
+  AUTHORITATIVE_QUERY = "authoritative_query",
+}
+
+export interface ReconcilePaymentRequest {
+  reason?: PaymentReconcileReason;
+}
+

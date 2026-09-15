@@ -20,3 +20,26 @@ export class TestPaymentCallbackDto {
   @IsObject()
   metadata?: Record<string, any>;
 }
+
+export class CreatePaymentSessionDto {
+  @IsOptional()
+  @IsString()
+  provider?: string;
+
+  @IsOptional()
+  @IsString()
+  successUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  cancelUrl?: string;
+}
+
+import { PaymentReconcileReason } from "@nexus/contracts";
+
+export class ReconcilePaymentDto {
+  @IsOptional()
+  @IsEnum(PaymentReconcileReason)
+  reason?: PaymentReconcileReason;
+}
+

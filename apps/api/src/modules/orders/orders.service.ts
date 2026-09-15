@@ -583,7 +583,7 @@ export class OrdersService {
         });
 
         return response;
-      });
+      }, { maxWait: 10000, timeout: 20000 });
 
       this.logger.log(
         `Order ${result.order.orderNumber} created for user ${userId}, total: ${result.order.totalAmount} ${result.order.currency}`,
