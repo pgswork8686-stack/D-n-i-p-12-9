@@ -2951,15 +2951,20 @@ async function runPhase9Acceptance() {
   // Gate 73: Reconciliation Is Fail-Safe When Provider Has No Record
   // ----------------------------------------------------
   console.log("\n[Gate 73] Verifying reconciliation reports no-transition when the provider has no record of the reference (fail-safe, not fail-open)...");
-  const { order: order73 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
-  const orphanPayment73 = await prisma.payment.create({
+  // Checkout already creates one PENDING Payment row per Order (Phase 4
+  // invariant); bind that existing row to Stripe with a reference the mock
+  // provider has never seen, rather than inserting a second PENDING row
+  // (which the Round 3 one-pending-payment-per-order constraint forbids).
+  const { order: order73, payment: seedPayment73 } = await createCustomerOrder(
+    customerToken,
+    targetVariant.id,
+    1,
+  );
+  const orphanPayment73 = await prisma.payment.update({
+    where: { id: seedPayment73.id },
     data: {
-      orderId: order73.id,
       provider: "stripe",
       providerReference: `cs_unknown_reference_${Date.now()}`,
-      status: PaymentStatus.PENDING,
-      amount: order73.totalAmount,
-      currency: order73.currency,
     },
   });
   const reconcile73Res = await apiPost(`/v1/payments/${orphanPayment73.id}/reconcile`, { reason: "scheduled_sweep" }, adminToken);
