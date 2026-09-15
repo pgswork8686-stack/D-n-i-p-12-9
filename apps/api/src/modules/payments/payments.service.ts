@@ -13,6 +13,8 @@ import {
   PaymentWebhookResponse,
   ReconcilePaymentResponse,
   PaymentDto,
+  PaymentReconcileReason,
+  AuthUser,
 } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
 import {
@@ -32,6 +34,43 @@ export class PaymentsService {
     private readonly testProvider: TestPaymentProvider,
     private readonly providerFactory: PaymentProviderFactory,
   ) {}
+
+  private validateRedirectUrl(urlStr?: string): void {
+    if (!urlStr) return;
+    if (urlStr.startsWith("/") && !urlStr.startsWith("//")) {
+      return;
+    }
+    try {
+      const parsed = new URL(urlStr);
+      const allowedOrigins = [
+        process.env.FRONTEND_URL || "http://localhost:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+      ];
+      if (process.env.ALLOWED_REDIRECT_ORIGINS) {
+        allowedOrigins.push(
+          ...process.env.ALLOWED_REDIRECT_ORIGINS.split(",").map((s) =>
+            s.trim(),
+          ),
+        );
+      }
+      const isAllowed = allowedOrigins.some((origin) => {
+        try {
+          return new URL(origin).origin === parsed.origin;
+        } catch {
+          return origin === parsed.origin;
+        }
+      });
+      if (!isAllowed) {
+        throw new BadRequestException(
+          `Untrusted redirect URL origin: ${parsed.origin}`,
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException(`Invalid redirect URL: ${urlStr}`);
+    }
+  }
 
   /**
    * Processes a test payment webhook/callback.
@@ -365,6 +404,9 @@ export class PaymentsService {
     orderId: string,
     dto?: CreatePaymentSessionDto,
   ): Promise<PaymentSessionResponse> {
+    this.validateRedirectUrl(dto?.successUrl);
+    this.validateRedirectUrl(dto?.cancelUrl);
+
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { payments: true },
@@ -388,7 +430,20 @@ export class PaymentsService {
     const providerName = (dto?.provider || "stripe").toLowerCase();
     const adapter = this.providerFactory.getAdapter(providerName);
 
-    // Find existing pending payment or create one authoritatively from order total and currency
+    // Prevent provider switching if order already has an active initiated payment session on another provider
+    const otherActiveSession = order.payments.find(
+      (p) =>
+        p.status === PaymentStatus.PENDING &&
+        p.providerReference &&
+        p.provider.toLowerCase() !== adapter.providerName,
+    );
+    if (otherActiveSession) {
+      throw new ConflictException(
+        `Order already has an active payment session with provider '${otherActiveSession.provider}'`,
+      );
+    }
+
+    // Find existing pending payment for this order or create one authoritatively from order total and currency
     let payment = order.payments.find(
       (p) => p.status === PaymentStatus.PENDING,
     );
@@ -405,11 +460,21 @@ export class PaymentsService {
       });
     }
 
-    // Idempotent reuse: if active session already generated on this provider, reuse it
+    // Idempotent reuse: if active session already generated on this provider, retrieve or reuse it
     if (payment.providerReference && payment.provider === adapter.providerName) {
+      let sessionUrl = `https://checkout.stripe.com/c/pay/${payment.providerReference}`;
+      if (adapter.getPaymentSession) {
+        const existingSession = await adapter.getPaymentSession(
+          payment.providerReference,
+        );
+        if (existingSession?.sessionUrl) {
+          sessionUrl = existingSession.sessionUrl;
+        }
+      }
+
       return {
         sessionId: payment.providerReference,
-        sessionUrl: `https://checkout.stripe.com/c/pay/${payment.providerReference}`,
+        sessionUrl,
         provider: adapter.providerName,
         providerReference: payment.providerReference,
         paymentId: payment.id,
@@ -548,18 +613,9 @@ export class PaymentsService {
       normalizedEvent.providerReference &&
       payment.providerReference !== normalizedEvent.providerReference
     ) {
-      const isStripeCrossReference =
-        adapter.providerName === "stripe" &&
-        ((payment.providerReference.startsWith("cs_") &&
-          normalizedEvent.providerReference.startsWith("pi_")) ||
-          (payment.providerReference.startsWith("pi_") &&
-            normalizedEvent.providerReference.startsWith("cs_")));
-
-      if (!isStripeCrossReference) {
-        throw new BadRequestException(
-          `Provider reference mismatch: expected ${payment.providerReference}, received ${normalizedEvent.providerReference}`,
-        );
-      }
+      throw new BadRequestException(
+        `Provider reference mismatch: expected ${payment.providerReference}, received ${normalizedEvent.providerReference}`,
+      );
     }
 
     if (normalizedEvent.eventType === "payment.succeeded") {
@@ -727,6 +783,34 @@ export class PaymentsService {
           };
         }
 
+        // If order was ALREADY PAID: record duplicate payment anomaly, do NOT emit duplicate ORDER_PAID outbox
+        if (txPayment.order.status === OrderStatus.PAID) {
+          this.logger.warn(
+            `Order ${txPayment.orderId} was already PAID when payment ${txPayment.id} succeeded. Duplicate payment anomaly logged.`,
+          );
+          await this.auditService.logActionWithClient(tx, {
+            action: "DUPLICATE_PAYMENT_DETECTED",
+            entity: "Payment",
+            entityId: txPayment.id,
+            actorId: txPayment.order.userId,
+            details: {
+              orderId: txPayment.order.id,
+              orderNumber: txPayment.order.orderNumber,
+              externalEventId,
+              provider,
+              anomaly: "Payment succeeded for an order that was already in PAID status",
+            },
+          });
+
+          return {
+            success: true,
+            duplicate: false,
+            paymentStatus: PaymentStatus.SUCCEEDED,
+            orderStatus: OrderStatus.PAID,
+            message: "Payment succeeded; order was already PAID (duplicate payment anomaly logged)",
+          };
+        }
+
         // CAS update Order from PENDING_PAYMENT -> PAID
         const orderCas = await tx.order.updateMany({
           where: {
@@ -741,7 +825,29 @@ export class PaymentsService {
           const currentOrder = await tx.order.findUniqueOrThrow({
             where: { id: txPayment.orderId },
           });
-          if (currentOrder.status !== OrderStatus.PAID) {
+          if (currentOrder.status === OrderStatus.PAID) {
+            await this.auditService.logActionWithClient(tx, {
+              action: "DUPLICATE_PAYMENT_DETECTED",
+              entity: "Payment",
+              entityId: txPayment.id,
+              actorId: txPayment.order.userId,
+              details: {
+                orderId: txPayment.order.id,
+                orderNumber: txPayment.order.orderNumber,
+                externalEventId,
+                provider,
+                anomaly: "Order transitioned to PAID concurrently",
+              },
+            });
+
+            return {
+              success: true,
+              duplicate: false,
+              paymentStatus: PaymentStatus.SUCCEEDED,
+              orderStatus: OrderStatus.PAID,
+              message: "Payment processed; order was marked PAID concurrently",
+            };
+          } else {
             throw new ConflictException(
               `Order '${txPayment.orderId}' is in state ${currentOrder.status}, cannot transition to PAID`,
             );
@@ -833,79 +939,103 @@ export class PaymentsService {
       sanitizedPayload,
     } = params;
 
-    return await prisma.$transaction(async (tx) => {
-      const txPayment = await tx.payment.findUnique({
-        where: { id: paymentId },
-        include: { order: true },
-      });
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const txPayment = await tx.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: true },
+        });
 
-      if (!txPayment) {
-        throw new NotFoundException(`Payment '${paymentId}' not found`);
-      }
+        if (!txPayment) {
+          throw new NotFoundException(`Payment '${paymentId}' not found`);
+        }
 
-      // Terminal state preservation: Never SUCCEEDED -> FAILED
-      if (txPayment.status === PaymentStatus.SUCCEEDED) {
-        this.logger.log(
-          `Payment ${txPayment.id} is already in terminal state SUCCEEDED. Ignoring failed event.`,
+        // Terminal state preservation: Never SUCCEEDED -> FAILED
+        if (txPayment.status === PaymentStatus.SUCCEEDED) {
+          this.logger.log(
+            `Payment ${txPayment.id} is already in terminal state SUCCEEDED. Ignoring failed event.`,
+          );
+          return {
+            success: true,
+            duplicate: true,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: "Payment already in terminal state SUCCEEDED",
+          };
+        }
+
+        if (txPayment.status === PaymentStatus.FAILED) {
+          return {
+            success: true,
+            duplicate: true,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: "Payment already in terminal state FAILED",
+          };
+        }
+
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: txPayment.id,
+            provider,
+            eventType: "payment.failed",
+            externalEventId,
+            payload: (sanitizedPayload || {}) as any,
+            rawPayloadHash: rawPayloadHash || null,
+          },
+        });
+
+        await tx.payment.updateMany({
+          where: {
+            id: txPayment.id,
+            status: PaymentStatus.PENDING,
+          },
+          data: { status: PaymentStatus.FAILED },
+        });
+
+        await this.auditService.logActionWithClient(tx, {
+          action: "PAYMENT_FAILED",
+          entity: "Payment",
+          entityId: txPayment.id,
+          actorId: txPayment.order.userId,
+          details: {
+            orderId: txPayment.orderId,
+            externalEventId,
+            provider,
+          },
+        });
+
+        return {
+          success: true,
+          duplicate: false,
+          paymentStatus: PaymentStatus.FAILED,
+          orderStatus: txPayment.order.status,
+          message: "Payment event marked as failed",
+        };
+      }, { maxWait: 10000, timeout: 20000 });
+    } catch (err: any) {
+      if (
+        err?.code === "P2002" ||
+        err?.message?.includes("payment_events_provider_external_event_id_key") ||
+        err?.message?.includes("external_event_id")
+      ) {
+        this.logger.warn(
+          `Concurrent duplicate failure event race detected on ${provider}:${externalEventId}`,
         );
+        const reloadedPayment = await prisma.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: true },
+        });
         return {
           success: true,
           duplicate: true,
-          paymentStatus: txPayment.status,
-          orderStatus: txPayment.order.status,
-          message: "Payment already in terminal state SUCCEEDED",
+          paymentStatus: reloadedPayment?.status || PaymentStatus.FAILED,
+          orderStatus: reloadedPayment?.order?.status || OrderStatus.PENDING_PAYMENT,
+          message: "Concurrent duplicate event handled idempotently",
         };
       }
-
-      if (txPayment.status === PaymentStatus.FAILED) {
-        return {
-          success: true,
-          duplicate: true,
-          paymentStatus: txPayment.status,
-          orderStatus: txPayment.order.status,
-          message: "Payment already in terminal state FAILED",
-        };
-      }
-
-      await tx.paymentEvent.create({
-        data: {
-          paymentId: txPayment.id,
-          provider,
-          eventType: "payment.failed",
-          externalEventId,
-          payload: (sanitizedPayload || {}) as any,
-          rawPayloadHash: rawPayloadHash || null,
-        },
-      });
-
-      await tx.payment.updateMany({
-        where: {
-          id: txPayment.id,
-          status: PaymentStatus.PENDING,
-        },
-        data: { status: PaymentStatus.FAILED },
-      });
-
-      await this.auditService.logActionWithClient(tx, {
-        action: "PAYMENT_FAILED",
-        entity: "Payment",
-        entityId: txPayment.id,
-        actorId: txPayment.order.userId,
-        details: {
-          orderId: txPayment.orderId,
-          externalEventId,
-          provider,
-        },
-      });
-
-      return {
-        success: true,
-        duplicate: false,
-        paymentStatus: PaymentStatus.FAILED,
-        orderStatus: txPayment.order.status,
-        message: "Payment event marked as failed",
-      };
-    }, { maxWait: 10000, timeout: 20000 });
+      throw err;
+    }
   }
 
   /**
@@ -926,77 +1056,111 @@ export class PaymentsService {
       sanitizedPayload,
     } = params;
 
-    return await prisma.$transaction(async (tx) => {
-      const txPayment = await tx.payment.findUnique({
-        where: { id: paymentId },
-        include: { order: true },
-      });
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const txPayment = await tx.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: true },
+        });
 
-      if (!txPayment) {
-        throw new NotFoundException(`Payment '${paymentId}' not found`);
-      }
+        if (!txPayment) {
+          throw new NotFoundException(`Payment '${paymentId}' not found`);
+        }
 
-      if (txPayment.status === PaymentStatus.SUCCEEDED) {
+        if (txPayment.status === PaymentStatus.SUCCEEDED) {
+          return {
+            success: true,
+            duplicate: true,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: "Payment already in terminal state SUCCEEDED",
+          };
+        }
+
+        if (txPayment.status === PaymentStatus.CANCELLED) {
+          return {
+            success: true,
+            duplicate: true,
+            paymentStatus: txPayment.status,
+            orderStatus: txPayment.order.status,
+            message: "Payment already in terminal state CANCELLED",
+          };
+        }
+
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: txPayment.id,
+            provider,
+            eventType: "payment.cancelled",
+            externalEventId,
+            payload: (sanitizedPayload || {}) as any,
+            rawPayloadHash: rawPayloadHash || null,
+          },
+        });
+
+        await tx.payment.updateMany({
+          where: {
+            id: txPayment.id,
+            status: PaymentStatus.PENDING,
+          },
+          data: { status: PaymentStatus.CANCELLED },
+        });
+
+        await tx.order.updateMany({
+          where: {
+            id: txPayment.orderId,
+            status: OrderStatus.PENDING_PAYMENT,
+          },
+          data: { status: OrderStatus.CANCELLED },
+        });
+
+        const currentOrder = await tx.order.findUniqueOrThrow({
+          where: { id: txPayment.orderId },
+        });
+
+        await this.auditService.logActionWithClient(tx, {
+          action: "PAYMENT_CANCELLED",
+          entity: "Payment",
+          entityId: txPayment.id,
+          actorId: txPayment.order.userId,
+          details: {
+            orderId: txPayment.orderId,
+            externalEventId,
+            provider,
+          },
+        });
+
+        return {
+          success: true,
+          duplicate: false,
+          paymentStatus: PaymentStatus.CANCELLED,
+          orderStatus: currentOrder.status,
+          message: "Payment event marked as cancelled",
+        };
+      }, { maxWait: 10000, timeout: 20000 });
+    } catch (err: any) {
+      if (
+        err?.code === "P2002" ||
+        err?.message?.includes("payment_events_provider_external_event_id_key") ||
+        err?.message?.includes("external_event_id")
+      ) {
+        this.logger.warn(
+          `Concurrent duplicate cancellation event race detected on ${provider}:${externalEventId}`,
+        );
+        const reloadedPayment = await prisma.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: true },
+        });
         return {
           success: true,
           duplicate: true,
-          paymentStatus: txPayment.status,
-          orderStatus: txPayment.order.status,
-          message: "Payment already in terminal state SUCCEEDED",
+          paymentStatus: reloadedPayment?.status || PaymentStatus.CANCELLED,
+          orderStatus: reloadedPayment?.order?.status || OrderStatus.CANCELLED,
+          message: "Concurrent duplicate event handled idempotently",
         };
       }
-
-      await tx.paymentEvent.create({
-        data: {
-          paymentId: txPayment.id,
-          provider,
-          eventType: "payment.cancelled",
-          externalEventId,
-          payload: (sanitizedPayload || {}) as any,
-          rawPayloadHash: rawPayloadHash || null,
-        },
-      });
-
-      await tx.payment.updateMany({
-        where: {
-          id: txPayment.id,
-          status: PaymentStatus.PENDING,
-        },
-        data: { status: PaymentStatus.CANCELLED },
-      });
-
-      await tx.order.updateMany({
-        where: {
-          id: txPayment.orderId,
-          status: OrderStatus.PENDING_PAYMENT,
-        },
-        data: { status: OrderStatus.CANCELLED },
-      });
-
-      const currentOrder = await tx.order.findUniqueOrThrow({
-        where: { id: txPayment.orderId },
-      });
-
-      await this.auditService.logActionWithClient(tx, {
-        action: "PAYMENT_CANCELLED",
-        entity: "Payment",
-        entityId: txPayment.id,
-        actorId: txPayment.order.userId,
-        details: {
-          orderId: txPayment.orderId,
-          externalEventId,
-          provider,
-        },
-      });
-
-      return {
-        success: true,
-        duplicate: false,
-        paymentStatus: PaymentStatus.CANCELLED,
-        orderStatus: currentOrder.status,
-        message: "Payment event marked as cancelled",
-      };
-    }, { maxWait: 10000, timeout: 20000 });
+      throw err;
+    }
   }
 
   /**
@@ -1053,7 +1217,28 @@ export class PaymentsService {
       };
     }
 
+    // Exact reconciliation binding checks
+    if (statusResult.providerReference !== payment.providerReference) {
+      throw new BadRequestException(
+        `Provider reference mismatch in reconciliation: expected ${payment.providerReference}, received ${statusResult.providerReference}`,
+      );
+    }
+
+    if (statusResult.amount !== payment.amount) {
+      throw new BadRequestException(
+        `Amount mismatch in reconciliation: expected ${payment.amount}, received ${statusResult.amount}`,
+      );
+    }
+
+    if (statusResult.currency.toUpperCase() !== payment.currency.toUpperCase()) {
+      throw new BadRequestException(
+        `Currency mismatch in reconciliation: expected ${payment.currency}, received ${statusResult.currency}`,
+      );
+    }
+
     if (statusResult.status === PaymentStatus.SUCCEEDED) {
+      const reason =
+        dto?.reason || PaymentReconcileReason.AUTHORITATIVE_QUERY;
       const reconcileEventId =
         statusResult.externalEventId ||
         `reconcile_${payment.providerReference}_success`;
@@ -1067,7 +1252,7 @@ export class PaymentsService {
         sanitizedPayload: {
           reconciled: true,
           reconciledAt: new Date().toISOString(),
-          reason: dto?.reason || "authoritative_status_query",
+          reason,
         },
       });
 
@@ -1090,15 +1275,50 @@ export class PaymentsService {
   }
 
   /**
-   * Retrieves read-only payment information.
+   * Retrieves read-only payment information with authentication and ownership scoping.
    */
-  async getPayment(id: string): Promise<PaymentDto> {
+  async getPayment(id: string, user?: AuthUser): Promise<PaymentDto> {
     const payment = await prisma.payment.findUnique({
       where: { id },
+      include: { order: true },
     });
     if (!payment) {
       throw new NotFoundException(`Payment '${id}' not found`);
     }
+
+    if (user) {
+      const isStaff =
+        user.permissions?.includes("payment.read") ||
+        user.roles?.includes("admin") ||
+        user.roles?.includes("super_admin") ||
+        user.roles?.includes("finance") ||
+        user.roles?.includes("ops");
+
+      if (!isStaff && payment.order.userId !== user.id) {
+        throw new NotFoundException(`Payment '${id}' not found`);
+      }
+
+      let metadata = payment.metadata as Record<string, any> | null;
+      if (!isStaff && metadata) {
+        const { clientSecret, rawToken, internalHash, ...safeMetadata } =
+          metadata;
+        metadata = safeMetadata;
+      }
+
+      return {
+        id: payment.id,
+        orderId: payment.orderId,
+        provider: payment.provider,
+        providerReference: payment.providerReference,
+        status: payment.status,
+        amount: payment.amount,
+        currency: payment.currency,
+        metadata,
+        createdAt: payment.createdAt.toISOString(),
+        updatedAt: payment.updatedAt.toISOString(),
+      };
+    }
+
     return {
       id: payment.id,
       orderId: payment.orderId,

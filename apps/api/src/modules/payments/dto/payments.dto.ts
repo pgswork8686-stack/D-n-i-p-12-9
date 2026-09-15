@@ -35,9 +35,11 @@ export class CreatePaymentSessionDto {
   cancelUrl?: string;
 }
 
+import { PaymentReconcileReason } from "@nexus/contracts";
+
 export class ReconcilePaymentDto {
   @IsOptional()
-  @IsString()
-  reason?: string;
+  @IsEnum(PaymentReconcileReason)
+  reason?: PaymentReconcileReason;
 }
 

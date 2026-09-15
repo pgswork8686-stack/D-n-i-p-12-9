@@ -44,6 +44,34 @@ export class TestPaymentProvider implements PaymentProvider, PaymentProviderAdap
     }
   }
 
+  private readonly mockSessions = new Map<
+    string,
+    {
+      sessionId: string;
+      sessionUrl: string;
+      orderId: string;
+      paymentId: string;
+      amount: number;
+      currency: string;
+      status: PaymentStatus;
+    }
+  >();
+
+  setMockStatus(
+    providerReference: string,
+    data: { status: PaymentStatus; amount: number; currency: string },
+  ) {
+    this.mockSessions.set(providerReference, {
+      sessionId: providerReference,
+      sessionUrl: `/orders/mock?session_id=${providerReference}`,
+      orderId: "mock-order",
+      paymentId: "mock-payment",
+      amount: data.amount,
+      currency: data.currency.toUpperCase(),
+      status: data.status,
+    });
+  }
+
   async initiatePayment(
     order: Order,
     payment: Payment,
@@ -64,11 +92,36 @@ export class TestPaymentProvider implements PaymentProvider, PaymentProviderAdap
     this.checkProductionBlock();
     const { order, payment } = params;
     const sessionId = `test_session_${payment.id}`;
+    const sessionUrl = `/orders/${order.id}?session_id=${sessionId}`;
+    this.mockSessions.set(sessionId, {
+      sessionId,
+      sessionUrl,
+      orderId: order.id,
+      paymentId: payment.id,
+      amount: payment.amount,
+      currency: payment.currency.toUpperCase(),
+      status: PaymentStatus.SUCCEEDED,
+    });
     return {
       sessionId,
-      sessionUrl: `/orders/${order.id}?session_id=${sessionId}`,
+      sessionUrl,
       providerReference: sessionId,
     };
+  }
+
+  async getPaymentSession(
+    providerReference: string,
+  ): Promise<NormalizedPaymentSession | null> {
+    this.checkProductionBlock();
+    const mock = this.mockSessions.get(providerReference);
+    if (mock) {
+      return {
+        sessionId: mock.sessionId,
+        sessionUrl: mock.sessionUrl,
+        providerReference: mock.sessionId,
+      };
+    }
+    return null;
   }
 
   async verifyWebhook(
@@ -140,13 +193,17 @@ export class TestPaymentProvider implements PaymentProvider, PaymentProviderAdap
     providerReference: string,
   ): Promise<NormalizedPaymentStatus | null> {
     this.checkProductionBlock();
-    return {
-      providerReference,
-      status: PaymentStatus.SUCCEEDED,
-      amount: 0,
-      currency: "USD",
-      externalEventId: `reconcile_${providerReference}`,
-    };
+    const mock = this.mockSessions.get(providerReference);
+    if (mock) {
+      return {
+        providerReference: mock.sessionId,
+        status: mock.status,
+        amount: mock.amount,
+        currency: mock.currency,
+        externalEventId: `reconcile_${providerReference}`,
+      };
+    }
+    return null;
   }
 
   async verifyEvent(

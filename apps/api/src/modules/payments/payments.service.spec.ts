@@ -53,6 +53,8 @@ jest.mock("@nexus/database", () => {
 describe("PaymentsService", () => {
   let service: PaymentsService;
   let auditService: AuditService;
+  let testProvider: TestPaymentProvider;
+  let stripeProvider: StripePaymentProvider;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -78,6 +80,8 @@ describe("PaymentsService", () => {
 
     service = module.get<PaymentsService>(PaymentsService);
     auditService = module.get<AuditService>(AuditService);
+    testProvider = module.get<TestPaymentProvider>(TestPaymentProvider);
+    stripeProvider = module.get<StripePaymentProvider>(StripePaymentProvider);
   });
 
   describe("Fail-Closed & Webhook Signature Verification", () => {
@@ -591,11 +595,183 @@ describe("PaymentsService", () => {
       (prisma.order.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
       (prisma.outboxEvent.create as jest.Mock).mockResolvedValue({});
 
+      testProvider.setMockStatus("test_session_stuck", {
+        status: PaymentStatus.SUCCEEDED,
+        amount: 5000,
+        currency: "USD",
+      });
+
       const res = await service.reconcilePayment("pay-stuck");
 
       expect(res.success).toBe(true);
       expect(res.paymentStatus).toBe(PaymentStatus.SUCCEEDED);
       expect(res.orderStatus).toBe(OrderStatus.PAID);
+    });
+
+    it("rejects reconciliation if provider amount differs from payment amount", async () => {
+      const mockPayment = {
+        id: "pay-mismatch",
+        orderId: "order-1",
+        provider: "test",
+        providerReference: "test_session_mismatch",
+        amount: 5000,
+        currency: Currency.USD,
+        status: PaymentStatus.PENDING,
+        order: {
+          id: "order-1",
+          orderNumber: "ORD-001",
+          userId: "user-1",
+          status: OrderStatus.PENDING_PAYMENT,
+          totalAmount: 5000,
+          currency: Currency.USD,
+        },
+      };
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+
+      testProvider.setMockStatus("test_session_mismatch", {
+        status: PaymentStatus.SUCCEEDED,
+        amount: 9999, // Mismatch!
+        currency: "USD",
+      });
+
+      await expect(service.reconcilePayment("pay-mismatch")).rejects.toThrow(
+        "Amount mismatch in reconciliation",
+      );
+    });
+
+    it("rejects reconciliation if provider currency differs from payment currency", async () => {
+      const mockPayment = {
+        id: "pay-mismatch-curr",
+        orderId: "order-1",
+        provider: "test",
+        providerReference: "test_session_mismatch_curr",
+        amount: 5000,
+        currency: Currency.USD,
+        status: PaymentStatus.PENDING,
+        order: {
+          id: "order-1",
+          orderNumber: "ORD-001",
+          userId: "user-1",
+          status: OrderStatus.PENDING_PAYMENT,
+          totalAmount: 5000,
+          currency: Currency.USD,
+        },
+      };
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+
+      testProvider.setMockStatus("test_session_mismatch_curr", {
+        status: PaymentStatus.SUCCEEDED,
+        amount: 5000,
+        currency: "EUR", // Mismatch!
+      });
+
+      await expect(service.reconcilePayment("pay-mismatch-curr")).rejects.toThrow(
+        "Currency mismatch in reconciliation",
+      );
+    });
+  });
+
+  describe("Phase 9: Security & Invariant Hardening", () => {
+    it("rejects untrusted external redirect URLs in createPaymentSession", async () => {
+      const mockOrder = {
+        id: "ord-1",
+        userId: "user-1",
+        status: OrderStatus.PENDING_PAYMENT,
+        totalAmount: 5000,
+        currency: Currency.USD,
+        payments: [],
+      };
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+
+      await expect(
+        service.createPaymentSession("user-1", "ord-1", {
+          successUrl: "https://evil-hacker.com/steal-creds",
+        }),
+      ).rejects.toThrow("Untrusted redirect URL origin");
+    });
+
+    it("logs duplicate payment anomaly and skips outbox if order is already PAID", async () => {
+      const mockPayment = {
+        id: "pay-dup",
+        orderId: "ord-already-paid",
+        status: PaymentStatus.PENDING,
+        provider: "test",
+        amount: 5000,
+        currency: Currency.USD,
+        order: {
+          id: "ord-already-paid",
+          orderNumber: "ORD-999",
+          userId: "user-1",
+          status: OrderStatus.PAID, // Already PAID!
+          totalAmount: 5000,
+          currency: Currency.USD,
+        },
+      };
+
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+      (prisma.paymentEvent.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.paymentEvent.create as jest.Mock).mockResolvedValue({});
+      (prisma.payment.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      const res = await service.processAuthoritativePaymentSuccess({
+        provider: "test",
+        externalEventId: "evt-dup-1",
+        paymentId: "pay-dup",
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.paymentStatus).toBe(PaymentStatus.SUCCEEDED);
+      expect(res.orderStatus).toBe(OrderStatus.PAID);
+      // Ensure NO duplicate ORDER_PAID outbox event was created
+      expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+      // Ensure anomaly audit action was logged
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "DUPLICATE_PAYMENT_DETECTED",
+        }),
+      );
+    });
+
+    it("scopes getPayment to owner and strips sensitive metadata for non-staff", async () => {
+      const mockPayment = {
+        id: "pay-secret",
+        orderId: "ord-1",
+        provider: "stripe",
+        providerReference: "cs_123",
+        status: PaymentStatus.SUCCEEDED,
+        amount: 5000,
+        currency: Currency.USD,
+        metadata: {
+          clientSecret: "sk_super_secret",
+          safeNote: "Thank you for purchase",
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        order: {
+          userId: "user-owner",
+        },
+      };
+
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+
+      // Other user gets 404
+      const otherUser: any = { id: "user-intruder", roles: ["customer"], permissions: [] };
+      await expect(service.getPayment("pay-secret", otherUser)).rejects.toThrow(
+        NotFoundException,
+      );
+
+      // Owner gets stripped metadata
+      const ownerUser: any = { id: "user-owner", roles: ["customer"], permissions: [] };
+      const ownerRes = await service.getPayment("pay-secret", ownerUser);
+      expect(ownerRes.id).toBe("pay-secret");
+      expect(ownerRes.metadata?.clientSecret).toBeUndefined();
+      expect(ownerRes.metadata?.safeNote).toBe("Thank you for purchase");
+
+      // Staff gets full metadata
+      const staffUser: any = { id: "user-staff", roles: ["admin"], permissions: ["payment.read"] };
+      const staffRes = await service.getPayment("pay-secret", staffUser);
+      expect(staffRes.metadata?.clientSecret).toBe("sk_super_secret");
     });
   });
 });

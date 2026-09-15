@@ -293,16 +293,33 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
 
 ## Phase 9 — Production Payment Gateway Architecture
-- **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events (`checkout.session.completed`, `payment_intent.succeeded`, etc.).
+- **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events.
+- **Option 1 Event Model**: Only `checkout.session.completed` with `payment_status === "paid"` triggers `SUCCEEDED`. All `payment_intent.*` events are **strictly ignored** at the webhook layer. `checkout.session.async_payment_failed` → `FAILED`. `checkout.session.expired` → `CANCELLED`.
 - **Provider-Neutral Abstraction**: `PaymentProviderAdapter` interface and `PaymentProviderFactory` resolving gateway adapters dynamically.
-- **Strict Production Isolation**: Test payment provider is preserved for local/testing only and strictly blocked when `NODE_ENV === 'production'`.
-- **Authenticated Session Creation**: `POST /v1/orders/:orderId/payment-session` enforces user ownership, `PENDING_PAYMENT` order status, and immutable pricing/currency from database.
-- **Webhook Security**: `POST /v1/webhooks/payments/:provider` uses unparsed raw body HMAC-SHA256 signature verification (`stripe.webhooks.constructEvent`), timestamp tolerance check, and causes ZERO DB mutations on rejected signatures.
-- **Fail-Closed Binding Verification**: Validates expected amount, currency, orderId, and provider reference before mutating state.
-- **Atomic Success Transaction**: Single transaction executes: Check/Insert `PaymentEvent` (`@@unique([provider, externalEventId])`), transition Payment to `SUCCEEDED`, transition Order to `PAID`, insert `ORDER_PAID` Outbox event, and insert `AuditLog`. Rollback on any failure.
-- **Terminal State Safety**: `SUCCEEDED` is terminal and cannot revert to `FAILED` or `CANCELLED`.
-- **Secret Hygiene**: Zero credit card PAN, CVV, provider secrets, or auth headers stored. `raw_payload_hash` stored on `payment_events` for cryptographic non-repudiation.
-- **Active Reconciliation**: `reconcilePayment()` actively queries the upstream provider for stuck `PENDING` payments and invokes the exact same authoritative success processor.
+- **Strict Production Isolation (Fail-Closed Config)**:
+  - `STRIPE_MOCK_CLIENT=true` is **strictly prohibited** when `NODE_ENV=production`.
+  - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are **required** in production; placeholder or missing values cause startup failure.
+  - Test payment provider is preserved for local/testing only and strictly blocked when `NODE_ENV === 'production'`.
+- **Authenticated Session Creation**: `POST /v1/orders/:orderId/payment-session` enforces user ownership, `PENDING_PAYMENT` order status, and immutable pricing/currency from database. Validates redirect URLs and rejects untrusted external origins.
+- **Idempotent Session Reuse**: If an active session already exists for the same provider, the provider's `getPaymentSession()` is called to retrieve the existing `sessionUrl` without creating duplicates.
+- **Provider Switch Prevention**: Once a payment has an active `providerReference` on one provider, switching to another provider is rejected with 409 Conflict.
+- **Webhook Security**:
+  - `POST /v1/webhooks/payments/:provider` immediately rejects non-Buffer or empty `rawBody` (length === 0) with 400 `BadRequestException("Missing or empty raw webhook payload")`.
+  - HMAC-SHA256 signature verification via `stripe.webhooks.constructEvent` with configurable timestamp tolerance (default 300s, max 900s).
+  - Causes ZERO DB mutations on rejected signatures.
+- **Exact Provider Reference Matching**: Webhook `session.id` must exactly match `payment.providerReference` — zero `cs_* <-> pi_*` cross-matching exceptions.
+- **Fail-Closed Binding Verification**: Validates expected amount, currency, orderId, and providerReference before mutating state.
+- **Atomic Success Transaction**: Single transaction executes: Check/Insert `PaymentEvent` (`@@unique([provider, externalEventId])`), CAS transition Payment to `SUCCEEDED`, CAS transition Order to `PAID`, insert `ORDER_PAID` Outbox event (protected by `unique_order_paid_outbox` partial unique index), and insert `AuditLog`. Rollback on any failure.
+- **Duplicate Payment Detection**: If webhook arrives for an order already in `PAID` status, the duplicate is detected, a `DUPLICATE_PAYMENT_DETECTED` audit anomaly is logged, and no second `ORDER_PAID` outbox event is emitted.
+- **Terminal State Safety**: `SUCCEEDED`, `FAILED`, and `CANCELLED` are terminal states and are strictly preserved via CAS.
+- **Concurrent Race Idempotency**: Concurrent `payment.failed` and `payment.cancelled` webhooks are handled idempotently via Prisma P2002 catch, returning the current DB state without error.
+- **Secret Hygiene**: Zero credit card PAN, CVV, provider secrets, or auth headers stored. Error messages are generic (`"Upstream payment provider failure"`) without leaking Stripe internal errors. `raw_payload_hash` stored on `payment_events` for cryptographic non-repudiation.
+- **RBAC**:
+  - `GET /v1/payments/:id` requires authentication; non-staff users can only access their own payments (returns 404 for cross-user); sensitive metadata fields stripped for non-staff.
+  - `POST /v1/payments/:id/reconcile` requires `payment.manage` permission.
+  - Permissions `payment.read` and `payment.manage` seeded for `finance`, `ops`, `admin`, `super_admin` roles.
+- **Active Reconciliation**: `reconcilePayment()` enforces exact `providerReference`, `amount`, and `currency` binding checks before processing. Supports typed `PaymentReconcileReason` enum (`scheduled_sweep`, `ops_manual`, `abandoned_check`, `authoritative_query`).
+- **ORDER_PAID Outbox Constraint**: PostgreSQL partial unique index `unique_order_paid_outbox` on `outbox_events(aggregate_id) WHERE aggregate_type = 'Order' AND event_type = 'ORDER_PAID'` guarantees exactly-once outbox delivery at the database level.
 - **Read-Only Frontend Checks**: `GET /v1/payments/:id` and order lookups are strictly read-only and never mark orders as paid.
 
 ## Security baseline

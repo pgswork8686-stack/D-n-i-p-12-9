@@ -64,6 +64,10 @@ export interface PaymentProviderAdapter {
     cancelUrl?: string;
   }): Promise<NormalizedPaymentSession>;
 
+  getPaymentSession?(
+    providerReference: string,
+  ): Promise<NormalizedPaymentSession | null>;
+
   verifyWebhook(
     rawBody: Buffer,
     headers: Record<string, string | string[] | undefined>,
@@ -73,3 +77,4 @@ export interface PaymentProviderAdapter {
     providerReference: string,
   ): Promise<NormalizedPaymentStatus | null>;
 }
+

@@ -5,7 +5,12 @@ import {
   Param,
   Body,
   Headers,
+  UseGuards,
+  Req,
 } from "@nestjs/common";
+import { AuthGuard } from "../auth/auth.guard";
+import { PermissionsGuard } from "../auth/permissions.guard";
+import { RequirePermissions } from "../auth/require-permissions.decorator";
 import { PaymentsService } from "./payments.service";
 import {
   TestPaymentCallbackDto,
@@ -22,8 +27,12 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Get(":id")
-  async getPayment(@Param("id") id: string): Promise<PaymentDto> {
-    return this.paymentsService.getPayment(id);
+  @UseGuards(AuthGuard)
+  async getPayment(
+    @Param("id") id: string,
+    @Req() req: any,
+  ): Promise<PaymentDto> {
+    return this.paymentsService.getPayment(id, req.user);
   }
 
   @Post("test-callback")
@@ -35,6 +44,8 @@ export class PaymentsController {
   }
 
   @Post(":id/reconcile")
+  @UseGuards(AuthGuard, PermissionsGuard)
+  @RequirePermissions("payment.manage")
   async reconcilePayment(
     @Param("id") id: string,
     @Body() dto?: ReconcilePaymentDto,

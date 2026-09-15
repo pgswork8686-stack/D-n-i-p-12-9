@@ -1172,10 +1172,11 @@ async function runAcceptance() {
     // Gate 24: AggregateId / Payload Mismatch Fail-Closed
     // ----------------------------------------------------
     console.log("[Gate 24] Verifying payload.orderId mismatch with aggregateId fails closed...");
+    const mismatchOrderId = `ord-mismatch-${Date.now()}`;
     const mismatchOutbox = await prisma.outboxEvent.create({
       data: {
         aggregateType: "Order",
-        aggregateId: order1.id,
+        aggregateId: mismatchOrderId,
         eventType: "ORDER_PAID",
         payload: { orderId: "tampered-order-id-xyz" },
         status: "PENDING",

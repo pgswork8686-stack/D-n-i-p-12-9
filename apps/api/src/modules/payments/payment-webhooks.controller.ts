@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  BadRequestException,
   Logger,
 } from "@nestjs/common";
 import { Request } from "express";
@@ -25,15 +26,16 @@ export class PaymentWebhooksController {
     @Req() req: Request & { rawBody?: Buffer },
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<PaymentWebhookResponse> {
-    const rawBody: Buffer =
-      req.rawBody ||
-      (Buffer.isBuffer(req.body)
-        ? req.body
-        : Buffer.from(
-            typeof req.body === "string"
-              ? req.body
-              : JSON.stringify(req.body || {}),
-          ));
+    const rawBody: Buffer | undefined =
+      req.rawBody && Buffer.isBuffer(req.rawBody)
+        ? req.rawBody
+        : Buffer.isBuffer(req.body)
+          ? req.body
+          : undefined;
+
+    if (!rawBody || !Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+      throw new BadRequestException("Missing or empty raw webhook payload");
+    }
 
     return this.paymentsService.handleWebhook(provider, rawBody, headers);
   }
