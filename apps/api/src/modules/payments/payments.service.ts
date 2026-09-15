@@ -49,32 +49,43 @@ export class PaymentsService {
     private readonly providerFactory: PaymentProviderFactory,
   ) {}
 
-  private isUniqueConstraintError(err: any): boolean {
+  private isPaymentEventUniqueError(err: any): boolean {
+    const target = Array.isArray(err?.meta?.target)
+      ? err.meta.target.join(",")
+      : String(err?.meta?.target || "");
     return (
-      err?.code === "P2002" ||
       err?.message?.includes("payment_events_provider_external_event_id_key") ||
       err?.message?.includes("external_event_id") ||
+      (err?.code === "P2002" &&
+        target.includes("provider") &&
+        target.includes("external"))
+    );
+  }
+
+  private isPendingPaymentUniqueError(err: any): boolean {
+    const target = Array.isArray(err?.meta?.target)
+      ? err.meta.target.join(",")
+      : String(err?.meta?.target || "");
+    return (
       err?.message?.includes("unique_pending_payment_per_order") ||
-      err?.message?.includes("unique_order_paid_outbox")
+      (err?.code === "P2002" && target.includes("order"))
     );
   }
 
   private validateRedirectUrl(urlStr?: string): void {
     if (!urlStr) return;
-    if (urlStr.startsWith("/") && !urlStr.startsWith("//")) {
-      return;
-    }
+    if (urlStr.startsWith("/") && !urlStr.startsWith("//")) return;
 
     try {
       const parsed = new URL(urlStr);
       const isProduction = process.env.NODE_ENV === "production";
       const allowedOrigins: string[] = [];
-
       const configuredOrigins = [
         process.env.PAYMENT_RETURN_BASE_URL,
         process.env.FRONTEND_URL,
         process.env.PORTAL_URL,
       ];
+
       for (const configured of configuredOrigins) {
         if (configured?.trim()) {
           allowedOrigins.push(new URL(configured.trim()).origin);
@@ -84,9 +95,7 @@ export class PaymentsService {
       if (process.env.ALLOWED_REDIRECT_ORIGINS) {
         for (const origin of process.env.ALLOWED_REDIRECT_ORIGINS.split(",")) {
           const trimmed = origin.trim();
-          if (trimmed) {
-            allowedOrigins.push(new URL(trimmed).origin);
-          }
+          if (trimmed) allowedOrigins.push(new URL(trimmed).origin);
         }
       }
 
@@ -124,10 +133,7 @@ export class PaymentsService {
     }
   }
 
-  /**
-   * Phase 4 local/test callback flow. Kept for regression compatibility only.
-   * The TestPaymentProvider is hard-blocked in production.
-   */
+  /** Phase 4 local/test callback flow; hard-blocked in production. */
   async processTestCallback(
     dto: TestPaymentCallbackDto,
     headers?: Record<string, string>,
@@ -141,17 +147,10 @@ export class PaymentsService {
           externalEventId: dto.externalEventId,
         },
       },
-      include: {
-        payment: {
-          include: { order: true },
-        },
-      },
+      include: { payment: { include: { order: true } } },
     });
 
     if (existingEvent) {
-      this.logger.log(
-        `Idempotent payment event already processed: ${dto.externalEventId}`,
-      );
       return {
         success: true,
         duplicate: true,
@@ -165,7 +164,6 @@ export class PaymentsService {
       where: { id: dto.paymentId },
       include: { order: true },
     });
-
     if (!payment) {
       throw new NotFoundException(`Payment '${dto.paymentId}' not found`);
     }
@@ -187,24 +185,14 @@ export class PaymentsService {
             where: { id: payment.id },
             include: { order: true },
           });
-
           if (!txPayment) {
             throw new NotFoundException(
               `Payment '${payment.id}' not found in transaction`,
             );
           }
 
-          if (txPayment.status === PaymentStatus.SUCCEEDED) {
-            return {
-              success: true,
-              duplicate: false,
-              paymentStatus: txPayment.status,
-              orderStatus: txPayment.order.status,
-              message: "Payment already in terminal state SUCCEEDED",
-            };
-          }
-
           if (
+            txPayment.status === PaymentStatus.SUCCEEDED ||
             txPayment.status === PaymentStatus.FAILED ||
             txPayment.status === PaymentStatus.CANCELLED
           ) {
@@ -219,24 +207,20 @@ export class PaymentsService {
 
           if (dto.eventType === "payment.succeeded") {
             const payCas = await tx.payment.updateMany({
-              where: {
-                id: txPayment.id,
-                status: PaymentStatus.PENDING,
-              },
+              where: { id: txPayment.id, status: PaymentStatus.PENDING },
               data: { status: PaymentStatus.SUCCEEDED },
             });
-
             if (payCas.count === 0) {
-              const currentPayment = await tx.payment.findUniqueOrThrow({
+              const current = await tx.payment.findUniqueOrThrow({
                 where: { id: txPayment.id },
                 include: { order: true },
               });
               return {
                 success: true,
                 duplicate: false,
-                paymentStatus: currentPayment.status,
-                orderStatus: currentPayment.order.status,
-                message: `Payment already in state ${currentPayment.status}`,
+                paymentStatus: current.status,
+                orderStatus: current.order.status,
+                message: `Payment already in state ${current.status}`,
               };
             }
 
@@ -247,7 +231,6 @@ export class PaymentsService {
               },
               data: { status: OrderStatus.PAID },
             });
-
             if (orderCas.count === 0) {
               throw new ConflictException(
                 "Order is not in pending payment state; cannot transition to PAID",
@@ -295,27 +278,22 @@ export class PaymentsService {
 
           if (dto.eventType === "payment.failed") {
             const payCas = await tx.payment.updateMany({
-              where: {
-                id: txPayment.id,
-                status: PaymentStatus.PENDING,
-              },
+              where: { id: txPayment.id, status: PaymentStatus.PENDING },
               data: { status: PaymentStatus.FAILED },
             });
-
             if (payCas.count === 0) {
-              const currentPayment = await tx.payment.findUniqueOrThrow({
+              const current = await tx.payment.findUniqueOrThrow({
                 where: { id: txPayment.id },
                 include: { order: true },
               });
               return {
                 success: true,
                 duplicate: false,
-                paymentStatus: currentPayment.status,
-                orderStatus: currentPayment.order.status,
-                message: `Payment already in state ${currentPayment.status}`,
+                paymentStatus: current.status,
+                orderStatus: current.order.status,
+                message: `Payment already in state ${current.status}`,
               };
             }
-
             await this.auditService.logActionWithClient(tx, {
               action: "PAYMENT_FAILED",
               entity: "Payment",
@@ -326,7 +304,6 @@ export class PaymentsService {
                 externalEventId: dto.externalEventId,
               },
             });
-
             return {
               success: true,
               duplicate: false,
@@ -338,28 +315,24 @@ export class PaymentsService {
 
           if (dto.eventType === "payment.cancelled") {
             const payCas = await tx.payment.updateMany({
-              where: {
-                id: txPayment.id,
-                status: PaymentStatus.PENDING,
-              },
+              where: { id: txPayment.id, status: PaymentStatus.PENDING },
               data: { status: PaymentStatus.CANCELLED },
             });
-
             if (payCas.count === 0) {
-              const currentPayment = await tx.payment.findUniqueOrThrow({
+              const current = await tx.payment.findUniqueOrThrow({
                 where: { id: txPayment.id },
                 include: { order: true },
               });
               return {
                 success: true,
                 duplicate: false,
-                paymentStatus: currentPayment.status,
-                orderStatus: currentPayment.order.status,
-                message: `Payment already in state ${currentPayment.status}`,
+                paymentStatus: current.status,
+                orderStatus: current.order.status,
+                message: `Payment already in state ${current.status}`,
               };
             }
 
-            // Legacy Phase 4 behavior remains isolated to the test provider.
+            // Legacy Phase 4 test-provider behavior remains isolated here.
             await tx.order.updateMany({
               where: {
                 id: txPayment.orderId,
@@ -367,11 +340,9 @@ export class PaymentsService {
               },
               data: { status: OrderStatus.CANCELLED },
             });
-
             const currentOrder = await tx.order.findUniqueOrThrow({
               where: { id: txPayment.orderId },
             });
-
             await this.auditService.logActionWithClient(tx, {
               action: "PAYMENT_CANCELLED",
               entity: "Payment",
@@ -382,7 +353,6 @@ export class PaymentsService {
                 externalEventId: dto.externalEventId,
               },
             });
-
             return {
               success: true,
               duplicate: false,
@@ -403,16 +373,16 @@ export class PaymentsService {
         { maxWait: 10000, timeout: 20000 },
       );
     } catch (err: any) {
-      if (this.isUniqueConstraintError(err)) {
-        const reloadedPayment = await prisma.payment.findUnique({
+      if (this.isPaymentEventUniqueError(err)) {
+        const reloaded = await prisma.payment.findUnique({
           where: { id: payment.id },
           include: { order: true },
         });
         return {
           success: true,
           duplicate: true,
-          paymentStatus: reloadedPayment?.status || payment.status,
-          orderStatus: reloadedPayment?.order?.status || payment.order.status,
+          paymentStatus: reloaded?.status || payment.status,
+          orderStatus: reloaded?.order?.status || payment.order.status,
           message: "Concurrent duplicate event handled idempotently",
         };
       }
@@ -420,10 +390,6 @@ export class PaymentsService {
     }
   }
 
-  /**
-   * Creates/reuses one provider session for the one active PENDING payment attempt.
-   * FAILED/CANCELLED attempts are immutable history; retry creates a new Payment row.
-   */
   async createPaymentSession(
     userId: string,
     orderId: string,
@@ -436,10 +402,7 @@ export class PaymentsService {
       where: { id: orderId },
       include: { payments: true },
     });
-
-    if (!order) {
-      throw new NotFoundException(`Order '${orderId}' not found`);
-    }
+    if (!order) throw new NotFoundException(`Order '${orderId}' not found`);
     if (order.userId !== userId) {
       throw new ForbiddenException("You do not have access to this order");
     }
@@ -468,7 +431,7 @@ export class PaymentsService {
           },
         });
       } catch (err: any) {
-        if (!this.isUniqueConstraintError(err)) throw err;
+        if (!this.isPendingPaymentUniqueError(err)) throw err;
         payment =
           (await prisma.payment.findFirst({
             where: {
@@ -597,21 +560,6 @@ export class PaymentsService {
     });
   }
 
-  /**
-   * Compatibility entry point used by tests/internal callers. It no longer accepts
-   * partial evidence: all provider binding fields are mandatory and revalidated
-   * inside the final locked transaction.
-   */
-  async processAuthoritativePaymentSuccess(params: Omit<
-    AuthoritativePaymentEvidence,
-    "eventType"
-  >): Promise<PaymentWebhookResponse> {
-    return this.processAuthoritativePaymentEvent({
-      ...params,
-      eventType: "payment.succeeded",
-    });
-  }
-
   private validateEvidenceShape(evidence: AuthoritativePaymentEvidence): void {
     if (
       !evidence.provider?.trim() ||
@@ -630,6 +578,10 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * Single internal mutation authority for verified provider events and
+   * authoritative reconciliation results. This method is deliberately private.
+   */
   private async processAuthoritativePaymentEvent(
     evidence: AuthoritativePaymentEvidence,
   ): Promise<PaymentWebhookResponse> {
@@ -639,8 +591,7 @@ export class PaymentsService {
     try {
       return await prisma.$transaction(
         async (tx) => {
-          // Deterministic lock order for every authoritative transition:
-          // Payment first, then Order.
+          // Deterministic lock order: Payment -> Order.
           await tx.$queryRawUnsafe(
             'SELECT "id" FROM "payments" WHERE "id" = $1 FOR UPDATE',
             evidence.paymentId,
@@ -654,14 +605,12 @@ export class PaymentsService {
             where: { id: evidence.paymentId },
             include: { order: true },
           });
-
           if (!txPayment) {
             throw new NotFoundException(
               `Payment '${evidence.paymentId}' not found`,
             );
           }
 
-          // Revalidate the complete provider evidence at the linearization point.
           if (txPayment.provider.toLowerCase() !== provider) {
             throw new BadRequestException("Payment provider mismatch");
           }
@@ -701,9 +650,6 @@ export class PaymentsService {
             };
           }
 
-          // Persist valid provider evidence once, even if the business state is
-          // already terminal. This gives an immutable forensic trail without
-          // allowing a terminal Payment attempt to resurrect.
           await tx.paymentEvent.create({
             data: {
               paymentId: txPayment.id,
@@ -727,10 +673,7 @@ export class PaymentsService {
 
           if (evidence.eventType === "payment.failed") {
             const payCas = await tx.payment.updateMany({
-              where: {
-                id: txPayment.id,
-                status: PaymentStatus.PENDING,
-              },
+              where: { id: txPayment.id, status: PaymentStatus.PENDING },
               data: { status: PaymentStatus.FAILED },
             });
             if (payCas.count === 0) {
@@ -758,7 +701,6 @@ export class PaymentsService {
                 provider,
               },
             });
-
             return {
               success: true,
               duplicate: false,
@@ -770,10 +712,7 @@ export class PaymentsService {
 
           if (evidence.eventType === "payment.cancelled") {
             const payCas = await tx.payment.updateMany({
-              where: {
-                id: txPayment.id,
-                status: PaymentStatus.PENDING,
-              },
+              where: { id: txPayment.id, status: PaymentStatus.PENDING },
               data: { status: PaymentStatus.CANCELLED },
             });
             if (payCas.count === 0) {
@@ -790,8 +729,8 @@ export class PaymentsService {
               };
             }
 
-            // Provider-session expiry cancels only this attempt. The Order stays
-            // PENDING_PAYMENT so the customer can create a fresh Payment attempt.
+            // Provider-session expiry cancels only the attempt. The Order stays
+            // PENDING_PAYMENT so a new immutable Payment attempt can be created.
             await this.auditService.logActionWithClient(tx, {
               action: "PAYMENT_CANCELLED",
               entity: "Payment",
@@ -803,7 +742,6 @@ export class PaymentsService {
                 provider,
               },
             });
-
             return {
               success: true,
               duplicate: false,
@@ -814,12 +752,8 @@ export class PaymentsService {
             };
           }
 
-          // payment.succeeded — PENDING is the ONLY source state.
           const payCas = await tx.payment.updateMany({
-            where: {
-              id: txPayment.id,
-              status: PaymentStatus.PENDING,
-            },
+            where: { id: txPayment.id, status: PaymentStatus.PENDING },
             data: { status: PaymentStatus.SUCCEEDED },
           });
           if (payCas.count === 0) {
@@ -874,7 +808,6 @@ export class PaymentsService {
             },
             data: { status: OrderStatus.PAID },
           });
-
           if (orderCas.count === 0) {
             const currentOrder = await tx.order.findUniqueOrThrow({
               where: { id: txPayment.orderId },
@@ -948,17 +881,16 @@ export class PaymentsService {
         { maxWait: 10000, timeout: 20000 },
       );
     } catch (err: any) {
-      if (this.isUniqueConstraintError(err)) {
-        const reloadedPayment = await prisma.payment.findUnique({
+      if (this.isPaymentEventUniqueError(err)) {
+        const reloaded = await prisma.payment.findUnique({
           where: { id: evidence.paymentId },
           include: { order: true },
         });
         return {
           success: true,
           duplicate: true,
-          paymentStatus: reloadedPayment?.status || PaymentStatus.PENDING,
-          orderStatus:
-            reloadedPayment?.order?.status || OrderStatus.PENDING_PAYMENT,
+          paymentStatus: reloaded?.status || PaymentStatus.PENDING,
+          orderStatus: reloaded?.order?.status || OrderStatus.PENDING_PAYMENT,
           message: "Concurrent duplicate event handled idempotently",
         };
       }
@@ -974,7 +906,6 @@ export class PaymentsService {
       where: { id: paymentId },
       include: { order: true },
     });
-
     if (!payment) {
       throw new NotFoundException(`Payment '${paymentId}' not found`);
     }
@@ -1092,7 +1023,6 @@ export class PaymentsService {
         user.roles?.includes("super_admin") ||
         user.roles?.includes("finance") ||
         user.roles?.includes("ops");
-
       if (!isStaff && payment.order.userId !== user.id) {
         throw new NotFoundException(`Payment '${id}' not found`);
       }
