@@ -22,6 +22,14 @@ export interface StripeConfig {
   webhookSecret?: string;
   webhookToleranceSeconds: number;
   returnBaseUrl: string;
+  /**
+   * Authoritative money-mode binding. Production must only ever accept
+   * `livemode: true` provider evidence (real Stripe events/sessions); any
+   * other environment expects `livemode: false`. Mock mode is exempt since
+   * it never touches the real Stripe network and is itself forbidden in
+   * production by the isMock/production checks below.
+   */
+  expectedLivemode: boolean;
 }
 
 export interface MockStripeSession {
@@ -105,6 +113,11 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
           "STRIPE_SECRET_KEY is required and must not be a placeholder in production",
         );
       }
+      if (!secretKey.startsWith("sk_live_")) {
+        throw new Error(
+          "STRIPE_SECRET_KEY must be a live Stripe secret key (sk_live_) in production; test-mode keys are not permitted to process real money",
+        );
+      }
       if (!webhookSecret || webhookSecret.startsWith("whsec_placeholder")) {
         throw new Error(
           "STRIPE_WEBHOOK_SECRET is required and must not be a placeholder in production",
@@ -117,6 +130,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         webhookSecret,
         webhookToleranceSeconds: tolerance,
         returnBaseUrl,
+        expectedLivemode: true,
       };
     }
 
@@ -130,6 +144,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       webhookSecret: webhookSecret || "whsec_dummy_key",
       webhookToleranceSeconds: tolerance,
       returnBaseUrl,
+      expectedLivemode: false,
     };
   }
 
@@ -254,6 +269,13 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         },
       );
 
+      if (session.livemode !== config.expectedLivemode) {
+        this.logger.error(
+          `Stripe Checkout Session livemode mismatch for order ${order.id}: expected livemode=${config.expectedLivemode}, received livemode=${session.livemode}`,
+        );
+        throw new Error("Stripe Checkout Session environment mode does not match configured payment mode");
+      }
+
       if (!session.url) {
         throw new Error("Stripe Checkout Session did not return a session URL");
       }
@@ -265,7 +287,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       };
     } catch (err: any) {
       this.logger.error(
-        `Failed to create Stripe Checkout Session for order ${order.id}: ${err.message}`,
+        `Failed to create Stripe Checkout Session for order ${order.id}: ${err.message}${err.code ? ` [code=${err.code}]` : ""}${err.type ? ` [type=${err.type}]` : ""}`,
       );
       throw new BadGatewayException("Upstream payment provider failure");
     }
@@ -290,6 +312,12 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     try {
       const session =
         await this.stripeClient.checkout.sessions.retrieve(providerReference);
+      if (session.livemode !== config.expectedLivemode) {
+        this.logger.warn(
+          `Stripe session livemode mismatch on retrieval for ${providerReference}: expected livemode=${config.expectedLivemode}, received livemode=${session.livemode}`,
+        );
+        return null;
+      }
       if (!session.url) return null;
       return {
         sessionId: session.id,
@@ -298,7 +326,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       };
     } catch (err: any) {
       this.logger.error(
-        `Failed to retrieve Stripe session ${providerReference}: ${err.message}`,
+        `Failed to retrieve Stripe session ${providerReference}: ${err.message}${err.code ? ` [code=${err.code}]` : ""}${err.type ? ` [type=${err.type}]` : ""}`,
       );
       return null;
     }
@@ -337,6 +365,15 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         `Stripe webhook signature verification failed: ${err.message}`,
       );
       throw new BadRequestException("Invalid webhook signature");
+    }
+
+    if (!config.isMock && event.livemode !== config.expectedLivemode) {
+      this.logger.warn(
+        `Stripe webhook livemode mismatch (rejected before business processing): expected livemode=${config.expectedLivemode}, received livemode=${event.livemode}, eventId=${event.id}`,
+      );
+      throw new BadRequestException(
+        "Webhook event environment does not match configured payment mode",
+      );
     }
 
     const rawPayloadHash = crypto
@@ -447,6 +484,14 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     try {
       const session =
         await this.stripeClient.checkout.sessions.retrieve(providerReference);
+
+      if (session.livemode !== config.expectedLivemode) {
+        this.logger.warn(
+          `Stripe session livemode mismatch during reconciliation for ${providerReference}: expected livemode=${config.expectedLivemode}, received livemode=${session.livemode}`,
+        );
+        return null;
+      }
+
       let status: PaymentStatus = PaymentStatus.PENDING;
       if (session.payment_status === "paid") {
         status = PaymentStatus.SUCCEEDED;
@@ -463,7 +508,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       };
     } catch (err: any) {
       this.logger.error(
-        `Failed to query Stripe status for reference ${providerReference}: ${err.message}`,
+        `Failed to query Stripe status for reference ${providerReference}: ${err.message}${err.code ? ` [code=${err.code}]` : ""}${err.type ? ` [type=${err.type}]` : ""}`,
       );
       return null;
     }

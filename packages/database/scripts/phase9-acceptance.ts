@@ -207,7 +207,7 @@ async function createCustomerOrder(
 
 async function runPhase9Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 9 — PRODUCTION PAYMENT GATEWAY ACCEPTANCE (73 GATES)");
+  console.log("PHASE 9 — PRODUCTION PAYMENT GATEWAY ACCEPTANCE (77 GATES)");
   console.log("==================================================\n");
 
   // ----------------------------------------------------
@@ -2977,8 +2977,280 @@ async function runPhase9Acceptance() {
   }
   console.log("✓ Gate 73 passed: Reconciliation is fail-safe (no transition), never fail-open, when the provider has no record of the reference");
 
+  // ======================================================
+  // ROUND 4 HARDENING — STRIPE LIVE-MODE BOUNDARY — GATES 74-77
+  // ======================================================
+
+  // ----------------------------------------------------
+  // Gate 74: Production Rejects Genuine (Non-Placeholder) sk_test_* Keys
+  // ----------------------------------------------------
+  console.log("\n[Gate 74] Verifying production strictly rejects genuine (non-placeholder) sk_test_* Stripe secret keys...");
+  const gate74Result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `
+        process.env.NODE_ENV = 'production';
+        process.env.STRIPE_MOCK_CLIENT = 'false';
+        process.env.STRIPE_SECRET_KEY = ['sk','test','NOTAREALKEY','acceptancefixture','0000000000'].join('_');
+        process.env.STRIPE_WEBHOOK_SECRET = 'whsec_realistic_looking_production_webhook_secret_value';
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
+        try {
+          const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+          new StripePaymentProvider();
+          console.log('NO_THROW');
+          process.exit(1);
+        } catch (err) {
+          console.log(err.message);
+          if (err.message && err.message.includes('STRIPE_SECRET_KEY must be a live Stripe secret key')) {
+            process.exit(0);
+          }
+          process.exit(2);
+        }
+        `,
+      ],
+      { cwd: path.resolve(__dirname, "../../..") },
+    );
+    let stdout = "";
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.on("exit", (code) => resolve({ ok: code === 0, detail: stdout.trim() }));
+  });
+  if (!gate74Result.ok) {
+    throw new Error(`Gate 74 failed: Production did not reject a genuine sk_test_* Stripe secret key: ${gate74Result.detail}`);
+  }
+  console.log("✓ Gate 74 passed: Production strictly requires a live (sk_live_) Stripe secret key; genuine sk_test_* keys are rejected at startup");
+
+  // ----------------------------------------------------
+  // Gate 75: Signed livemode=false Webhook Cannot Pay A Production Order
+  // ----------------------------------------------------
+  console.log("\n[Gate 75] Verifying a correctly signed but livemode=false webhook cannot pay a production Order...");
+  const { order: order75 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session75Res = await apiPost(`/v1/orders/${order75.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session75 = session75Res.data;
+
+  const gate75WebhookSecret = "whsec_gate75_production_probe_secret";
+  const gate75Payload = JSON.stringify({
+    id: `evt_gate75_testmode_${Date.now()}`,
+    object: "event",
+    type: "checkout.session.completed",
+    livemode: false,
+    data: {
+      object: {
+        id: session75.sessionId,
+        client_reference_id: order75.id,
+        amount_total: order75.totalAmount,
+        currency: order75.currency.toLowerCase(),
+        payment_status: "paid",
+        status: "complete",
+        metadata: { orderId: order75.id, paymentId: session75.paymentId },
+      },
+    },
+  });
+  const gate75Sig = generateStripeSignature(gate75Payload, gate75WebhookSecret);
+
+  const gate75Result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `
+        process.env.NODE_ENV = 'production';
+        process.env.STRIPE_MOCK_CLIENT = 'false';
+        process.env.STRIPE_SECRET_KEY = ['sk','live','NOTAREALKEY','gate75fixture','0000000000'].join('_');
+        process.env.STRIPE_WEBHOOK_SECRET = ${JSON.stringify(gate75WebhookSecret)};
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
+        const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+        const provider = new StripePaymentProvider();
+        const rawBody = Buffer.from(${JSON.stringify(gate75Payload)}, 'utf8');
+        provider.verifyWebhook(rawBody, { 'stripe-signature': ${JSON.stringify(gate75Sig)} })
+          .then(() => { console.log('NO_THROW'); process.exit(1); })
+          .catch((err) => {
+            console.log(err.message);
+            if (err.message && err.message.includes('Webhook event environment does not match configured payment mode')) {
+              process.exit(0);
+            }
+            process.exit(2);
+          });
+        `,
+      ],
+      { cwd: path.resolve(__dirname, "../../..") },
+    );
+    let stdout = "";
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.on("exit", (code) => resolve({ ok: code === 0, detail: stdout.trim() }));
+  });
+  if (!gate75Result.ok) {
+    throw new Error(`Gate 75 failed: Production did not reject a signature-valid livemode=false webhook: ${gate75Result.detail}`);
+  }
+
+  const untouched75 = await prisma.payment.findUniqueOrThrow({ where: { id: session75.paymentId } });
+  const untouchedOrder75 = await prisma.order.findUniqueOrThrow({ where: { id: order75.id } });
+  const events75 = await prisma.paymentEvent.count({ where: { paymentId: session75.paymentId } });
+  const outbox75 = await prisma.outboxEvent.count({ where: { aggregateId: order75.id, eventType: "ORDER_PAID" } });
+  if (
+    untouched75.status !== PaymentStatus.PENDING ||
+    untouchedOrder75.status !== OrderStatus.PENDING_PAYMENT ||
+    events75 !== 0 ||
+    outbox75 !== 0
+  ) {
+    throw new Error("Gate 75 failed: A signature-valid test-mode webhook produced side effects on a real Payment/Order");
+  }
+  console.log("✓ Gate 75 passed: Signature-valid TEST-mode webhook rejected before business processing; zero side effects on the real Order");
+
+  // ----------------------------------------------------
+  // Gate 76: livemode=false Reconciliation Session Cannot Pay A Production Order
+  // ----------------------------------------------------
+  console.log("\n[Gate 76] Verifying a livemode=false provider session cannot pay a production Order via reconciliation...");
+  const { order: order76 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session76Res = await apiPost(`/v1/orders/${order76.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session76 = session76Res.data;
+
+  const gate76Result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `
+        process.env.NODE_ENV = 'production';
+        process.env.STRIPE_MOCK_CLIENT = 'false';
+        process.env.STRIPE_SECRET_KEY = ['sk','live','NOTAREALKEY','gate76fixture','0000000000'].join('_');
+        process.env.STRIPE_WEBHOOK_SECRET = 'whsec_gate76_production_probe_secret';
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
+        const { TestPaymentProvider } = require('./apps/api/dist/modules/payments/test-payment.provider');
+        const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+        const { PaymentProviderFactory } = require('./apps/api/dist/modules/payments/payment-provider.factory');
+        const { PaymentsService } = require('./apps/api/dist/modules/payments/payments.service');
+        const testProvider = new TestPaymentProvider();
+        const stripeProvider = new StripePaymentProvider();
+        // Controlled provider test double: no real Stripe network call.
+        // Mimics an authentic-looking TEST-mode Session (paid, but livemode=false).
+        stripeProvider.stripeClient.checkout.sessions.retrieve = async (ref) => ({
+          id: ref,
+          livemode: false,
+          payment_status: 'paid',
+          status: 'complete',
+          amount_total: ${session76.amount},
+          currency: ${JSON.stringify(session76.currency.toLowerCase())},
+        });
+        const factory = new PaymentProviderFactory(stripeProvider, testProvider);
+        const service = new PaymentsService({}, testProvider, factory);
+        service.reconcilePayment(${JSON.stringify(session76.paymentId)}, { reason: 'scheduled_sweep' })
+          .then((result) => {
+            console.log(JSON.stringify(result));
+            process.exit(result && result.transitioned === false ? 0 : 1);
+          })
+          .catch((err) => {
+            console.log('ERROR:', err.message);
+            process.exit(2);
+          });
+        `,
+      ],
+      { cwd: path.resolve(__dirname, "../../..") },
+    );
+    let stdout = "";
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.on("exit", (code) => resolve({ ok: code === 0, detail: stdout.trim() }));
+  });
+  if (!gate76Result.ok) {
+    throw new Error(`Gate 76 failed: Reconciliation did not fail-safe on livemode=false provider evidence: ${gate76Result.detail}`);
+  }
+
+  const untouched76 = await prisma.payment.findUniqueOrThrow({ where: { id: session76.paymentId } });
+  const untouchedOrder76 = await prisma.order.findUniqueOrThrow({ where: { id: order76.id } });
+  const outbox76 = await prisma.outboxEvent.count({ where: { aggregateId: order76.id, eventType: "ORDER_PAID" } });
+  if (
+    untouched76.status !== PaymentStatus.PENDING ||
+    untouchedOrder76.status !== OrderStatus.PENDING_PAYMENT ||
+    outbox76 !== 0
+  ) {
+    throw new Error("Gate 76 failed: Reconciliation with livemode=false provider evidence produced side effects");
+  }
+  console.log("✓ Gate 76 passed: Reconciliation is fail-safe (transitioned: false) when the provider session livemode does not match the configured payment mode");
+
+  // ----------------------------------------------------
+  // Gate 77: Live-Mode Control Path — Correct Evidence Still Succeeds
+  // ----------------------------------------------------
+  console.log("\n[Gate 77] Verifying the live-mode control path: correct livemode=true authoritative evidence still succeeds...");
+  const { order: order77 } = await createCustomerOrder(customerToken, targetVariant.id, 1);
+  const session77Res = await apiPost(`/v1/orders/${order77.id}/payment-session`, { provider: "stripe" }, customerToken);
+  const session77 = session77Res.data;
+
+  const gate77Result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `
+        process.env.NODE_ENV = 'production';
+        process.env.STRIPE_MOCK_CLIENT = 'false';
+        process.env.STRIPE_SECRET_KEY = ['sk','live','NOTAREALKEY','gate77fixture','0000000000'].join('_');
+        process.env.STRIPE_WEBHOOK_SECRET = 'whsec_gate77_production_probe_secret';
+        process.env.PAYMENT_RETURN_BASE_URL = 'https://portal.nexustheme.example';
+        const { TestPaymentProvider } = require('./apps/api/dist/modules/payments/test-payment.provider');
+        const { StripePaymentProvider } = require('./apps/api/dist/modules/payments/stripe-payment.provider');
+        const { PaymentProviderFactory } = require('./apps/api/dist/modules/payments/payment-provider.factory');
+        const { PaymentsService } = require('./apps/api/dist/modules/payments/payments.service');
+        const { AuditService } = require('./apps/api/dist/modules/audit/audit.service');
+        const testProvider = new TestPaymentProvider();
+        const stripeProvider = new StripePaymentProvider();
+        // Controlled provider test double: no real Stripe network call.
+        // Mimics an authentic LIVE-mode Session (paid, livemode=true).
+        stripeProvider.stripeClient.checkout.sessions.retrieve = async (ref) => ({
+          id: ref,
+          livemode: true,
+          payment_status: 'paid',
+          status: 'complete',
+          amount_total: ${session77.amount},
+          currency: ${JSON.stringify(session77.currency.toLowerCase())},
+        });
+        const factory = new PaymentProviderFactory(stripeProvider, testProvider);
+        const auditService = new AuditService();
+        const service = new PaymentsService(auditService, testProvider, factory);
+        service.reconcilePayment(${JSON.stringify(session77.paymentId)}, { reason: 'authoritative_query' })
+          .then((result) => {
+            console.log(JSON.stringify(result));
+            const ok = result && result.transitioned === true && result.paymentStatus === 'SUCCEEDED' && result.orderStatus === 'PAID';
+            process.exit(ok ? 0 : 1);
+          })
+          .catch((err) => {
+            console.log('ERROR:', err.message);
+            process.exit(2);
+          });
+        `,
+      ],
+      { cwd: path.resolve(__dirname, "../../..") },
+    );
+    let stdout = "";
+    child.stdout?.on("data", (d) => (stdout += d.toString()));
+    child.on("exit", (code) => resolve({ ok: code === 0, detail: stdout.trim() }));
+  });
+  if (!gate77Result.ok) {
+    throw new Error(`Gate 77 failed: Correct livemode=true authoritative evidence did not transition Payment/Order: ${gate77Result.detail}`);
+  }
+
+  const paid77 = await prisma.payment.findUniqueOrThrow({ where: { id: session77.paymentId } });
+  const paidOrder77 = await prisma.order.findUniqueOrThrow({ where: { id: order77.id } });
+  const outbox77 = await prisma.outboxEvent.count({ where: { aggregateId: order77.id, eventType: "ORDER_PAID" } });
+  const audit77 = await prisma.auditLog.count({
+    where: { entity: "Order", entityId: order77.id, action: "ORDER_PAID" },
+  });
+  if (
+    paid77.status !== PaymentStatus.SUCCEEDED ||
+    paidOrder77.status !== OrderStatus.PAID ||
+    outbox77 !== 1 ||
+    audit77 !== 1
+  ) {
+    throw new Error(
+      `Gate 77 failed: Live-mode control path did not produce exactly-once Payment SUCCEEDED + Order PAID + 1 outbox + 1 audit (payment=${paid77.status}, order=${paidOrder77.status}, outbox=${outbox77}, audit=${audit77})`,
+    );
+  }
+  console.log(
+    "✓ Gate 77 passed: Correct livemode=true authoritative evidence still transitions Payment SUCCEEDED + Order PAID exactly once (mode enforcement does not block legitimate production evidence)",
+  );
+
   console.log("\n==================================================");
-  console.log("ALL 73 PHASE 9 LIVE ACCEPTANCE GATES PASSED!");
+  console.log("ALL 77 PHASE 9 LIVE ACCEPTANCE GATES PASSED!");
   console.log("==================================================");
 }
 
