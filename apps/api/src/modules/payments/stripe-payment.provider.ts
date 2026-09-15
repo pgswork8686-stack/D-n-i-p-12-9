@@ -21,6 +21,7 @@ export interface StripeConfig {
   secretKey?: string;
   webhookSecret?: string;
   webhookToleranceSeconds: number;
+  returnBaseUrl: string;
 }
 
 export interface MockStripeSession {
@@ -44,6 +45,46 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     this.initStripe();
   }
 
+  private resolveReturnBaseUrl(): string {
+    const isProd = process.env.NODE_ENV === "production";
+    const configured = process.env.PAYMENT_RETURN_BASE_URL?.trim();
+
+    if (isProd) {
+      if (!configured) {
+        throw new Error(
+          "PAYMENT_RETURN_BASE_URL is required in production for Stripe Checkout redirects",
+        );
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(configured);
+      } catch {
+        throw new Error("PAYMENT_RETURN_BASE_URL must be a valid absolute URL");
+      }
+      if (parsed.protocol !== "https:") {
+        throw new Error("PAYMENT_RETURN_BASE_URL must use HTTPS in production");
+      }
+      const host = parsed.hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+        throw new Error(
+          "PAYMENT_RETURN_BASE_URL must not point to localhost in production",
+        );
+      }
+      return parsed.origin;
+    }
+
+    const fallback =
+      configured ||
+      process.env.PORTAL_URL?.trim() ||
+      process.env.FRONTEND_URL?.trim() ||
+      "http://localhost:3000";
+    try {
+      return new URL(fallback).origin;
+    } catch {
+      throw new Error("PAYMENT_RETURN_BASE_URL must be a valid absolute URL");
+    }
+  }
+
   resolveConfig(): StripeConfig {
     const isProd = process.env.NODE_ENV === "production";
     const mockFlag = process.env.STRIPE_MOCK_CLIENT === "true";
@@ -52,6 +93,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const tolerance = resolveStripeWebhookTolerance(
       process.env.STRIPE_WEBHOOK_TOLERANCE_SECONDS,
     );
+    const returnBaseUrl = this.resolveReturnBaseUrl();
 
     if (isProd) {
       if (mockFlag) {
@@ -74,10 +116,10 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         secretKey,
         webhookSecret,
         webhookToleranceSeconds: tolerance,
+        returnBaseUrl,
       };
     }
 
-    // Non-production environment
     const isMock =
       mockFlag || !secretKey || secretKey.startsWith("sk_test_placeholder");
 
@@ -86,20 +128,31 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       secretKey: secretKey || "sk_test_dummy_key",
       webhookSecret: webhookSecret || "whsec_dummy_key",
       webhookToleranceSeconds: tolerance,
+      returnBaseUrl,
     };
   }
 
   private initStripe() {
     const config = this.resolveConfig();
-    if (!config.isMock && config.secretKey) {
-      this.stripeClient = new Stripe(config.secretKey, {
-        apiVersion: "2025-02-24.acacia" as any,
-      });
-    } else if (config.isMock && config.secretKey) {
+    if (config.secretKey) {
       this.stripeClient = new Stripe(config.secretKey, {
         apiVersion: "2025-02-24.acacia" as any,
       });
     }
+  }
+
+  private resolveReturnUrl(
+    supplied: string | undefined,
+    fallbackPath: string,
+    baseUrl: string,
+  ): string {
+    if (!supplied) {
+      return new URL(fallbackPath, `${baseUrl}/`).toString();
+    }
+    if (supplied.startsWith("/") && !supplied.startsWith("//")) {
+      return new URL(supplied, `${baseUrl}/`).toString();
+    }
+    return new URL(supplied).toString();
   }
 
   registerMockSession(session: MockStripeSession) {
@@ -162,6 +215,17 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     }
 
     try {
+      const resolvedSuccessUrl = this.resolveReturnUrl(
+        successUrl,
+        `/orders/${order.id}?session_id={CHECKOUT_SESSION_ID}&status=success`,
+        config.returnBaseUrl,
+      );
+      const resolvedCancelUrl = this.resolveReturnUrl(
+        cancelUrl,
+        `/orders/${order.id}?status=cancelled`,
+        config.returnBaseUrl,
+      );
+
       const session = await this.stripeClient.checkout.sessions.create(
         {
           mode: "payment",
@@ -182,21 +246,21 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
               quantity: 1,
             },
           ],
-          success_url:
-            successUrl ||
-            `http://localhost:3000/orders/${order.id}?session_id={CHECKOUT_SESSION_ID}&status=success`,
-          cancel_url:
-            cancelUrl ||
-            `http://localhost:3000/orders/${order.id}?status=cancelled`,
+          success_url: resolvedSuccessUrl,
+          cancel_url: resolvedCancelUrl,
         },
         {
           idempotencyKey: `payment-session-${payment.id}`,
         },
       );
 
+      if (!session.url) {
+        throw new Error("Stripe Checkout Session did not return a session URL");
+      }
+
       return {
         sessionId: session.id,
-        sessionUrl: session.url || "",
+        sessionUrl: session.url,
         providerReference: session.id,
       };
     } catch (err: any) {
@@ -213,14 +277,14 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const config = this.resolveConfig();
     if (config.isMock) {
       const mock = this.mockSessions.get(providerReference);
-      if (mock) {
-        return {
-          sessionId: mock.sessionId,
-          sessionUrl: mock.sessionUrl,
-          providerReference: mock.sessionId,
-        };
+      if (!mock?.sessionUrl) {
+        return null;
       }
-      return null;
+      return {
+        sessionId: mock.sessionId,
+        sessionUrl: mock.sessionUrl,
+        providerReference: mock.sessionId,
+      };
     }
 
     if (!this.stripeClient) {
@@ -230,9 +294,12 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     try {
       const session =
         await this.stripeClient.checkout.sessions.retrieve(providerReference);
+      if (!session.url) {
+        return null;
+      }
       return {
         sessionId: session.id,
-        sessionUrl: session.url || "",
+        sessionUrl: session.url,
         providerReference: session.id,
       };
     } catch (err: any) {
@@ -312,9 +379,6 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         amount = dataObject.amount_total ?? 0;
         currency = (dataObject.currency || "").toUpperCase();
         providerReference = dataObject.id;
-      } else {
-        // Unpaid or pending async
-        eventType = "ignored";
       }
     } else if (event.type === "checkout.session.async_payment_succeeded") {
       eventType = "payment.succeeded";
@@ -347,11 +411,9 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       currency = (dataObject.currency || "").toUpperCase();
       providerReference = dataObject.id;
     } else if (event.type.startsWith("payment_intent.")) {
-      // Option 1: Strictly ignore payment_intent events
       eventType = "ignored";
     }
 
-    // Secret hygiene: sanitize payload, strictly omitting sensitive card details or customer PII
     const sanitizedPayload: Record<string, any> = {
       id: event.id,
       type: event.type,
@@ -404,24 +466,26 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     }
 
     try {
-      if (providerReference.startsWith("cs_")) {
-        const session =
-          await this.stripeClient.checkout.sessions.retrieve(providerReference);
-        let status: PaymentStatus = PaymentStatus.PENDING;
-        if (session.payment_status === "paid" || session.status === "complete") {
-          status = PaymentStatus.SUCCEEDED;
-        } else if (session.status === "expired") {
-          status = PaymentStatus.FAILED;
-        }
-        return {
-          providerReference,
-          status,
-          amount: session.amount_total ?? 0,
-          currency: (session.currency || "").toUpperCase(),
-          externalEventId: `reconcile_${session.id}_${session.payment_status}`,
-        };
+      if (!providerReference.startsWith("cs_")) {
+        return null;
       }
-      return null;
+
+      const session =
+        await this.stripeClient.checkout.sessions.retrieve(providerReference);
+      let status: PaymentStatus = PaymentStatus.PENDING;
+      if (session.payment_status === "paid") {
+        status = PaymentStatus.SUCCEEDED;
+      } else if (session.status === "expired") {
+        status = PaymentStatus.CANCELLED;
+      }
+
+      return {
+        providerReference,
+        status,
+        amount: session.amount_total ?? 0,
+        currency: (session.currency || "").toUpperCase(),
+        externalEventId: `reconcile_${session.id}_${session.payment_status}_${session.status}`,
+      };
     } catch (err: any) {
       this.logger.error(
         `Failed to query Stripe status for reference ${providerReference}: ${err.message}`,
