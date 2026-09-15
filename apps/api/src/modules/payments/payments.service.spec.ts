@@ -1,6 +1,5 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import {
-  BadRequestException,
   BadGatewayException,
   ForbiddenException,
   NotFoundException,
@@ -57,6 +56,12 @@ describe("PaymentsService", () => {
   let auditService: AuditService;
   let testProvider: TestPaymentProvider;
   let stripeProvider: StripePaymentProvider;
+
+  const invokeAuthoritativeSuccess = (params: Record<string, any>) =>
+    (service as any).processAuthoritativePaymentEvent({
+      ...params,
+      eventType: "payment.succeeded",
+    });
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -296,7 +301,7 @@ describe("PaymentsService", () => {
 
     it("rejects provider mismatch before state mutation", async () => {
       await expect(
-        service.processAuthoritativePaymentSuccess({
+        invokeAuthoritativeSuccess({
           provider: "stripe",
           externalEventId: "evt-provider-mismatch",
           paymentId: payment.id,
@@ -311,7 +316,7 @@ describe("PaymentsService", () => {
 
     it("rejects amount mismatch", async () => {
       await expect(
-        service.processAuthoritativePaymentSuccess({
+        invokeAuthoritativeSuccess({
           provider: "test",
           externalEventId: "evt-amount-mismatch",
           paymentId: payment.id,
@@ -325,7 +330,7 @@ describe("PaymentsService", () => {
 
     it("rejects provider-reference mismatch", async () => {
       await expect(
-        service.processAuthoritativePaymentSuccess({
+        invokeAuthoritativeSuccess({
           provider: "test",
           externalEventId: "evt-ref-mismatch",
           paymentId: payment.id,
@@ -338,7 +343,7 @@ describe("PaymentsService", () => {
     });
 
     it("transitions PENDING -> SUCCEEDED and emits exactly one ORDER_PAID", async () => {
-      const result = await service.processAuthoritativePaymentSuccess({
+      const result = await invokeAuthoritativeSuccess({
         provider: "test",
         externalEventId: "evt-paid",
         paymentId: payment.id,
@@ -357,7 +362,7 @@ describe("PaymentsService", () => {
         ...payment,
         status: PaymentStatus.FAILED,
       });
-      const result = await service.processAuthoritativePaymentSuccess({
+      const result = await invokeAuthoritativeSuccess({
         provider: "test",
         externalEventId: "evt-late-success",
         paymentId: payment.id,
@@ -375,7 +380,7 @@ describe("PaymentsService", () => {
         ...payment,
         order: { ...order, status: OrderStatus.PAID },
       });
-      const result = await service.processAuthoritativePaymentSuccess({
+      const result = await invokeAuthoritativeSuccess({
         provider: "test",
         externalEventId: "evt-second-payment",
         paymentId: payment.id,
@@ -423,7 +428,7 @@ describe("PaymentsService", () => {
       );
     });
 
-    it("routes a verified provider status through the same authoritative processor", async () => {
+    it("routes a verified provider status through the same private authority", async () => {
       const payment = {
         id: "pay-rec-ok",
         orderId: "order-1",
