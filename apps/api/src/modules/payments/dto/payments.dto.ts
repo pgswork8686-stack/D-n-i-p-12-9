@@ -20,3 +20,24 @@ export class TestPaymentCallbackDto {
   @IsObject()
   metadata?: Record<string, any>;
 }
+
+export class CreatePaymentSessionDto {
+  @IsOptional()
+  @IsString()
+  provider?: string;
+
+  @IsOptional()
+  @IsString()
+  successUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  cancelUrl?: string;
+}
+
+export class ReconcilePaymentDto {
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+

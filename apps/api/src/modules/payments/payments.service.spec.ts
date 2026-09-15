@@ -1,10 +1,16 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { ForbiddenException, UnauthorizedException } from "@nestjs/common";
+import {
+  ForbiddenException,
+  UnauthorizedException,
+  NotFoundException,
+} from "@nestjs/common";
 import { PaymentsService } from "./payments.service";
 import {
   TestPaymentProvider,
   computeTestWebhookSignature,
 } from "./test-payment.provider";
+import { StripePaymentProvider } from "./stripe-payment.provider";
+import { PaymentProviderFactory } from "./payment-provider.factory";
 import { AuditService } from "../audit/audit.service";
 import {
   prisma,
@@ -22,10 +28,14 @@ jest.mock("@nexus/database", () => {
       $transaction: jest.fn((cb) => cb(prisma)),
       payment: {
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+        create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
       },
       order: {
+        findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
       },
@@ -54,6 +64,8 @@ describe("PaymentsService", () => {
       providers: [
         PaymentsService,
         TestPaymentProvider,
+        StripePaymentProvider,
+        PaymentProviderFactory,
         {
           provide: AuditService,
           useValue: {
@@ -389,4 +401,202 @@ describe("PaymentsService", () => {
       expect(result.message).toContain("Concurrent duplicate event handled");
     });
   });
+
+  describe("Phase 9: Payment Session Creation", () => {
+    it("throws NotFoundException if order does not exist", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue(null);
+
+      let err: any;
+      try {
+        await service.createPaymentSession("user-1", "order-non-existent");
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(NotFoundException);
+    });
+
+    it("throws ForbiddenException if user is not order owner", async () => {
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+        id: "order-1",
+        userId: "other-user",
+        status: OrderStatus.PENDING_PAYMENT,
+        payments: [],
+      });
+
+      let err: any;
+      try {
+        await service.createPaymentSession("user-1", "order-1");
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(ForbiddenException);
+    });
+
+    it("creates a payment session successfully and stores provider reference", async () => {
+      const mockOrder = {
+        id: "order-1",
+        orderNumber: "ORD-20260915-001",
+        userId: "user-1",
+        status: OrderStatus.PENDING_PAYMENT,
+        totalAmount: 5000,
+        currency: Currency.USD,
+        payments: [],
+      };
+      (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
+      (prisma.payment.create as jest.Mock).mockResolvedValue({
+        id: "pay-new-1",
+        orderId: "order-1",
+        provider: "stripe",
+        status: PaymentStatus.PENDING,
+        amount: 5000,
+        currency: Currency.USD,
+      });
+      (prisma.payment.update as jest.Mock).mockResolvedValue({});
+
+      const session = await service.createPaymentSession("user-1", "order-1", {
+        provider: "stripe",
+      });
+
+      expect(session.sessionId).toBeDefined();
+      expect(session.providerReference).toBeDefined();
+      expect(session.amount).toBe(5000);
+      expect(session.currency).toBe(Currency.USD);
+      expect(prisma.payment.update).toHaveBeenCalled();
+    });
+  });
+
+  describe("Phase 9: Webhook Handling & Binding Verification", () => {
+    it("fails closed when amount mismatch occurs", async () => {
+      const mockPayment = {
+        id: "pay-1",
+        orderId: "order-1",
+        amount: 5000,
+        currency: Currency.USD,
+        status: PaymentStatus.PENDING,
+        order: { id: "order-1", status: OrderStatus.PENDING_PAYMENT },
+      };
+      (prisma.paymentEvent.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+
+      const rawBody = Buffer.from(
+        JSON.stringify({
+          externalEventId: "evt-amount-mismatch",
+          paymentId: "pay-1",
+          orderId: "order-1",
+          amount: 9999, // Mismatched!
+          currency: "USD",
+          eventType: "payment.succeeded",
+        }),
+      );
+
+      const sig = computeTestWebhookSignature({
+        externalEventId: "evt-amount-mismatch",
+        paymentId: "pay-1",
+        eventType: "payment.succeeded",
+      });
+
+      let err: any;
+      try {
+        await service.handleWebhook("test", rawBody, {
+          "x-test-signature": sig,
+        });
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeDefined();
+      expect(err.message).toContain("Amount mismatch");
+    });
+
+    it("processes authoritative success webhook and creates ORDER_PAID outbox", async () => {
+      const mockPayment = {
+        id: "pay-1",
+        orderId: "order-1",
+        amount: 5000,
+        currency: Currency.USD,
+        status: PaymentStatus.PENDING,
+        order: {
+          id: "order-1",
+          orderNumber: "ORD-001",
+          userId: "user-1",
+          status: OrderStatus.PENDING_PAYMENT,
+          totalAmount: 5000,
+          currency: Currency.USD,
+        },
+      };
+      (prisma.paymentEvent.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+      (prisma.paymentEvent.create as jest.Mock).mockResolvedValue({});
+      (prisma.payment.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.order.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.outboxEvent.create as jest.Mock).mockResolvedValue({});
+
+      const rawBody = Buffer.from(
+        JSON.stringify({
+          externalEventId: "evt-success-valid",
+          paymentId: "pay-1",
+          orderId: "order-1",
+          amount: 5000,
+          currency: "USD",
+          eventType: "payment.succeeded",
+        }),
+      );
+
+      const sig = computeTestWebhookSignature({
+        externalEventId: "evt-success-valid",
+        paymentId: "pay-1",
+        eventType: "payment.succeeded",
+      });
+
+      const res = await service.handleWebhook("test", rawBody, {
+        "x-test-signature": sig,
+      });
+
+      expect(res.success).toBe(true);
+      expect(res.paymentStatus).toBe(PaymentStatus.SUCCEEDED);
+      expect(res.orderStatus).toBe(OrderStatus.PAID);
+      expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            eventType: "ORDER_PAID",
+            aggregateType: "Order",
+          }),
+        }),
+      );
+    });
+  });
+
+  describe("Phase 9: Reconciliation", () => {
+    it("reconciles stuck pending payment using provider status query", async () => {
+      const mockPayment = {
+        id: "pay-stuck",
+        orderId: "order-1",
+        provider: "test",
+        providerReference: "test_session_stuck",
+        amount: 5000,
+        currency: Currency.USD,
+        status: PaymentStatus.PENDING,
+        order: {
+          id: "order-1",
+          orderNumber: "ORD-001",
+          userId: "user-1",
+          status: OrderStatus.PENDING_PAYMENT,
+          totalAmount: 5000,
+          currency: Currency.USD,
+        },
+      };
+      (prisma.payment.findUnique as jest.Mock).mockResolvedValue(mockPayment);
+      (prisma.paymentEvent.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.paymentEvent.create as jest.Mock).mockResolvedValue({});
+      (prisma.payment.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.order.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.outboxEvent.create as jest.Mock).mockResolvedValue({});
+
+      const res = await service.reconcilePayment("pay-stuck");
+
+      expect(res.success).toBe(true);
+      expect(res.paymentStatus).toBe(PaymentStatus.SUCCEEDED);
+      expect(res.orderStatus).toBe(OrderStatus.PAID);
+    });
+  });
 });
+

@@ -144,3 +144,37 @@ export interface OrderFilterQuery {
   status?: OrderStatus;
   userId?: string;
 }
+
+export interface CreatePaymentSessionRequest {
+  provider?: string;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface PaymentSessionResponse {
+  sessionId: string;
+  sessionUrl: string;
+  provider: string;
+  providerReference: string;
+  paymentId: string;
+  orderId: string;
+  amount: number;
+  currency: Currency;
+}
+
+export interface PaymentWebhookResponse {
+  success: boolean;
+  duplicate: boolean;
+  paymentStatus: PaymentStatus;
+  orderStatus: OrderStatus;
+  message: string;
+}
+
+export interface ReconcilePaymentResponse {
+  success: boolean;
+  transitioned: boolean;
+  paymentStatus: PaymentStatus;
+  orderStatus: OrderStatus;
+  message: string;
+}
+

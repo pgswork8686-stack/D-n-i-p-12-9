@@ -1215,7 +1215,7 @@ async function runPhase8Acceptance() {
   }
   await prisma.entitlement.update({
     where: { id: pluginEnt.id },
-    data: { expiresAt: null },
+    data: { expiresAt: null, status: "ACTIVE" },
   });
   console.log("✓ Gate 36 passed: Expired entitlement returns generic { valid: false }");
 

@@ -284,13 +284,26 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 6. Phase 6 — Elementor External License (Upstream capacity, customer domain allocation, lifecycle management)
 7. Phase 7 — Internal License (Offline activation, cryptographically verifiable tokens, domain limits)
 8. Phase 8 — Download & Version (Private asset versioning, signed R2 download tokens, rate limits)
-9. Phase 9 — Production Payment (Stripe, VietQR, OpenBanking, automated reconciliations)
+9. Phase 9 — Production Payment (Stripe Checkout sessions, signed webhooks, fail-closed binding, atomic outbox, reconciler, raw_payload_hash)
 10. Phase 10 — Customer Portal (License center, download hub, domain binding GUI)
 11. Phase 11 — CMS & SEO (Editorial content, programmatic SEO, dynamic metadata)
 12. Phase 12 — n8n Automation (AI-assisted drafts, operational notifications)
 13. Phase 13 — Affiliate & Membership (Tiered access, recurring entitlements, referral tracking)
 14. Phase 14 — Hosting Integration (cPanel/DirectAdmin/Cloudflare automation)
 15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
+
+## Phase 9 — Production Payment Gateway Architecture
+- **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events (`checkout.session.completed`, `payment_intent.succeeded`, etc.).
+- **Provider-Neutral Abstraction**: `PaymentProviderAdapter` interface and `PaymentProviderFactory` resolving gateway adapters dynamically.
+- **Strict Production Isolation**: Test payment provider is preserved for local/testing only and strictly blocked when `NODE_ENV === 'production'`.
+- **Authenticated Session Creation**: `POST /v1/orders/:orderId/payment-session` enforces user ownership, `PENDING_PAYMENT` order status, and immutable pricing/currency from database.
+- **Webhook Security**: `POST /v1/webhooks/payments/:provider` uses unparsed raw body HMAC-SHA256 signature verification (`stripe.webhooks.constructEvent`), timestamp tolerance check, and causes ZERO DB mutations on rejected signatures.
+- **Fail-Closed Binding Verification**: Validates expected amount, currency, orderId, and provider reference before mutating state.
+- **Atomic Success Transaction**: Single transaction executes: Check/Insert `PaymentEvent` (`@@unique([provider, externalEventId])`), transition Payment to `SUCCEEDED`, transition Order to `PAID`, insert `ORDER_PAID` Outbox event, and insert `AuditLog`. Rollback on any failure.
+- **Terminal State Safety**: `SUCCEEDED` is terminal and cannot revert to `FAILED` or `CANCELLED`.
+- **Secret Hygiene**: Zero credit card PAN, CVV, provider secrets, or auth headers stored. `raw_payload_hash` stored on `payment_events` for cryptographic non-repudiation.
+- **Active Reconciliation**: `reconcilePayment()` actively queries the upstream provider for stuck `PENDING` payments and invokes the exact same authoritative success processor.
+- **Read-Only Frontend Checks**: `GET /v1/payments/:id` and order lookups are strictly read-only and never mark orders as paid.
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

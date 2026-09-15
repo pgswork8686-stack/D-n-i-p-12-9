@@ -503,6 +503,7 @@ model PaymentEvent {
   eventType       String   @map("event_type")
   externalEventId String   @map("external_event_id")
   payload         Json
+  rawPayloadHash  String?  @map("raw_payload_hash")
   createdAt       DateTime @default(now()) @map("created_at")
 
   payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
