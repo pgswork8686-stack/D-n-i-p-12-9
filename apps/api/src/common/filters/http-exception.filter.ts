@@ -31,15 +31,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
       (request.headers[CORRELATION_ID_HEADER] as string) ||
       "unknown";
 
+    const isMulterError = (exception as any)?.name === "MulterError";
+    const isPayloadTooLarge =
+      isMulterError && (exception as any)?.code === "LIMIT_FILE_SIZE";
+
     const isHttpException = exception instanceof HttpException;
-    const status = isHttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status = isPayloadTooLarge
+      ? HttpStatus.PAYLOAD_TOO_LARGE
+      : isHttpException
+        ? exception.getStatus()
+        : HttpStatus.INTERNAL_SERVER_ERROR;
 
     let clientMessage = "Internal server error";
 
-    // For 4xx HttpExceptions, expose client-safe messages
-    if (isHttpException && status < 500) {
+    // For 4xx HttpExceptions and Multer payload limit, expose client-safe messages
+    if (isPayloadTooLarge) {
+      clientMessage = "File payload too large";
+    } else if (isHttpException && status < 500) {
       const exceptionResponse = exception.getResponse();
       if (typeof exceptionResponse === "string") {
         clientMessage = exceptionResponse;

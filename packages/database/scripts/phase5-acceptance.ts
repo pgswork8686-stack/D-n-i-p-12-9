@@ -13,7 +13,8 @@ import {
   issueEntitlementsForOrder,
 } from "../src/index";
 
-const API_BASE = process.env.API_URL || "http://localhost:4000";
+const TEST_PORT = process.env.API_PORT || process.env.PORT || "4005";
+const API_BASE = `http://localhost:${TEST_PORT}`;
 const TEST_WEBHOOK_SECRET =
   process.env.TEST_PAYMENT_WEBHOOK_SECRET || "change-me-local-only";
 
@@ -48,10 +49,11 @@ async function ensureApiRunning(): Promise<void> {
     // Not running
   }
 
-  console.log("  Starting API server child process on port 4000...");
+  console.log(`  Starting API server child process on port ${TEST_PORT}...`);
   apiProcess = spawn("node", [path.resolve(__dirname, "../../../apps/api/dist/main.js")], {
+    cwd: path.resolve(__dirname, "../../.."),
     stdio: "pipe",
-    env: { ...process.env, PORT: "4000" },
+    env: { ...process.env, PORT: TEST_PORT, API_URL: API_BASE },
   });
 
   apiProcess.stderr?.on("data", (data) => {
@@ -77,6 +79,7 @@ async function ensureApiRunning(): Promise<void> {
 function startWorker(workerId: string, pollIntervalMs = "500"): ChildProcess {
   console.log(`  Spawning worker child process '${workerId}' (poll: ${pollIntervalMs}ms)...`);
   const proc = spawn("node", [path.resolve(__dirname, "../../../apps/worker/dist/index.js")], {
+    cwd: path.resolve(__dirname, "../../.."),
     stdio: "pipe",
     env: {
       ...process.env,
