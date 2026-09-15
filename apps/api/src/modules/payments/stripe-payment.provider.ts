@@ -93,7 +93,6 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const tolerance = resolveStripeWebhookTolerance(
       process.env.STRIPE_WEBHOOK_TOLERANCE_SECONDS,
     );
-    const returnBaseUrl = this.resolveReturnBaseUrl();
 
     if (isProd) {
       if (mockFlag) {
@@ -111,6 +110,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
           "STRIPE_WEBHOOK_SECRET is required and must not be a placeholder in production",
         );
       }
+      const returnBaseUrl = this.resolveReturnBaseUrl();
       return {
         isMock: false,
         secretKey,
@@ -120,6 +120,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       };
     }
 
+    const returnBaseUrl = this.resolveReturnBaseUrl();
     const isMock =
       mockFlag || !secretKey || secretKey.startsWith("sk_test_placeholder");
 
@@ -202,7 +203,6 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         status: PaymentStatus.SUCCEEDED,
       };
       this.mockSessions.set(sessionId, mockSession);
-
       return {
         sessionId,
         sessionUrl,
@@ -277,9 +277,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const config = this.resolveConfig();
     if (config.isMock) {
       const mock = this.mockSessions.get(providerReference);
-      if (!mock?.sessionUrl) {
-        return null;
-      }
+      if (!mock?.sessionUrl) return null;
       return {
         sessionId: mock.sessionId,
         sessionUrl: mock.sessionUrl,
@@ -287,16 +285,12 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       };
     }
 
-    if (!this.stripeClient) {
-      return null;
-    }
+    if (!this.stripeClient) return null;
 
     try {
       const session =
         await this.stripeClient.checkout.sessions.retrieve(providerReference);
-      if (!session.url) {
-        return null;
-      }
+      if (!session.url) return null;
       return {
         sessionId: session.id,
         sessionUrl: session.url,
@@ -317,17 +311,15 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const signature =
       (headers["stripe-signature"] as string) ||
       (headers["Stripe-Signature"] as string);
-
     if (!signature) {
       throw new BadRequestException("Missing stripe-signature header");
     }
 
     const config = this.resolveConfig();
     const webhookSecret = config.webhookSecret;
-    if (!webhookSecret || webhookSecret.trim() === "") {
+    if (!webhookSecret?.trim()) {
       throw new ForbiddenException("STRIPE_WEBHOOK_SECRET is not configured");
     }
-
     if (!this.stripeClient) {
       throw new ForbiddenException("Stripe client is not initialized");
     }
@@ -351,7 +343,6 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       .createHash("sha256")
       .update(rawBody)
       .digest("hex");
-
     return this.parseWebhookEvent(event, rawPayloadHash);
   }
 
@@ -365,16 +356,13 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     let amount = 0;
     let currency = "";
     let providerReference = "";
-
     const dataObject = event.data.object as any;
 
     if (event.type === "checkout.session.completed") {
       if (dataObject.payment_status === "paid") {
         eventType = "payment.succeeded";
         orderId =
-          dataObject.client_reference_id ||
-          dataObject.metadata?.orderId ||
-          "";
+          dataObject.client_reference_id || dataObject.metadata?.orderId || "";
         paymentId = dataObject.metadata?.paymentId || "";
         amount = dataObject.amount_total ?? 0;
         currency = (dataObject.currency || "").toUpperCase();
@@ -383,9 +371,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     } else if (event.type === "checkout.session.async_payment_succeeded") {
       eventType = "payment.succeeded";
       orderId =
-        dataObject.client_reference_id ||
-        dataObject.metadata?.orderId ||
-        "";
+        dataObject.client_reference_id || dataObject.metadata?.orderId || "";
       paymentId = dataObject.metadata?.paymentId || "";
       amount = dataObject.amount_total ?? 0;
       currency = (dataObject.currency || "").toUpperCase();
@@ -393,9 +379,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     } else if (event.type === "checkout.session.async_payment_failed") {
       eventType = "payment.failed";
       orderId =
-        dataObject.client_reference_id ||
-        dataObject.metadata?.orderId ||
-        "";
+        dataObject.client_reference_id || dataObject.metadata?.orderId || "";
       paymentId = dataObject.metadata?.paymentId || "";
       amount = dataObject.amount_total ?? 0;
       currency = (dataObject.currency || "").toUpperCase();
@@ -403,9 +387,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     } else if (event.type === "checkout.session.expired") {
       eventType = "payment.cancelled";
       orderId =
-        dataObject.client_reference_id ||
-        dataObject.metadata?.orderId ||
-        "";
+        dataObject.client_reference_id || dataObject.metadata?.orderId || "";
       paymentId = dataObject.metadata?.paymentId || "";
       amount = dataObject.amount_total ?? 0;
       currency = (dataObject.currency || "").toUpperCase();
@@ -449,9 +431,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     const config = this.resolveConfig();
     if (config.isMock) {
       const mock = this.mockSessions.get(providerReference);
-      if (!mock) {
-        return null;
-      }
+      if (!mock) return null;
       return {
         providerReference: mock.sessionId,
         status: mock.status,
@@ -460,16 +440,11 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
         externalEventId: `reconcile_${mock.sessionId}`,
       };
     }
-
-    if (!this.stripeClient) {
+    if (!this.stripeClient || !providerReference.startsWith("cs_")) {
       return null;
     }
 
     try {
-      if (!providerReference.startsWith("cs_")) {
-        return null;
-      }
-
       const session =
         await this.stripeClient.checkout.sessions.retrieve(providerReference);
       let status: PaymentStatus = PaymentStatus.PENDING;
