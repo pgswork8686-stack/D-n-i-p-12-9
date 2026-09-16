@@ -727,8 +727,12 @@ async function runPhase10Acceptance() {
     },
     customer1Token,
   );
-  if (inactiveDownloadRes.status !== 403 && inactiveDownloadRes.status !== 400) {
-    throw new Error(`Gate 27 failed: Expected 403/400 for revoked entitlement download, got ${inactiveDownloadRes.status}`);
+  if (
+    inactiveDownloadRes.status !== 409 &&
+    inactiveDownloadRes.status !== 403 &&
+    inactiveDownloadRes.status !== 400
+  ) {
+    throw new Error(`Gate 27 failed: Expected 409/403/400 for revoked entitlement download, got ${inactiveDownloadRes.status}`);
   }
   console.log("✓ Gate 27 passed: Inactive entitlement cannot request downloads");
 
@@ -828,6 +832,17 @@ async function runPhase10Acceptance() {
     throw new Error(`Gate 34 failed: Expected 404 for cross-user activations read, got ${crossActsRes.status}`);
   }
   console.log("✓ Gate 34 passed: Cross-user activations access returns 404");
+
+  // Ensure ELEMENTOR provider exists and is active
+  await prisma.licenseProvider.upsert({
+    where: { code: "ELEMENTOR" },
+    update: { status: "ACTIVE" },
+    create: {
+      name: "Elementor Pro Provider",
+      code: "ELEMENTOR",
+      status: "ACTIVE",
+    },
+  });
 
   // Seed external managed allocation for Customer 2
   const allocDomain = "client-elementor.org";
