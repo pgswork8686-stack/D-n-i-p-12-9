@@ -98,8 +98,10 @@ describe("Portal Components Acceptance & Security Suites", () => {
       (process.env as any).NODE_ENV = "development";
       (process.env as any).NEXT_PUBLIC_DEV_AUTH_ENABLED = "true";
 
-      // Re-require or re-evaluate to pick up env change if needed, or check component behavior
-      // In LoginPage, isDevAuthToolsEnabled is evaluated at module load or render
+      const html = renderToString(<LoginPage />);
+      expect(html).toContain("Development Presets");
+      expect(html).toContain("Customer 1");
+      expect(html).toContain("Admin");
     });
   });
 

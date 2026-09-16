@@ -5,10 +5,13 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "../context/auth-context";
 import { Button, Card } from "@nexus/ui";
 
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  (process.env.NEXT_PUBLIC_DEV_AUTH_ENABLED === "true" ||
-    process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true");
+function isDevAuthToolsEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    (process.env.NEXT_PUBLIC_DEV_AUTH_ENABLED === "true" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true")
+  );
+}
 
 export default function LoginPage() {
   const { loginWithPassword, loginWithDevToken, user } = useAuth();
@@ -44,7 +47,7 @@ export default function LoginPage() {
   };
 
   const handleDevLogin = async (devToken: string) => {
-    if (!isDevAuthToolsEnabled) return;
+    if (!isDevAuthToolsEnabled()) return;
     setLoading(true);
     setError(null);
     const success = await loginWithDevToken(devToken);
@@ -55,6 +58,8 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
+  const showDevTools = isDevAuthToolsEnabled();
 
   return (
     <div className="min-h-screen bg-[#faf8ff] flex items-center justify-center p-6">
@@ -113,7 +118,7 @@ export default function LoginPage() {
               />
             </div>
 
-            {isDevAuthToolsEnabled && (
+            {showDevTools && (
               <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
                 <span className="text-[11px] font-bold text-blue-900 block uppercase tracking-wider">
                   Development Presets (Local / Test Only):

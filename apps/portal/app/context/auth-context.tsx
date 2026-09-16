@@ -30,10 +30,13 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = "nexus_portal_token";
 
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  (process.env.NEXT_PUBLIC_DEV_AUTH_ENABLED === "true" ||
-    process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true");
+export function isDevAuthToolsEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    (process.env.NEXT_PUBLIC_DEV_AUTH_ENABLED === "true" ||
+      process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true")
+  );
+}
 
 interface FetchProfileResult {
   profile: AuthMeResponse | null;
@@ -120,7 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               typeof window !== "undefined"
                 ? localStorage.getItem(TOKEN_KEY)
                 : null;
-            if (stored && isDevAuthToolsEnabled) {
+            if (stored && isDevAuthToolsEnabled()) {
               hydrateSession(stored).finally(() => {
                 if (isMounted) setIsLoading(false);
               });
@@ -162,7 +165,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         typeof window !== "undefined"
           ? localStorage.getItem(TOKEN_KEY)
           : null;
-      if (stored && isDevAuthToolsEnabled) {
+      if (stored && isDevAuthToolsEnabled()) {
         hydrateSession(stored).finally(() => {
           if (isMounted) setIsLoading(false);
         });
@@ -220,7 +223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithDevToken = useCallback(
     async (devToken: string): Promise<boolean> => {
-      if (!isDevAuthToolsEnabled) {
+      if (!isDevAuthToolsEnabled()) {
         return false;
       }
       setIsLoading(true);
