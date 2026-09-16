@@ -11,6 +11,7 @@ import {
   LicenseStatus,
   publishProductVersion,
   registerVerifiedUploadedFile,
+  provisionInternalLicenses,
 } from "../src/index";
 import { normalizeDomain } from "@nexus/utils";
 
@@ -191,7 +192,7 @@ async function runPhase10Acceptance() {
 
   // Gate 4: Customer Cannot Access Admin Routes
   console.log("\n[Gate 4] Customer cannot access admin routes (403 Forbidden)...");
-  const adminAccessRes = await apiGet("/admin/orders", customer1Token);
+  const adminAccessRes = await apiGet("/admin/users", customer1Token);
   if (adminAccessRes.status !== 403) {
     throw new Error(`Gate 4 failed: Expected 403 Forbidden for customer on admin route, got ${adminAccessRes.status}`);
   }
@@ -477,8 +478,23 @@ async function runPhase10Acceptance() {
       orderItemId: order2.items[0].id,
       productId: testProduct.id,
       variantId: testVariant.id,
+      productType: ProductType.EXTERNAL_MANAGED_LICENSE,
+      fulfillmentType: FulfillmentType.EXTERNAL_MANAGED,
+      status: EntitlementStatus.ACTIVE,
+      quantity: 1,
+      maxActivations: 2,
+    },
+  });
+
+  const entitlement2Internal = await prisma.entitlement.create({
+    data: {
+      userId: customer2Id,
+      orderId: order2.id,
+      orderItemId: order2.items[0].id,
+      productId: testProduct.id,
+      variantId: testVariant.id,
       productType: ProductType.LICENSED_SOFTWARE,
-      fulfillmentType: FulfillmentType.EXTERNAL_LICENSE,
+      fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
       status: EntitlementStatus.ACTIVE,
       quantity: 1,
       maxActivations: 1,
@@ -489,7 +505,11 @@ async function runPhase10Acceptance() {
   console.log("\n[Gate 19] Customer lists only own entitlements...");
   const entListRes = await apiGet("/entitlements", customer1Token);
   const entIds: string[] = (entListRes.data?.items || []).map((e: any) => e.id);
-  if (!entIds.includes(entitlement1.id) || entIds.includes(entitlement2.id)) {
+  if (
+    !entIds.includes(entitlement1.id) ||
+    entIds.includes(entitlement2.id) ||
+    entIds.includes(entitlement2Internal.id)
+  ) {
     throw new Error("Gate 19 failed: Entitlements list leaked cross-user entitlement or missed own");
   }
   console.log("✓ Gate 19 passed: Entitlements list strictly scoped to customer");
@@ -620,37 +640,15 @@ async function runPhase10Acceptance() {
   }
   console.log("✓ Gate 27 passed: Inactive entitlement cannot request downloads");
 
-  // Seed internal license for Customer 1 and Customer 2
-  const plainKey1 = "NXS-A1B2-C3D4-E5F6-G7H8-I9J0-K1L2-M3N4-9999";
-  const keyHash1 = crypto.createHash("sha256").update(plainKey1).digest("hex");
-  const keyLast4_1 = "9999";
+  // Provision internal licenses for active INTERNAL_LICENSE entitlements
+  await provisionInternalLicenses({ workerId: "worker-phase10" }, prisma);
 
-  const license1 = await prisma.internalLicense.create({
-    data: {
-      userId: customer1Id,
-      entitlementId: entitlement1.id,
-      productId: testProduct.id,
-      variantId: testVariant.id,
-      keyHash: keyHash1,
-      keyEncrypted: "encrypted_payload_sample",
-      keyLast4: keyLast4_1,
-      status: LicenseStatus.ACTIVE,
-    },
+  const license1 = await prisma.internalLicense.findUniqueOrThrow({
+    where: { entitlementId: entitlement1.id },
   });
 
-  const plainKey2 = "NXS-B2C3-D4E5-F6G7-H8I9-J0K1-L2M3-N4O5-8888";
-  const keyHash2 = crypto.createHash("sha256").update(plainKey2).digest("hex");
-  const license2 = await prisma.internalLicense.create({
-    data: {
-      userId: customer2Id,
-      entitlementId: entitlement2.id,
-      productId: testProduct.id,
-      variantId: testVariant.id,
-      keyHash: keyHash2,
-      keyEncrypted: "encrypted_payload_sample_2",
-      keyLast4: "8888",
-      status: LicenseStatus.ACTIVE,
-    },
+  const license2 = await prisma.internalLicense.findUniqueOrThrow({
+    where: { entitlementId: entitlement2Internal.id },
   });
 
   // Gate 28: Internal Licenses List Only Own Licenses
@@ -675,7 +673,7 @@ async function runPhase10Acceptance() {
   const licDetail1 = await apiGet(`/licenses/${license1.id}`, customer1Token);
   if (
     !licDetail1.data.keyMasked ||
-    !licDetail1.data.keyMasked.endsWith("9999") ||
+    !licDetail1.data.keyMasked.endsWith(license1.keyLast4) ||
     licDetail1.data.keyMasked.length < 20 ||
     licDetail1.data.licenseKey !== undefined
   ) {
@@ -686,21 +684,30 @@ async function runPhase10Acceptance() {
   // Gate 31: Initial License Payload Free Of Internal Secrets
   console.log("\n[Gate 31] License payload contains zero ciphertext, hash, or encryption material...");
   if (
-    licDetail1.data.keyEncrypted !== undefined ||
+    licDetail1.data.keyCiphertext !== undefined ||
     licDetail1.data.keyHash !== undefined ||
-    licDetail1.data.encryptionIv !== undefined
+    licDetail1.data.keyIv !== undefined ||
+    licDetail1.data.keyAuthTag !== undefined
   ) {
     throw new Error("Gate 31 failed: Internal cryptographic material leaked in customer license payload");
   }
   console.log("✓ Gate 31 passed: Internal encryption fields absent from customer DTO");
 
-  // Gate 32: Cross-User License Reveal Blocked
+  // Gate 32: Cross-User License Reveal Blocked & Owner Reveal Allowed
   console.log("\n[Gate 32] Cross-user license reveal blocked (404)...");
   const crossRevealRes = await apiPost(`/licenses/${license1.id}/reveal`, {}, customer2Token);
   if (crossRevealRes.status !== 404) {
     throw new Error(`Gate 32 failed: Expected 404 for cross-user reveal, got ${crossRevealRes.status}`);
   }
-  console.log("✓ Gate 32 passed: Cross-user key reveal returns 404 anti-enumeration");
+  const ownerRevealRes = await apiPost(`/licenses/${license1.id}/reveal`, {}, customer1Token);
+  if (
+    ownerRevealRes.status !== 200 ||
+    !ownerRevealRes.data.licenseKey ||
+    !ownerRevealRes.data.licenseKey.endsWith(license1.keyLast4)
+  ) {
+    throw new Error(`Gate 32 failed: Owner reveal failed: ${JSON.stringify(ownerRevealRes.data)}`);
+  }
+  console.log("✓ Gate 32 passed: Cross-user key reveal returns 404 anti-enumeration and owner reveal decrypts plaintext key");
 
   // Gate 33: License Activations Endpoint Scoped To License
   console.log("\n[Gate 33] License activations list returns domain activations...");
@@ -807,8 +814,8 @@ async function runPhase10Acceptance() {
   if (deactRes.status !== 200 && deactRes.status !== 201) {
     throw new Error(`Gate 40 failed: Deactivation request rejected with status ${deactRes.status}`);
   }
-  if (deactRes.data.status !== "DEACTIVATION_REQUESTED") {
-    throw new Error(`Gate 40 failed: Expected status DEACTIVATION_REQUESTED, got ${deactRes.data.status}`);
+  if (deactRes.data.status !== "DEACTIVATION_PENDING") {
+    throw new Error(`Gate 40 failed: Expected status DEACTIVATION_PENDING, got ${deactRes.data.status}`);
   }
   console.log("✓ Gate 40 passed: Customer allocation deactivation request successfully recorded");
 
