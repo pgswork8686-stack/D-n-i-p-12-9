@@ -629,6 +629,7 @@ async function runPhase10Acceptance() {
   // Create published product version & file for download testing
   let version = await prisma.productVersion.findFirst({
     where: { productId: testProduct.id, version: "1.0.0" },
+    include: { files: true },
   });
   if (!version) {
     version = await prisma.productVersion.create({
@@ -651,6 +652,19 @@ async function runPhase10Acceptance() {
       },
       include: { files: true },
     });
+  } else if (!version.files || version.files.length === 0) {
+    const file = await prisma.productVersionFile.create({
+      data: {
+        versionId: version.id,
+        fileName: "portal-test-theme-1.0.0.zip",
+        storageKey: `products/${testProduct.id}/versions/v1/portal-test-theme-1.0.0.zip`,
+        contentType: "application/zip",
+        sizeBytes: 10240,
+        sha256: crypto.createHash("sha256").update("portal-test-content").digest("hex"),
+        isPrimary: true,
+      },
+    });
+    version = { ...version, files: [file] };
   }
 
   // Gate 23: Eligible Published Versions Endpoint
@@ -690,7 +704,11 @@ async function runPhase10Acceptance() {
   console.log("\n[Gate 26] Cross-user download request denied (403/404)...");
   const crossDownloadRes = await apiPost(
     "/v1/downloads/request",
-    { entitlementId: entitlement1.id, versionId: version.id },
+    {
+      entitlementId: entitlement1.id,
+      versionId: version.id,
+      fileId: version.files[0].id,
+    },
     customer2Token,
   );
   if (crossDownloadRes.status !== 403 && crossDownloadRes.status !== 404) {
@@ -702,7 +720,11 @@ async function runPhase10Acceptance() {
   console.log("\n[Gate 27] Inactive entitlement download request denied...");
   const inactiveDownloadRes = await apiPost(
     "/v1/downloads/request",
-    { entitlementId: revokedEnt.id, versionId: version.id },
+    {
+      entitlementId: revokedEnt.id,
+      versionId: version.id,
+      fileId: version.files[0].id,
+    },
     customer1Token,
   );
   if (inactiveDownloadRes.status !== 403 && inactiveDownloadRes.status !== 400) {
