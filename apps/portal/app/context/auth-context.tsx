@@ -76,7 +76,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(authToken);
         setUser(profile);
         setIsConnectivityError(false);
-        if (typeof window !== "undefined") {
+        if (
+          typeof window !== "undefined" &&
+          !getSupabaseClient() &&
+          isDevAuthToolsEnabled()
+        ) {
           localStorage.setItem(TOKEN_KEY, authToken);
         }
         return true;
@@ -120,10 +124,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } else {
             // Check dev fallback if explicitly enabled
             const stored =
-              typeof window !== "undefined"
+              typeof window !== "undefined" && isDevAuthToolsEnabled()
                 ? localStorage.getItem(TOKEN_KEY)
                 : null;
-            if (stored && isDevAuthToolsEnabled()) {
+            if (stored) {
               hydrateSession(stored).finally(() => {
                 if (isMounted) setIsLoading(false);
               });
@@ -162,10 +166,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else {
       // Local dev / test mock fallback when Supabase is unconfigured
       const stored =
-        typeof window !== "undefined"
+        typeof window !== "undefined" && isDevAuthToolsEnabled()
           ? localStorage.getItem(TOKEN_KEY)
           : null;
-      if (stored && isDevAuthToolsEnabled()) {
+      if (stored) {
         hydrateSession(stored).finally(() => {
           if (isMounted) setIsLoading(false);
         });

@@ -342,6 +342,8 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Mock mode remains the only non-production shortcut**: all of the above checks are skipped when `config.isMock` is true, which is itself impossible in production (`STRIPE_MOCK_CLIENT=true` still fails closed at startup). This keeps the entire Phase 4–73 acceptance suite, which runs Stripe in mock mode, unaffected by the live-mode boundary.
 
 ### Phase 10 — Customer Portal Architecture & Security
+**Status**: IMPLEMENTED (PR #13 OPEN, Pending ChatGPT Final Review. NOT MERGED. Phase 11 NOT STARTED.)
+
 - **Strict Client-Only Architecture**: `apps/portal` is a Next.js client application consuming `@nexus/sdk` and NestJS API via HTTP. It has zero access to Prisma, PostgreSQL, Redis, or internal microservices.
 - **Zero Client Payment Authority**: Browser redirects and page navigation (e.g. `/payment/result?orderId=...`) have zero authority to mark orders `PAID` or create entitlements. Order status updates are driven purely by backend-verified webhooks or authoritative reconciliation. Payment retry triggers `POST /v1/orders/:id/payment-session` to create an authoritative provider session with server-calculated amounts and currencies.
 - **Zero Client Entitlement Authority**: Frontend cannot directly create, update, or activate entitlements. Entitlements are only issued via backend state transitions upon verified payment receipt.
