@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import {
   prisma,
   ProductType,
@@ -21,6 +22,21 @@ const API_BASE = `http://localhost:${TEST_PORT}`;
 const TEST_ENCRYPTION_KEY =
   process.env.LICENSE_KEY_ENCRYPTION_KEY ||
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const S3_ENDPOINT = process.env.STORAGE_ENDPOINT || "http://localhost:9000";
+const S3_ACCESS_KEY = process.env.STORAGE_ACCESS_KEY || "minioadmin";
+const S3_SECRET_KEY = process.env.STORAGE_SECRET_KEY || "minioadmin";
+const S3_BUCKET = process.env.STORAGE_BUCKET || "marketplace-dev";
+
+const s3Client = new S3Client({
+  endpoint: S3_ENDPOINT,
+  region: "auto",
+  credentials: {
+    accessKeyId: S3_ACCESS_KEY,
+    secretAccessKey: S3_SECRET_KEY,
+  },
+  forcePathStyle: true,
+});
 
 let apiProcess: ChildProcess | null = null;
 
@@ -628,6 +644,25 @@ async function runPhase10Acceptance() {
   console.log("✓ Gate 22 passed: Terminal entitlement state displayed accurately");
 
   // Create published product version & file for download testing
+  const fileContent = "PORTAL_TEST_ZIP_CONTENT_" + crypto.randomBytes(16).toString("hex");
+  const fileBuffer = Buffer.from(fileContent);
+  const fileSha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+  const storageKey = `products/${testProduct.id}/versions/v1/portal-test-theme-1.0.0.zip`;
+
+  // Upload to MinIO if running
+  try {
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: storageKey,
+        Body: fileBuffer,
+        ContentType: "application/zip",
+      }),
+    );
+  } catch (err) {
+    console.warn("  [Warn] Failed to put test object to MinIO:", err);
+  }
+
   let version = await prisma.productVersion.findFirst({
     where: { productId: testProduct.id, version: "1.0.0" },
     include: { files: true },
@@ -643,29 +678,47 @@ async function runPhase10Acceptance() {
         files: {
           create: {
             fileName: "portal-test-theme-1.0.0.zip",
-            storageKey: `products/${testProduct.id}/versions/v1/portal-test-theme-1.0.0.zip`,
+            storageKey,
             contentType: "application/zip",
-            sizeBytes: 10240,
-            sha256: crypto.createHash("sha256").update("portal-test-content").digest("hex"),
+            sizeBytes: fileBuffer.length,
+            sha256: fileSha256,
             isPrimary: true,
+            verifiedAt: new Date(),
           },
         },
       },
       include: { files: true },
     });
-  } else if (!version.files || version.files.length === 0) {
-    const file = await prisma.productVersionFile.create({
-      data: {
-        versionId: version.id,
-        fileName: "portal-test-theme-1.0.0.zip",
-        storageKey: `products/${testProduct.id}/versions/v1/portal-test-theme-1.0.0.zip`,
-        contentType: "application/zip",
-        sizeBytes: 10240,
-        sha256: crypto.createHash("sha256").update("portal-test-content").digest("hex"),
-        isPrimary: true,
-      },
-    });
-    version = { ...version, files: [file] };
+  } else {
+    if (!version.files || version.files.length === 0) {
+      const file = await prisma.productVersionFile.create({
+        data: {
+          versionId: version.id,
+          fileName: "portal-test-theme-1.0.0.zip",
+          storageKey,
+          contentType: "application/zip",
+          sizeBytes: fileBuffer.length,
+          sha256: fileSha256,
+          isPrimary: true,
+          verifiedAt: new Date(),
+        },
+      });
+      version = { ...version, files: [file] };
+    } else {
+      await prisma.productVersionFile.updateMany({
+        where: { versionId: version.id },
+        data: {
+          verifiedAt: new Date(),
+          storageKey,
+          sizeBytes: fileBuffer.length,
+          sha256: fileSha256,
+        },
+      });
+      version = await prisma.productVersion.findUniqueOrThrow({
+        where: { id: version.id },
+        include: { files: true },
+      });
+    }
   }
 
   // Gate 23: Eligible Published Versions Endpoint
