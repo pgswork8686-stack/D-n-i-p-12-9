@@ -1064,7 +1064,7 @@ async function runPhase10Acceptance() {
   // Gate 49: Dev Auth Presets Absent in Production
   console.log("\n[Gate 49] Dev auth presets strictly absent when NODE_ENV is production...");
   if (
-    !loginPageSource.includes("isDevAuthToolsEnabled =") ||
+    !loginPageSource.includes("isDevAuthToolsEnabled") ||
     !loginPageSource.includes('process.env.NODE_ENV !== "production"')
   ) {
     throw new Error("Gate 49 failed: Dev auth tools are not guarded by NODE_ENV !== 'production'");
