@@ -53,7 +53,8 @@ async function ensureApiRunning(): Promise<void> {
         STRIPE_WEBHOOK_SECRET: "whsec_test_secret_for_acceptance_testing_only",
         STRIPE_MOCK_CLIENT: "true",
         ENABLE_TEST_PAYMENT_PROVIDER: "true",
-        TEST_PAYMENT_WEBHOOK_SECRET: "change-me-local-only",
+        TEST_PAYMENT_WEBHOOK_SECRET:
+          process.env.TEST_PAYMENT_WEBHOOK_SECRET || "ci-test-payment-secret",
         LICENSE_KEY_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
       },
     },
@@ -416,22 +417,33 @@ async function runPhase10Acceptance() {
 
   // Authoritatively pay order 1 via test payment callback (mock mode)
   console.log("\n  Simulating authoritative payment callback for Order 1...");
-  const testSecret = "change-me-local-only";
+  const testSecret =
+    process.env.TEST_PAYMENT_WEBHOOK_SECRET || "ci-test-payment-secret";
+  const webhookEventId = `evt_p10_pay_${Date.now()}`;
   const callbackPayload = {
-    orderId: order1.id,
     paymentId: retrySessionRes.data.paymentId,
-    status: "SUCCEEDED",
-    amount: 9900,
-    currency: "USD",
+    externalEventId: webhookEventId,
+    eventType: "payment.succeeded",
   };
-  const rawPayload = JSON.stringify(callbackPayload);
-  const signature = crypto.createHmac("sha256", testSecret).update(rawPayload).digest("hex");
-  const headers = { "Content-Type": "application/json", "x-test-signature": signature };
-  await fetch(`${API_BASE}/payments/test-callback`, {
+  const signature = crypto
+    .createHmac("sha256", testSecret)
+    .update(`${webhookEventId}:${retrySessionRes.data.paymentId}:payment.succeeded`)
+    .digest("hex");
+  const headers = {
+    "Content-Type": "application/json",
+    "x-test-signature": signature,
+  };
+  const callbackRes = await fetch(`${API_BASE}/payments/test-callback`, {
     method: "POST",
     headers,
-    body: rawPayload,
+    body: JSON.stringify(callbackPayload),
   });
+  if (!callbackRes.ok) {
+    const errBody = await callbackRes.text();
+    throw new Error(
+      `Authoritative payment callback failed (${callbackRes.status}): ${errBody}`,
+    );
+  }
 
   // Gate 17: Order Reflects Backend PAID After Authoritative Payment
   console.log("\n[Gate 17] Verifying Order reflects PAID after authoritative callback...");
