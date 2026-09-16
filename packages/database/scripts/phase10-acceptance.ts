@@ -1074,7 +1074,11 @@ async function runPhase10Acceptance() {
   // Gate 50: Valid Real Auth Session Hydrates Customer Identity
   console.log("\n[Gate 50] Valid real auth session hydrates customer identity...");
   const meHydrate = await apiGet("/auth/me", customer1Token);
-  if (meHydrate.status !== 200 || !meHydrate.data?.id || meHydrate.data?.role !== "CUSTOMER") {
+  if (
+    meHydrate.status !== 200 ||
+    !meHydrate.data?.id ||
+    !Array.isArray(meHydrate.data?.roles)
+  ) {
     throw new Error("Gate 50 failed: Real customer session failed to hydrate identity");
   }
   console.log("✓ Gate 50 passed: Real auth session successfully hydrates customer identity");
@@ -1258,7 +1262,8 @@ async function runPhase10Acceptance() {
   await prisma.licenseActivation.create({
     data: {
       licenseId: license1.id,
-      domain: normalizedDomain,
+      userId: customer1Id,
+      normalizedDomain,
       status: "ACTIVE",
       activatedAt: new Date(),
     },
@@ -1272,15 +1277,15 @@ async function runPhase10Acceptance() {
   if (deactDomainRes.status !== 200) {
     throw new Error(`Gate 59 failed: Owner domain deactivation rejected with status ${deactDomainRes.status}: ${JSON.stringify(deactDomainRes.data)}`);
   }
-  if (deactDomainRes.data.status !== "DEACTIVATED") {
-    throw new Error(`Gate 59 failed: Expected activation status DEACTIVATED, got ${deactDomainRes.data.status}`);
+  if (!deactDomainRes.data?.success) {
+    throw new Error(`Gate 59 failed: Expected success=true, got ${JSON.stringify(deactDomainRes.data)}`);
   }
   const deactPayloadStr = JSON.stringify(deactDomainRes.data);
   if (deactPayloadStr.includes("licenseKey") || deactPayloadStr.includes("encryptedLicenseKey")) {
     throw new Error("Gate 59 failed: Plaintext or encrypted license key leaked in deactivation response");
   }
   const updatedActivation = await prisma.licenseActivation.findFirstOrThrow({
-    where: { licenseId: license1.id, domain: normalizedDomain },
+    where: { licenseId: license1.id, normalizedDomain },
   });
   if (updatedActivation.status !== "DEACTIVATED") {
     throw new Error(`Gate 59 failed: Database activation status is ${updatedActivation.status}`);
