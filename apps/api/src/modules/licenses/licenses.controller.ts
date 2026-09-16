@@ -5,6 +5,8 @@ import {
   Param,
   UseGuards,
   Req,
+  HttpCode,
+  HttpStatus,
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { LicensesService } from "./licenses.service";
@@ -29,6 +31,7 @@ export class LicensesController {
   }
 
   @Post(":id/reveal")
+  @HttpCode(HttpStatus.OK)
   async revealLicense(
     @Req() req: any,
     @Param("id") id: string,

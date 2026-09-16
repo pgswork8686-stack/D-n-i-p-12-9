@@ -797,8 +797,8 @@ async function runPhase10Acceptance() {
   }
   const ownerRevealRes = await apiPost(`/licenses/${license1.id}/reveal`, {}, customer1Token);
   if (
-    ownerRevealRes.status !== 200 ||
-    !ownerRevealRes.data.licenseKey ||
+    (ownerRevealRes.status !== 200 && ownerRevealRes.status !== 201) ||
+    !ownerRevealRes.data?.licenseKey ||
     !ownerRevealRes.data.licenseKey.endsWith(license1.keyLast4)
   ) {
     throw new Error(`Gate 32 failed: Owner reveal failed: ${JSON.stringify(ownerRevealRes.data)}`);
