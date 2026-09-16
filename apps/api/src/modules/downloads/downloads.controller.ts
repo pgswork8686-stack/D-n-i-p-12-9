@@ -1,6 +1,8 @@
 import {
   Controller,
+  Get,
   Post,
+  Param,
   Body,
   UseGuards,
   Req,
@@ -25,6 +27,18 @@ export class DownloadsController {
       dto,
       ipAddress,
       userAgent,
+    );
+  }
+
+  @Get("entitlements/:entitlementId/versions")
+  async listEligibleVersions(
+    @Param("entitlementId") entitlementId: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user.id;
+    return this.downloadsService.listEligibleVersionsForEntitlement(
+      userId,
+      entitlementId,
     );
   }
 }

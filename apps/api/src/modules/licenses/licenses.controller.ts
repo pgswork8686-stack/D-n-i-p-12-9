@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { LicensesService } from "./licenses.service";
-import { CustomerLicenseDto, RevealLicenseResponse } from "@nexus/contracts";
+import { CustomerLicenseDto, RevealLicenseResponse, CustomerLicenseActivationDto } from "@nexus/contracts";
 
 @Controller("licenses")
 @UseGuards(AuthGuard)
@@ -34,5 +34,13 @@ export class LicensesController {
     @Param("id") id: string,
   ): Promise<RevealLicenseResponse> {
     return this.licensesService.customerRevealLicenseKey(id, req.user.id);
+  }
+
+  @Get(":id/activations")
+  async listCustomerLicenseActivations(
+    @Req() req: any,
+    @Param("id") id: string,
+  ): Promise<CustomerLicenseActivationDto[]> {
+    return this.licensesService.listCustomerLicenseActivations(id, req.user.id);
   }
 }

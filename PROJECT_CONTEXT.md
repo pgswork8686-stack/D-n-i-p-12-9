@@ -341,6 +341,33 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Session retrieval and reconciliation are mode-checked the same way**: `getPaymentSession()` returns `null` (never fabricating a URL) and `queryPaymentStatus()` returns `null` (never a false status) whenever the retrieved Stripe object's `livemode` does not match `expectedLivemode`. Because `reconcilePayment()` treats a `null` provider status as "no provider status available", a test-mode Session — even one reporting `payment_status: "paid"` — can never transition a production Payment; the outcome is `transitioned: false`, fail-safe.
 - **Mock mode remains the only non-production shortcut**: all of the above checks are skipped when `config.isMock` is true, which is itself impossible in production (`STRIPE_MOCK_CLIENT=true` still fails closed at startup). This keeps the entire Phase 4–73 acceptance suite, which runs Stripe in mock mode, unaffected by the live-mode boundary.
 
+### Phase 10 — Customer Portal Architecture & Security
+- **Strict Client-Only Architecture**: `apps/portal` is a Next.js client application consuming `@nexus/sdk` and NestJS API via HTTP. It has zero access to Prisma, PostgreSQL, Redis, or internal microservices.
+- **Zero Client Payment Authority**: Browser redirects and page navigation (e.g. `/payment/result?orderId=...`) have zero authority to mark orders `PAID` or create entitlements. Order status updates are driven purely by backend-verified webhooks or authoritative reconciliation. Payment retry triggers `POST /v1/orders/:id/payment-session` to create an authoritative provider session with server-calculated amounts and currencies.
+- **Zero Client Entitlement Authority**: Frontend cannot directly create, update, or activate entitlements. Entitlements are only issued via backend state transitions upon verified payment receipt.
+- **Download Protection & Ephemeral URLs**: Permanent R2 storage keys and URLs are never exposed. Downloads require active, unrevoked, unexpired entitlements and are served exclusively via short-lived signed URLs generated on-demand by `POST /v1/downloads/request`.
+- **License Secret Hygiene**: Internal license keys are masked by default (`NXS-****-...-9999`) in list and detail responses. Plaintext keys are revealed only on explicit customer request (`POST /licenses/:id/reveal`). Encryption keys, ciphertext, and IVs are strictly confined to backend memory.
+- **External Managed Allocations (Elementor)**: Domain submissions are normalized by backend utils before storage. The portal enables customers to view slots and request deactivations (`POST /entitlements/:id/allocations/:id/request-deactivation`). Upstream provider credentials, vendor tokens, and session cookies are completely omitted from customer payloads.
+- **Cross-User Isolation & Anti-Enumeration**: Every portal endpoint enforces ownership at the backend service layer. Attempting to view, download, reveal, or mutate another user's order, entitlement, license, or allocation yields 404 Not Found (or 403 Forbidden on unowned actions), completely preventing resource enumeration.
+- **Backend API Endpoints Added for Portal**:
+  - `GET /v1/downloads/entitlements/:entitlementId/versions`: Lists eligible published versions and files for the customer's active entitlement.
+  - `GET /licenses/:id/activations`: Lists customer-visible active domain activations for an internal license.
+- **Routes Implemented (`apps/portal`)**:
+  - `/login`: Dev token selector (guarded by dev flag) and JWT authentication.
+  - `/` (Dashboard): Stat cards, recent orders, active entitlements, quick actions.
+  - `/orders`: Paginated order history with status pills and formatted currencies.
+  - `/orders/[id]`: Order detail with immutable item snapshots, payment status, and payment retry.
+  - `/entitlements`: Active products, support/update validity windows, fulfillment type badges.
+  - `/entitlements/[id]`: Entitlement detail, version access, and fulfillment actions.
+  - `/downloads`: Downloads hub with file metadata and one-click ephemeral download signing.
+  - `/licenses`: Internal licenses list with masked keys.
+  - `/licenses/[id]`: Internal license detail with reveal flow, copy-to-clipboard, activations list, and deactivation.
+  - `/allocations`: External managed allocations (Elementor) with domain submission, slot status, and deactivation requests.
+  - `/account`: Authenticated user profile, roles, and permissions count.
+  - `/payment/result`: Read-only polling page verifying payment status without asserting authority.
+- **Acceptance Suite (47 Gates)**: `packages/database/scripts/phase10-acceptance.ts` validates unauthenticated 401s, RBAC, cross-user 404 anti-enumeration, immutable snapshot integrity, payment retry session creation, rejection of client status mutation, download access gating, license masking/reveal, allocation provider secret omission, domain normalization, pagination contracts, error sanitization, SDK token propagation, and production build manifest smoke verification.
+
+
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
 - Rate limiting

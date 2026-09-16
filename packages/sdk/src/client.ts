@@ -55,6 +55,13 @@ import {
   DownloadUrlResponse,
   CheckUpdateRequest,
   CheckUpdateResponse,
+  CustomerLicenseDto,
+  CustomerLicenseActivationDto,
+  RevealLicenseResponse,
+  DeactivateLicenseRequest,
+  DeactivateLicenseResponse,
+  CreatePaymentSessionRequest,
+  PaymentSessionResponse,
 } from "@nexus/contracts";
 
 
@@ -1115,6 +1122,116 @@ export class NexusApiClient {
       throw new Error(`Check update failed (${res.status}): ${err}`);
     }
     return (await res.json()) as CheckUpdateResponse;
+  }
+
+  // ----------------------------------------------------
+  // Customer Orders & Payments
+  // ----------------------------------------------------
+
+  async createPaymentSession(
+    orderId: string,
+    dto?: CreatePaymentSessionRequest,
+  ): Promise<PaymentSessionResponse> {
+    const res = await fetch(`${this.baseUrl}/orders/${orderId}/payment-session`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto || {}),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Create payment session failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PaymentSessionResponse;
+  }
+
+  // ----------------------------------------------------
+  // Customer Licenses
+  // ----------------------------------------------------
+
+  async listLicenses(): Promise<CustomerLicenseDto[]> {
+    const res = await fetch(`${this.baseUrl}/licenses`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List licenses failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerLicenseDto[];
+  }
+
+  async getLicense(id: string): Promise<CustomerLicenseDto> {
+    const res = await fetch(`${this.baseUrl}/licenses/${id}`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get license failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerLicenseDto;
+  }
+
+  async revealLicense(id: string): Promise<RevealLicenseResponse> {
+    const res = await fetch(`${this.baseUrl}/licenses/${id}/reveal`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Reveal license failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as RevealLicenseResponse;
+  }
+
+  async listLicenseActivations(
+    licenseId: string,
+  ): Promise<CustomerLicenseActivationDto[]> {
+    const res = await fetch(`${this.baseUrl}/licenses/${licenseId}/activations`, {
+      headers: this.buildHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List license activations failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as CustomerLicenseActivationDto[];
+  }
+
+  async deactivateLicense(
+    dto: DeactivateLicenseRequest,
+  ): Promise<DeactivateLicenseResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/licenses/deactivate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Deactivate license failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as DeactivateLicenseResponse;
+  }
+
+  // ----------------------------------------------------
+  // Customer Entitlement Eligible Versions
+  // ----------------------------------------------------
+
+  async listEntitlementVersions(
+    entitlementId: string,
+  ): Promise<ProductVersionDto[]> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/downloads/entitlements/${entitlementId}/versions`,
+      {
+        headers: this.buildHeaders(),
+        cache: "no-store",
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List entitlement versions failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ProductVersionDto[];
   }
 
   private buildHeaders(): Record<string, string> {
