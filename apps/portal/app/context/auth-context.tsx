@@ -6,6 +6,7 @@ import React, {
   useEffect,
   useState,
   useCallback,
+  useRef,
 } from "react";
 import { AuthMeResponse } from "@nexus/contracts";
 import { getApiClient } from "../lib/api";
@@ -38,9 +39,140 @@ export function isDevAuthToolsEnabled(): boolean {
   );
 }
 
-interface FetchProfileResult {
+export interface FetchProfileResult {
   profile: AuthMeResponse | null;
   isAuthError: boolean;
+}
+
+export interface HydrationActions {
+  setToken: (token: string | null) => void;
+  setUser: (user: AuthMeResponse | null) => void;
+  setIsConnectivityError: (isError: boolean) => void;
+}
+
+export interface HydrationOptions {
+  apiClient?: { getAuthMe: () => Promise<AuthMeResponse> };
+  supabaseClient?: { auth: { signOut: (opts?: { scope?: string }) => Promise<any> } } | null;
+  isDevAuthEnabled?: boolean;
+  storage?: { setItem: (k: string, v: string) => void; removeItem: (k: string) => void } | null;
+  isMounted?: () => boolean;
+}
+
+/**
+ * Authoritative session hydration helper.
+ * - Sets token & user state when profile succeeds.
+ * - On 401: Clears state and invokes signOut with explicit local scope ({ scope: "local" }).
+ * - On 5xx/network error: Preserves session token, sets connectivity flag (setIsConnectivityError(true)), does NOT sign out.
+ */
+export async function handleAuthSessionHydration(
+  authToken: string,
+  actions: HydrationActions,
+  options: HydrationOptions = {},
+): Promise<boolean> {
+  const isMounted = options.isMounted ?? (() => true);
+  const client = options.apiClient ?? getApiClient(authToken);
+  const supabase =
+    options.supabaseClient !== undefined
+      ? options.supabaseClient
+      : getSupabaseClient();
+  const devAuthEnabled =
+    options.isDevAuthEnabled !== undefined
+      ? options.isDevAuthEnabled
+      : isDevAuthToolsEnabled();
+  const storage =
+    options.storage !== undefined
+      ? options.storage
+      : typeof window !== "undefined"
+        ? localStorage
+        : null;
+
+  try {
+    const profile = await client.getAuthMe();
+    if (!isMounted()) return false;
+
+    actions.setToken(authToken);
+    actions.setUser(profile);
+    actions.setIsConnectivityError(false);
+
+    if (storage && !supabase && devAuthEnabled) {
+      storage.setItem(TOKEN_KEY, authToken);
+    }
+    return true;
+  } catch (err: any) {
+    if (!isMounted()) return false;
+    const status = err?.status || err?.statusCode;
+    const msg = String(err?.message || "").toLowerCase();
+    const isAuthError =
+      status === 401 ||
+      msg.includes("401") ||
+      msg.includes("unauthorized") ||
+      msg.includes("invalid token");
+
+    if (isAuthError) {
+      // 401 / Invalid auth -> Purge session and token with explicit local signout scope
+      if (storage) {
+        storage.removeItem(TOKEN_KEY);
+      }
+      if (supabase) {
+        await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      }
+      if (!isMounted()) return false;
+      actions.setToken(null);
+      actions.setUser(null);
+      actions.setIsConnectivityError(false);
+      return false;
+    } else {
+      // Network error / 5xx / timeout -> PRESERVE session and token
+      actions.setToken(authToken);
+      actions.setIsConnectivityError(true);
+      return false;
+    }
+  }
+}
+
+/**
+ * Creates a deadlock-safe Supabase auth state listener.
+ * - Callback is synchronous and returns immediately.
+ * - Any async task (like hydration or signOut) is deferred via setTimeout(..., 0).
+ */
+export function createSupabaseAuthListener(
+  supabase: {
+    auth: {
+      onAuthStateChange: (
+        cb: (event: string, session: any) => void,
+      ) => { data: { subscription: { unsubscribe: () => void } } };
+    };
+  },
+  onSessionToken: (token: string) => void,
+  onSignedOut: () => void,
+  isMounted: () => boolean = () => true,
+): { unsubscribe: () => void } {
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((event, session) => {
+    if (!isMounted()) return;
+    if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+      const accessToken = session?.access_token;
+      if (accessToken) {
+        setTimeout(() => {
+          if (!isMounted()) return;
+          onSessionToken(accessToken);
+        }, 0);
+      }
+    } else if (event === "SIGNED_OUT") {
+      onSignedOut();
+    }
+  });
+
+  return subscription;
+}
+
+export function shouldSkipDuplicateHydration(
+  activeHydratedToken: string | null,
+  newAuthToken: string,
+  user: any | null,
+): boolean {
+  return activeHydratedToken === newAuthToken && user !== null;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -49,62 +181,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isConnectivityError, setIsConnectivityError] = useState<boolean>(false);
 
-  const fetchUserProfile = useCallback(
-    async (authToken: string): Promise<FetchProfileResult> => {
-      try {
-        const client = getApiClient(authToken);
-        const profile = await client.getAuthMe();
-        return { profile, isAuthError: false };
-      } catch (err: any) {
-        const status = err?.status || err?.statusCode;
-        const msg = String(err?.message || "").toLowerCase();
-        const isAuthError =
-          status === 401 ||
-          msg.includes("401") ||
-          msg.includes("unauthorized") ||
-          msg.includes("invalid token");
-        return { profile: null, isAuthError: Boolean(isAuthError) };
-      }
-    },
-    [],
-  );
+  // Track the most recently hydrated token to prevent duplicate /auth/me requests
+  // between synchronous sign-in resolution and async onAuthStateChange events.
+  const activeHydratedTokenRef = useRef<string | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const hydrateSession = useCallback(
     async (authToken: string): Promise<boolean> => {
-      const { profile, isAuthError } = await fetchUserProfile(authToken);
-      if (profile) {
-        setToken(authToken);
-        setUser(profile);
-        setIsConnectivityError(false);
-        if (
-          typeof window !== "undefined" &&
-          !getSupabaseClient() &&
-          isDevAuthToolsEnabled()
-        ) {
-          localStorage.setItem(TOKEN_KEY, authToken);
-        }
+      if (shouldSkipDuplicateHydration(activeHydratedTokenRef.current, authToken, user)) {
         return true;
-      } else if (isAuthError) {
-        // 401 / Invalid auth -> Purge session and token
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(TOKEN_KEY);
-        }
-        const supabase = getSupabaseClient();
-        if (supabase) {
-          await supabase.auth.signOut().catch(() => {});
-        }
-        setToken(null);
-        setUser(null);
-        setIsConnectivityError(false);
-        return false;
-      } else {
-        // Network error / 5xx / timeout -> PRESERVE session and token
-        setToken(authToken);
-        setIsConnectivityError(true);
-        return false;
       }
+
+      const success = await handleAuthSessionHydration(
+        authToken,
+        {
+          setToken,
+          setUser,
+          setIsConnectivityError,
+        },
+        {
+          isMounted: () => isMountedRef.current,
+        },
+      );
+
+      if (success) {
+        activeHydratedTokenRef.current = authToken;
+      } else {
+        activeHydratedTokenRef.current = null;
+      }
+      return success;
     },
-    [fetchUserProfile],
+    [user],
   );
 
   useEffect(() => {
@@ -112,7 +226,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const supabase = getSupabaseClient();
 
     if (supabase) {
-      // 1. Restore official Supabase session
+      // 1. Restore official Supabase session on mount
       supabase.auth
         .getSession()
         .then(({ data: { session }, error }) => {
@@ -140,24 +254,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (isMounted) setIsLoading(false);
         });
 
-      // 2. Subscribe to auth state change events
-      const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (!isMounted) return;
-        if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-          if (session?.access_token) {
-            await hydrateSession(session.access_token);
-          }
-        } else if (event === "SIGNED_OUT") {
+      // 2. Subscribe to auth state change events via deadlock-safe listener
+      const subscription = createSupabaseAuthListener(
+        supabase,
+        (accessToken) => {
+          void hydrateSession(accessToken);
+        },
+        () => {
+          activeHydratedTokenRef.current = null;
           setToken(null);
           setUser(null);
           setIsConnectivityError(false);
           if (typeof window !== "undefined") {
             localStorage.removeItem(TOKEN_KEY);
           }
-        }
-      });
+        },
+        () => isMounted,
+      );
 
       return () => {
         isMounted = false;
@@ -249,13 +362,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [loginWithPassword, loginWithDevToken],
   );
 
+  /**
+   * Explicit local signout policy:
+   * Terminate current browser session without affecting active sessions on other devices.
+   */
   const logout = useCallback(async () => {
+    activeHydratedTokenRef.current = null;
     if (typeof window !== "undefined") {
       localStorage.removeItem(TOKEN_KEY);
     }
     const supabase = getSupabaseClient();
     if (supabase) {
-      await supabase.auth.signOut().catch(() => {});
+      await supabase.auth.signOut({ scope: "local" }).catch(() => {});
     }
     setToken(null);
     setUser(null);
@@ -264,18 +382,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     if (token) {
-      const { profile, isAuthError } = await fetchUserProfile(token);
-      if (profile) {
-        setUser(profile);
-        setIsConnectivityError(false);
-      } else if (isAuthError) {
-        await logout();
-      } else {
-        // Network error / 5xx: preserve user & token, set connectivity flag
-        setIsConnectivityError(true);
-      }
+      activeHydratedTokenRef.current = null;
+      await hydrateSession(token);
     }
-  }, [token, fetchUserProfile, logout]);
+  }, [token, hydrateSession]);
 
   return (
     <AuthContext.Provider

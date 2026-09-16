@@ -12,6 +12,13 @@ import { Skeleton } from "../../components/skeleton";
 import { Button, Card } from "@nexus/ui";
 import { OrderDto } from "@nexus/contracts";
 
+async function syncPaymentResultStatus(
+  client: { getOrder: (orderId: string) => Promise<OrderDto> },
+  orderId: string,
+): Promise<OrderDto> {
+  return await client.getOrder(orderId);
+}
+
 function PaymentResultContent() {
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId") || searchParams.get("order_id");
@@ -28,7 +35,7 @@ function PaymentResultContent() {
 
     try {
       const client = getApiClient(token);
-      const res = await client.getOrder(orderId);
+      const res = await syncPaymentResultStatus(client, orderId);
       setOrder(res);
     } catch {
       // Keep existing state on transient fetch error

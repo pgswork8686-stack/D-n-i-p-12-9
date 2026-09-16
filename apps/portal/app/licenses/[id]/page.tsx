@@ -16,6 +16,24 @@ import {
   CustomerLicenseActivationDto,
 } from "@nexus/contracts";
 
+async function executeDomainDeactivation(
+  client: {
+    deactivateLicenseDomain: (licenseId: string, domain: string) => Promise<any>;
+  },
+  licenseId: string,
+  domain: string,
+): Promise<any> {
+  return await client.deactivateLicenseDomain(licenseId, domain);
+}
+
+async function executeLicenseReveal(
+  client: { revealLicense: (licenseId: string) => Promise<{ licenseKey: string }> },
+  licenseId: string,
+): Promise<string> {
+  const res = await client.revealLicense(licenseId);
+  return res.licenseKey;
+}
+
 export default function LicenseDetailPage() {
   const params = useParams();
   const licenseId = params?.id as string;
@@ -66,8 +84,8 @@ export default function LicenseDetailPage() {
     setRevealing(true);
     try {
       const client = getApiClient(token);
-      const res = await client.revealLicense(licenseId);
-      setRevealedKey(res.licenseKey);
+      const plaintextKey = await executeLicenseReveal(client, licenseId);
+      setRevealedKey(plaintextKey);
     } catch (err: any) {
       setError(err.message || "Failed to reveal license key");
     } finally {
@@ -94,7 +112,7 @@ export default function LicenseDetailPage() {
     setDeactivateError(null);
     try {
       const client = getApiClient(token);
-      await client.deactivateLicenseDomain(licenseId, domain);
+      await executeDomainDeactivation(client, licenseId, domain);
       // Refresh activations and license without touching plaintext key
       await fetchLicenseData();
     } catch (err: any) {

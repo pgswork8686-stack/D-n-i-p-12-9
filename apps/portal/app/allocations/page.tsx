@@ -21,6 +21,31 @@ interface EntitlementAllocations {
   allocations: CustomerAllocationDto[];
 }
 
+function filterExternalManagedEntitlements(
+  entitlements: EntitlementDto[],
+): EntitlementDto[] {
+  return entitlements.filter(
+    (e) => e.fulfillmentType === "EXTERNAL_MANAGED" && e.status === "ACTIVE",
+  );
+}
+
+async function loadAllocationsForEntitlements(
+  client: { listAllocations: (id: string) => Promise<CustomerAllocationDto[]> },
+  entitlements: EntitlementDto[],
+): Promise<EntitlementAllocations[]> {
+  const externalEntitlements = filterExternalManagedEntitlements(entitlements);
+  const loaded: EntitlementAllocations[] = [];
+  for (const ent of externalEntitlements) {
+    try {
+      const allocs = await client.listAllocations(ent.id);
+      loaded.push({ entitlement: ent, allocations: allocs || [] });
+    } catch {
+      loaded.push({ entitlement: ent, allocations: [] });
+    }
+  }
+  return loaded;
+}
+
 export default function AllocationsPage() {
   const { token } = useAuth();
   const [data, setData] = useState<EntitlementAllocations[]>([]);
@@ -41,19 +66,10 @@ export default function AllocationsPage() {
     try {
       const client = getApiClient(token);
       const entitlementsRes = await client.listEntitlements({ limit: 50 });
-      const externalEntitlements = (entitlementsRes.items || []).filter(
-        (e) => e.fulfillmentType === "EXTERNAL_MANAGED" && e.status === "ACTIVE",
+      const loaded = await loadAllocationsForEntitlements(
+        client,
+        entitlementsRes.items || [],
       );
-
-      const loaded: EntitlementAllocations[] = [];
-      for (const ent of externalEntitlements) {
-        try {
-          const allocs = await client.listAllocations(ent.id);
-          loaded.push({ entitlement: ent, allocations: allocs || [] });
-        } catch {
-          loaded.push({ entitlement: ent, allocations: [] });
-        }
-      }
 
       setData(loaded);
       if (loaded.length > 0 && !selectedEntitlementId) {

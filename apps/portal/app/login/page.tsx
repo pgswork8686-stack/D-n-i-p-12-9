@@ -13,9 +13,19 @@ function isDevAuthToolsEnabled(): boolean {
   );
 }
 
+function isSupabaseConfigured(): boolean {
+  return Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+}
+
 export default function LoginPage() {
   const { loginWithPassword, loginWithDevToken, user } = useAuth();
   const router = useRouter();
+
+  const isProductionUnconfigured =
+    process.env.NODE_ENV === "production" && !isSupabaseConfigured();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,6 +39,10 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isProductionUnconfigured) {
+      setError("Authentication service is temporarily unavailable. Please try again later.");
+      return;
+    }
     if (!email.trim() || !password) {
       setError("Please enter both your email address and password.");
       return;
@@ -77,6 +91,12 @@ export default function LoginPage() {
         </div>
 
         <Card title="Customer Sign In" subtitle="Enter your account credentials">
+          {isProductionUnconfigured && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium">
+              ⚠️ Authentication service is currently unavailable. Please check back later or contact customer support.
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4 pt-2">
             <div>
               <label
@@ -94,7 +114,8 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="customer@example.com"
                 required
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0037b0] focus:bg-white transition"
+                disabled={loading || isProductionUnconfigured}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0037b0] focus:bg-white transition disabled:opacity-60"
               />
             </div>
 
@@ -114,7 +135,8 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0037b0] focus:bg-white transition"
+                disabled={loading || isProductionUnconfigured}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0037b0] focus:bg-white transition disabled:opacity-60"
               />
             </div>
 
@@ -153,7 +175,7 @@ export default function LoginPage() {
               variant="primary"
               size="md"
               className="w-full justify-center"
-              disabled={loading}
+              disabled={loading || isProductionUnconfigured}
             >
               {loading ? "Authenticating..." : "Sign In to Portal →"}
             </Button>

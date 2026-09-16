@@ -12,6 +12,28 @@ import { Skeleton } from "../../components/skeleton";
 import { ErrorState } from "../../components/error-state";
 import { Button, Card } from "@nexus/ui";
 import { EntitlementDto, CustomerProductVersionDto } from "@nexus/contracts";
+interface EntitlementActionCta {
+  label: string;
+  href: string;
+}
+
+function resolveEntitlementActionCta(
+  fulfillmentType: string,
+): EntitlementActionCta | null {
+  if (fulfillmentType === "INTERNAL_LICENSE") {
+    return {
+      label: "View License Keys 🔑",
+      href: "/licenses",
+    };
+  }
+  if (fulfillmentType === "EXTERNAL_MANAGED") {
+    return {
+      label: "Manage Domain Allocations 🌐",
+      href: "/allocations",
+    };
+  }
+  return null;
+}
 
 export default function EntitlementDetailPage() {
   const params = useParams();
