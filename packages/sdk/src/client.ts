@@ -58,6 +58,7 @@ import {
   CustomerLicenseDto,
   CustomerLicenseActivationDto,
   RevealLicenseResponse,
+  CustomerProductVersionDto,
   DeactivateLicenseRequest,
   DeactivateLicenseResponse,
   CreatePaymentSessionRequest,
@@ -1213,13 +1214,32 @@ export class NexusApiClient {
     return (await res.json()) as DeactivateLicenseResponse;
   }
 
+  async deactivateLicenseDomain(
+    licenseId: string,
+    domain: string,
+  ): Promise<DeactivateLicenseResponse> {
+    const res = await fetch(
+      `${this.baseUrl}/licenses/${licenseId}/deactivate-domain`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ domain }),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Deactivate domain failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as DeactivateLicenseResponse;
+  }
+
   // ----------------------------------------------------
   // Customer Entitlement Eligible Versions
   // ----------------------------------------------------
 
   async listEntitlementVersions(
     entitlementId: string,
-  ): Promise<ProductVersionDto[]> {
+  ): Promise<CustomerProductVersionDto[]> {
     const res = await fetch(
       `${this.baseUrl}/v1/downloads/entitlements/${entitlementId}/versions`,
       {
@@ -1231,7 +1251,7 @@ export class NexusApiClient {
       const err = await res.text();
       throw new Error(`List entitlement versions failed (${res.status}): ${err}`);
     }
-    return (await res.json()) as ProductVersionDto[];
+    return (await res.json()) as CustomerProductVersionDto[];
   }
 
   private buildHeaders(): Record<string, string> {

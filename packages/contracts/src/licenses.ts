@@ -64,6 +64,10 @@ export interface DeactivateLicenseRequest {
   domain: string;
 }
 
+export interface DeactivateLicenseDomainRequest {
+  domain: string;
+}
+
 export interface DeactivateLicenseResponse {
   success: boolean;
   domain: string;

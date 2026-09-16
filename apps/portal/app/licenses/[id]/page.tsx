@@ -54,7 +54,11 @@ export default function LicenseDetailPage() {
   }, [token, licenseId]);
 
   useEffect(() => {
+    setRevealedKey(null);
     fetchLicenseData();
+    return () => {
+      setRevealedKey(null);
+    };
   }, [fetchLicenseData]);
 
   const handleReveal = async () => {
@@ -71,6 +75,10 @@ export default function LicenseDetailPage() {
     }
   };
 
+  const handleHideKey = () => {
+    setRevealedKey(null);
+  };
+
   const handleCopy = () => {
     if (revealedKey) {
       navigator.clipboard.writeText(revealedKey);
@@ -80,30 +88,14 @@ export default function LicenseDetailPage() {
   };
 
   const handleDeactivate = async (domain: string) => {
-    if (!token) return;
-    // We need the plaintext key to perform the authoritative deactivation
-    let keyToUse = revealedKey;
-    if (!keyToUse) {
-      try {
-        const client = getApiClient(token);
-        const res = await client.revealLicense(licenseId);
-        keyToUse = res.licenseKey;
-        setRevealedKey(res.licenseKey);
-      } catch {
-        setDeactivateError("Failed to reveal key for deactivation.");
-        return;
-      }
-    }
+    if (!token || !licenseId) return;
 
     setDeactivatingDomain(domain);
     setDeactivateError(null);
     try {
       const client = getApiClient(token);
-      await client.deactivateLicense({
-        licenseKey: keyToUse,
-        domain,
-      });
-      // Refresh activations and license
+      await client.deactivateLicenseDomain(licenseId, domain);
+      // Refresh activations and license without touching plaintext key
       await fetchLicenseData();
     } catch (err: any) {
       setDeactivateError(err.message || "Deactivation failed.");
@@ -171,9 +163,14 @@ export default function LicenseDetailPage() {
                             {revealing ? "Revealing..." : "Reveal Key 👁️"}
                           </Button>
                         ) : (
-                          <Button variant="secondary" size="sm" onClick={handleCopy}>
-                            {copied ? "Copied! ✓" : "Copy Key 📋"}
-                          </Button>
+                          <>
+                            <Button variant="secondary" size="sm" onClick={handleCopy}>
+                              {copied ? "Copied! ✓" : "Copy Key 📋"}
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleHideKey}>
+                              Hide Key 🔒
+                            </Button>
+                          </>
                         )}
                       </div>
                     </div>

@@ -50,7 +50,10 @@ export default function OrderDetailPage() {
     setRetryError(null);
     try {
       const client = getApiClient(token);
-      const session = await client.createPaymentSession(order.id);
+      const session = await client.createPaymentSession(order.id, {
+        successUrl: `/payment/result?orderId=${order.id}`,
+        cancelUrl: `/orders/${order.id}`,
+      });
       if (session && session.sessionUrl) {
         window.location.href = session.sessionUrl;
       } else {

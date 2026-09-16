@@ -352,20 +352,13 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Backend API Endpoints Added for Portal**:
   - `GET /v1/downloads/entitlements/:entitlementId/versions`: Lists eligible published versions and files for the customer's active entitlement.
   - `GET /licenses/:id/activations`: Lists customer-visible active domain activations for an internal license.
-- **Routes Implemented (`apps/portal`)**:
-  - `/login`: Dev token selector (guarded by dev flag) and JWT authentication.
-  - `/` (Dashboard): Stat cards, recent orders, active entitlements, quick actions.
-  - `/orders`: Paginated order history with status pills and formatted currencies.
-  - `/orders/[id]`: Order detail with immutable item snapshots, payment status, and payment retry.
-  - `/entitlements`: Active products, support/update validity windows, fulfillment type badges.
-  - `/entitlements/[id]`: Entitlement detail, version access, and fulfillment actions.
-  - `/downloads`: Downloads hub with file metadata and one-click ephemeral download signing.
-  - `/licenses`: Internal licenses list with masked keys.
-  - `/licenses/[id]`: Internal license detail with reveal flow, copy-to-clipboard, activations list, and deactivation.
-  - `/allocations`: External managed allocations (Elementor) with domain submission, slot status, and deactivation requests.
-  - `/account`: Authenticated user profile, roles, and permissions count.
-  - `/payment/result`: Read-only polling page verifying payment status without asserting authority.
-- **Acceptance Suite (47 Gates)**: `packages/database/scripts/phase10-acceptance.ts` validates unauthenticated 401s, RBAC, cross-user 404 anti-enumeration, immutable snapshot integrity, payment retry session creation, rejection of client status mutation, download access gating, license masking/reveal, allocation provider secret omission, domain normalization, pagination contracts, error sanitization, SDK token propagation, and production build manifest smoke verification.
+- **Real Supabase Customer Authentication & Session Lifecycle**: Replaced raw token-paste login with real email/password authentication using official Supabase client (`@supabase/supabase-js`). Implemented complete session lifecycle (`getSession`, `onAuthStateChange`, `signInWithPassword`, `signOut`). Established resilient session failure semantics: HTTP 401 unauthorizes and purges session tokens, whereas network errors and HTTP 5xx preserve session tokens with connectivity banner. Development auth presets are strictly omitted in production (`NODE_ENV === "production"`).
+- **Customer Version Data Boundaries (`CustomerProductVersionDto`)**: Established dedicated customer DTOs that strictly omit `storageKey`, private S3/R2 object paths, bucket names, and verification internals (`verifiedAt`). Customers only see version string, release notes, release date, and file metadata (`fileName`, `contentType`, `sizeBytes`, `sha256`, `isPrimary`). Ephemeral signed download URLs are exclusively issued via authorized `POST /v1/downloads/request`.
+- **License Secret Hygiene & Owner Deactivation**: Added authenticated owner endpoint `POST /licenses/:id/deactivate-domain` that accepts `{ domain }` without requiring or transmitting plaintext license keys. Domain deactivation is decoupled from key reveal; keys are only revealed via explicit user action ("Reveal Key 👁️") with a prominent "Hide Key 🔒" button, and revealed keys are cleared on component unmount and navigation.
+- **Canonical Fulfillment Type (`EXTERNAL_MANAGED`)**: Aligned all portal logic, filters, and allocation interfaces to canonical `FulfillmentType.EXTERNAL_MANAGED` (replacing legacy `EXTERNAL_LICENSE` references).
+- **Payment Return Relative Paths & Read-Only Safety**: Payment retry flows generate safe relative return paths (`/payment/result?orderId=...`). `/payment/result` operates strictly as a read-only synchronization polling page with zero client authority to transition order status or grant entitlements.
+- **Portal Component Tests**: Added automated component tests in `apps/portal/app/__tests__/portal-components.spec.tsx` verifying production login authority, dev preset exclusion, `CustomerProductVersionDto` boundaries, deactivation secret hygiene, `EXTERNAL_MANAGED` filtering, and session failure semantics.
+- **Acceptance Suite Expanded to 60 Gates**: `packages/database/scripts/phase10-acceptance.ts` expanded to 60 gates, adding validation for production login fields, dev preset omission, real auth hydration, connectivity error preservation, zero `storageKey` exposure, signed download URL gating, `EXTERNAL_MANAGED` filtering & actions, relative payment return URLs, read-only payment result safety, and plaintext-free owner domain deactivation with cross-user 404 anti-enumeration.
 
 
 ## Security baseline

@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
 import {
   prisma,
   ProductType,
@@ -155,7 +156,7 @@ async function apiPut(endpoint: string, body: any, token?: string) {
 
 async function runPhase10Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 10 — CUSTOMER PORTAL ACCEPTANCE SUITE (47 GATES)");
+  console.log("PHASE 10 — CUSTOMER PORTAL ACCEPTANCE SUITE (60 GATES)");
   console.log("==================================================");
 
   // Setup API
@@ -1043,8 +1044,263 @@ async function runPhase10Acceptance() {
   }
   console.log(`✓ Gate 47 passed: All ${requiredRoutes.length} Customer Portal routes verified in production build manifest`);
 
+  // Gate 48: Production Portal Login Has No Raw Bearer-Token Input
+  console.log("\n[Gate 48] Production Portal login has no raw bearer-token input...");
+  const loginPageSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../apps/portal/app/login/page.tsx"),
+    "utf-8",
+  );
+  if (
+    loginPageSource.includes("Session Bearer Token") ||
+    loginPageSource.includes("paste a valid JWT or access token")
+  ) {
+    throw new Error("Gate 48 failed: Production portal login page still contains raw bearer-token prompt");
+  }
+  if (!loginPageSource.includes('type="email"') || !loginPageSource.includes('type="password"')) {
+    throw new Error("Gate 48 failed: Login page must contain email and password input fields");
+  }
+  console.log("✓ Gate 48 passed: Production Portal login provides clean email/password authentication without bearer token input");
+
+  // Gate 49: Dev Auth Presets Absent in Production
+  console.log("\n[Gate 49] Dev auth presets strictly absent when NODE_ENV is production...");
+  if (
+    !loginPageSource.includes("isDevAuthToolsEnabled =") ||
+    !loginPageSource.includes('process.env.NODE_ENV !== "production"')
+  ) {
+    throw new Error("Gate 49 failed: Dev auth tools are not guarded by NODE_ENV !== 'production'");
+  }
+  console.log("✓ Gate 49 passed: Dev auth presets are strictly omitted in production environments");
+
+  // Gate 50: Valid Real Auth Session Hydrates Customer Identity
+  console.log("\n[Gate 50] Valid real auth session hydrates customer identity...");
+  const meHydrate = await apiGet("/auth/me", customer1Token);
+  if (meHydrate.status !== 200 || !meHydrate.data?.id || meHydrate.data?.role !== "CUSTOMER") {
+    throw new Error("Gate 50 failed: Real customer session failed to hydrate identity");
+  }
+  console.log("✓ Gate 50 passed: Real auth session successfully hydrates customer identity");
+
+  // Gate 51: Temporary API/Network Error Does Not Destroy Auth Session
+  console.log("\n[Gate 51] Temporary API / network error does not destroy auth session...");
+  const authContextSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../apps/portal/app/context/auth-context.tsx"),
+    "utf-8",
+  );
+  if (
+    !authContextSource.includes("setIsConnectivityError(true)") ||
+    !authContextSource.includes("isAuthError")
+  ) {
+    throw new Error("Gate 51 failed: Auth context does not distinguish 401 from connectivity errors");
+  }
+  console.log("✓ Gate 51 passed: Connectivity and 5xx errors preserve authentication session");
+
+  // Gate 52: Customer Version Response Contains Zero storageKey / Private Object Path
+  console.log("\n[Gate 52] Customer version response contains zero storageKey or private object path...");
+  const custVerRes = await apiGet(
+    `/v1/downloads/entitlements/${entitlement1.id}/versions`,
+    customer1Token,
+  );
+  if (custVerRes.status !== 200 || !Array.isArray(custVerRes.data) || custVerRes.data.length === 0) {
+    throw new Error("Gate 52 failed: Could not fetch customer version list");
+  }
+  const rawCustVerJson = JSON.stringify(custVerRes.data);
+  if (
+    rawCustVerJson.includes("storageKey") ||
+    rawCustVerJson.includes("storage.nexus.internal") ||
+    rawCustVerJson.includes("s3://") ||
+    rawCustVerJson.includes("bucket")
+  ) {
+    throw new Error("Gate 52 failed: Customer version response leaked internal storageKey or bucket metadata: " + rawCustVerJson);
+  }
+  for (const v of custVerRes.data) {
+    if (v.storageKey !== undefined || (v.files && v.files.some((f: any) => f.storageKey !== undefined))) {
+      throw new Error("Gate 52 failed: storageKey property found on CustomerProductVersionDto");
+    }
+  }
+  console.log("✓ Gate 52 passed: CustomerProductVersionDto strictly stripped of storageKey and internal storage metadata");
+
+  // Gate 53: Download Signed URL Only Appears After Authorized Download Request
+  console.log("\n[Gate 53] Download signed URL only appears after authorized download request...");
+  if (rawCustVerJson.includes("downloadUrl") || rawCustVerJson.includes("signature=")) {
+    throw new Error("Gate 53 failed: Versions endpoint prematurely included signed downloadUrl");
+  }
+  const authDownloadRes = await apiPost(
+    "/v1/downloads/request",
+    {
+      entitlementId: entitlement1.id,
+      versionId: version.id,
+      fileId: version.files[0].id,
+    },
+    customer1Token,
+  );
+  if (authDownloadRes.status !== 200 && authDownloadRes.status !== 201) {
+    throw new Error(`Gate 53 failed: Download request failed with status ${authDownloadRes.status}`);
+  }
+  if (!authDownloadRes.data?.downloadUrl) {
+    throw new Error("Gate 53 failed: Download request response missing signed downloadUrl");
+  }
+  console.log("✓ Gate 53 passed: Ephemeral download signed URL generated exclusively on authorized customer request");
+
+  // Gate 54: EXTERNAL_MANAGED Entitlement Is Visible In Allocations Portal Logic
+  console.log("\n[Gate 54] EXTERNAL_MANAGED entitlement is visible in allocations portal logic...");
+  const cust2EntsRes = await apiGet("/entitlements", customer2Token);
+  const cust2Ents = cust2EntsRes.data.items || [];
+  const allocatableEnts = cust2Ents.filter((e: any) => e.fulfillmentType === "EXTERNAL_MANAGED");
+  if (!allocatableEnts.some((e: any) => e.id === entitlement2.id)) {
+    throw new Error("Gate 54 failed: EXTERNAL_MANAGED entitlement missing from allocation filter");
+  }
+  const nonAllocatableEnts = cust2Ents.filter((e: any) => e.fulfillmentType !== "EXTERNAL_MANAGED");
+  if (nonAllocatableEnts.some((e: any) => e.id === entitlement2.id)) {
+    throw new Error("Gate 54 failed: EXTERNAL_MANAGED entitlement erroneously classified as non-allocatable");
+  }
+  console.log("✓ Gate 54 passed: EXTERNAL_MANAGED canonical fulfillmentType correctly filtered for allocations");
+
+  // Gate 55: EXTERNAL_MANAGED Entitlement Detail Shows Allocation Action
+  console.log("\n[Gate 55] EXTERNAL_MANAGED entitlement detail displays allocation action CTA...");
+  const entDetailPageSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../apps/portal/app/entitlements/[id]/page.tsx"),
+    "utf-8",
+  );
+  if (!entDetailPageSource.includes('fulfillmentType === "EXTERNAL_MANAGED"')) {
+    throw new Error("Gate 55 failed: Entitlement detail page does not check EXTERNAL_MANAGED for allocation action CTA");
+  }
+  if (!entDetailPageSource.includes("Manage Domain Allocations")) {
+    throw new Error("Gate 55 failed: Entitlement detail page missing 'Manage Domain Allocations' CTA");
+  }
+  console.log("✓ Gate 55 passed: Entitlement detail page renders allocation action exclusively for EXTERNAL_MANAGED");
+
+  // Gate 56: Payment Session Receives Safe Phase 10 Relative Return URL
+  console.log("\n[Gate 56] Payment session receives safe Phase 10 relative return URL...");
+  const safeReturnOrder = await prisma.order.create({
+    data: {
+      orderNumber: `ORD-P10-SAFE-${Date.now()}`,
+      userId: customer1Id,
+      status: OrderStatus.PENDING_PAYMENT,
+      currency: "USD",
+      subtotalAmount: 1900,
+      discountAmount: 0,
+      totalAmount: 1900,
+      items: {
+        create: {
+          productId: testProduct.id,
+          variantId: testVariant.id,
+          productName: "Portal Test Theme",
+          variantName: "Mini License",
+          sku: "NXS-PORTAL-MINI",
+          productType: ProductType.LICENSED_SOFTWARE,
+          fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+          unitAmount: 1900,
+          quantity: 1,
+          lineTotalAmount: 1900,
+          currency: "USD",
+        },
+      },
+    },
+  });
+  const relativeSessionRes = await apiPost(
+    `/orders/${safeReturnOrder.id}/payment-session`,
+    {
+      successUrl: `/payment/result?orderId=${safeReturnOrder.id}`,
+      cancelUrl: `/orders/${safeReturnOrder.id}`,
+    },
+    customer1Token,
+  );
+  if (relativeSessionRes.status !== 200 && relativeSessionRes.status !== 201) {
+    throw new Error(`Gate 56 failed: Relative URL payment session rejected: ${relativeSessionRes.status}`);
+  }
+  console.log("✓ Gate 56 passed: Safe relative return URL accepted and validated for payment session");
+
+  // Gate 57: Payment Result Route Remains Read-Only / Cannot Mark Order PAID
+  console.log("\n[Gate 57] Payment result route is strictly read-only and cannot mutate order...");
+  const paymentResultSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../apps/portal/app/payment/result/page.tsx"),
+    "utf-8",
+  );
+  if (
+    paymentResultSource.includes("markPaid") ||
+    paymentResultSource.includes("PATCH") ||
+    paymentResultSource.includes("PUT") ||
+    paymentResultSource.includes('status = "PAID"')
+  ) {
+    throw new Error("Gate 57 failed: Payment result page contains mutation logic");
+  }
+  const checkOrder57 = await prisma.order.findUniqueOrThrow({
+    where: { id: safeReturnOrder.id },
+  });
+  if (checkOrder57.status === OrderStatus.PAID) {
+    throw new Error("Gate 57 failed: Order was marked PAID without backend webhook");
+  }
+  console.log("✓ Gate 57 passed: Payment result page has strictly zero payment or entitlement authority");
+
+  // Gate 58: Internal-License Owner Deactivation Does Not Call Key Reveal
+  console.log("\n[Gate 58] Internal-license owner deactivation does not call key reveal...");
+  const licenseDetailPageSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../apps/portal/app/licenses/[id]/page.tsx"),
+    "utf-8",
+  );
+  if (
+    licenseDetailPageSource.includes("handleDeactivate = async") &&
+    licenseDetailPageSource.includes("revealLicense(")
+  ) {
+    const deactFnBody = licenseDetailPageSource.slice(
+      licenseDetailPageSource.indexOf("handleDeactivate = async"),
+      licenseDetailPageSource.indexOf("return ("),
+    );
+    if (deactFnBody.includes("revealLicense")) {
+      throw new Error("Gate 58 failed: handleDeactivate calls revealLicense");
+    }
+  }
+  console.log("✓ Gate 58 passed: Domain deactivation decoupled from key reveal");
+
+  // Gate 59: Internal-License Owner Deactivation Succeeds Without Plaintext Key
+  console.log("\n[Gate 59] Internal-license owner deactivation succeeds without plaintext key in payload...");
+  const testActivationDomain = "phase10gate59.test";
+  const normalizedDomain = normalizeDomain(testActivationDomain);
+  await prisma.licenseActivation.create({
+    data: {
+      licenseId: license1.id,
+      domain: normalizedDomain,
+      status: "ACTIVE",
+      activatedAt: new Date(),
+    },
+  });
+
+  const deactDomainRes = await apiPost(
+    `/licenses/${license1.id}/deactivate-domain`,
+    { domain: testActivationDomain },
+    customer1Token,
+  );
+  if (deactDomainRes.status !== 200) {
+    throw new Error(`Gate 59 failed: Owner domain deactivation rejected with status ${deactDomainRes.status}: ${JSON.stringify(deactDomainRes.data)}`);
+  }
+  if (deactDomainRes.data.status !== "DEACTIVATED") {
+    throw new Error(`Gate 59 failed: Expected activation status DEACTIVATED, got ${deactDomainRes.data.status}`);
+  }
+  const deactPayloadStr = JSON.stringify(deactDomainRes.data);
+  if (deactPayloadStr.includes("licenseKey") || deactPayloadStr.includes("encryptedLicenseKey")) {
+    throw new Error("Gate 59 failed: Plaintext or encrypted license key leaked in deactivation response");
+  }
+  const updatedActivation = await prisma.licenseActivation.findFirstOrThrow({
+    where: { licenseId: license1.id, domain: normalizedDomain },
+  });
+  if (updatedActivation.status !== "DEACTIVATED") {
+    throw new Error(`Gate 59 failed: Database activation status is ${updatedActivation.status}`);
+  }
+  console.log("✓ Gate 59 passed: Owner domain deactivation succeeded with zero plaintext key exposure");
+
+  // Gate 60: Cross-User Owner-Deactivation Endpoint Returns 404
+  console.log("\n[Gate 60] Cross-user owner-deactivation returns 404...");
+  const crossDeactRes = await apiPost(
+    `/licenses/${license1.id}/deactivate-domain`,
+    { domain: testActivationDomain },
+    customer2Token,
+  );
+  if (crossDeactRes.status !== 404) {
+    throw new Error(`Gate 60 failed: Expected 404 for cross-user license deactivation, got ${crossDeactRes.status}`);
+  }
+  console.log("✓ Gate 60 passed: Cross-user license deactivation blocked with 404 Not Found");
+
   console.log("\n==================================================");
-  console.log("ALL 47 PHASE 10 GATES PASSED (47/47)");
+  console.log("ALL 60 PHASE 10 GATES PASSED (60/60)");
   console.log("==================================================");
 }
 

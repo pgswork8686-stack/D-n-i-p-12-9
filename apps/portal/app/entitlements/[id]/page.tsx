@@ -11,14 +11,14 @@ import { StatusBadge } from "../../components/status-badge";
 import { Skeleton } from "../../components/skeleton";
 import { ErrorState } from "../../components/error-state";
 import { Button, Card } from "@nexus/ui";
-import { EntitlementDto, ProductVersionDto } from "@nexus/contracts";
+import { EntitlementDto, CustomerProductVersionDto } from "@nexus/contracts";
 
 export default function EntitlementDetailPage() {
   const params = useParams();
   const entitlementId = params?.id as string;
   const { token } = useAuth();
   const [entitlement, setEntitlement] = useState<EntitlementDto | null>(null);
-  const [versions, setVersions] = useState<ProductVersionDto[]>([]);
+  const [versions, setVersions] = useState<CustomerProductVersionDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -134,7 +134,7 @@ export default function EntitlementDetailPage() {
                     </Link>
                   )}
 
-                  {entitlement.fulfillmentType === "EXTERNAL_LICENSE" && (
+                  {entitlement.fulfillmentType === "EXTERNAL_MANAGED" && (
                     <Link href="/allocations">
                       <Button variant="primary" size="sm">
                         Manage Domain Allocations 🌐

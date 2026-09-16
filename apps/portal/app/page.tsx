@@ -136,7 +136,7 @@ export default function DashboardPage() {
                     entitlements.filter(
                       (e) =>
                         e.status === "ACTIVE" &&
-                        e.fulfillmentType !== "EXTERNAL_LICENSE",
+                        e.fulfillmentType !== "EXTERNAL_MANAGED",
                     ).length
                   }
                 </div>

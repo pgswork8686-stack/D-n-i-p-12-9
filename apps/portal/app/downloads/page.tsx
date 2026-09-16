@@ -12,13 +12,13 @@ import { ErrorState } from "../components/error-state";
 import { Button, Card } from "@nexus/ui";
 import {
   EntitlementDto,
-  ProductVersionDto,
-  ProductVersionFileDto,
+  CustomerProductVersionDto,
+  CustomerProductVersionFileDto,
 } from "@nexus/contracts";
 
 interface EntitlementWithVersions {
   entitlement: EntitlementDto;
-  versions: ProductVersionDto[];
+  versions: CustomerProductVersionDto[];
 }
 
 export default function DownloadsPage() {
@@ -72,7 +72,7 @@ export default function DownloadsPage() {
   const handleDownload = async (
     entitlementId: string,
     versionId: string,
-    file: ProductVersionFileDto,
+    file: CustomerProductVersionFileDto,
   ) => {
     if (!token) return;
     setDownloadingFileId(file.id);

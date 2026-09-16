@@ -96,6 +96,25 @@ export interface ProductVersionFileDto {
   updatedAt: string;
 }
 
+export interface CustomerProductVersionFileDto {
+  id: string;
+  productVersionId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  isPrimary: boolean;
+}
+
+export interface CustomerProductVersionDto {
+  id: string;
+  productId: string;
+  version: string;
+  releaseNotes: string | null;
+  releasedAt: string | null;
+  files: CustomerProductVersionFileDto[];
+}
+
 export interface DownloadGrantDto {
   id: string;
   userId: string | null;

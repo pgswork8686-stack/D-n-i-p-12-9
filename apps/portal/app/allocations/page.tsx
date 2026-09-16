@@ -42,7 +42,7 @@ export default function AllocationsPage() {
       const client = getApiClient(token);
       const entitlementsRes = await client.listEntitlements({ limit: 50 });
       const externalEntitlements = (entitlementsRes.items || []).filter(
-        (e) => e.fulfillmentType === "EXTERNAL_LICENSE" && e.status === "ACTIVE",
+        (e) => e.fulfillmentType === "EXTERNAL_MANAGED" && e.status === "ACTIVE",
       );
 
       const loaded: EntitlementAllocations[] = [];

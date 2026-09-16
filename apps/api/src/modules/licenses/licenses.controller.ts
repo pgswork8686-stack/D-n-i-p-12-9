@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  Body,
   UseGuards,
   Req,
   HttpCode,
@@ -10,7 +11,13 @@ import {
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { LicensesService } from "./licenses.service";
-import { CustomerLicenseDto, RevealLicenseResponse, CustomerLicenseActivationDto } from "@nexus/contracts";
+import {
+  CustomerLicenseDto,
+  RevealLicenseResponse,
+  CustomerLicenseActivationDto,
+  DeactivateLicenseResponse,
+} from "@nexus/contracts";
+import { DeactivateLicenseDomainDto } from "./dto/licenses.dto";
 
 @Controller("licenses")
 @UseGuards(AuthGuard)
@@ -45,5 +52,15 @@ export class LicensesController {
     @Param("id") id: string,
   ): Promise<CustomerLicenseActivationDto[]> {
     return this.licensesService.listCustomerLicenseActivations(id, req.user.id);
+  }
+
+  @Post(":id/deactivate-domain")
+  @HttpCode(HttpStatus.OK)
+  async deactivateDomain(
+    @Req() req: any,
+    @Param("id") id: string,
+    @Body() dto: DeactivateLicenseDomainDto,
+  ): Promise<DeactivateLicenseResponse> {
+    return this.licensesService.customerDeactivateDomain(id, req.user.id, dto.domain);
   }
 }

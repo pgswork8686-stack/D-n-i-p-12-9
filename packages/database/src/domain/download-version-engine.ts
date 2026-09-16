@@ -19,6 +19,8 @@ import {
 import {
   ProductVersionDto,
   ProductVersionFileDto,
+  CustomerProductVersionDto,
+  CustomerProductVersionFileDto,
   PublishVersionResponse,
   VersionStatus,
   DownloadChannel,
@@ -99,6 +101,31 @@ export function mapProductVersionFileToDto(
     verifiedAt: f.verifiedAt ? f.verifiedAt.toISOString() : null,
     createdAt: f.createdAt.toISOString(),
     updatedAt: f.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Maps ProductVersion to customer-safe CustomerProductVersionDto.
+ * Strips storageKey, private object paths, and verification internals.
+ */
+export function mapToCustomerProductVersionDto(
+  v: ProductVersion & { files?: ProductVersionFile[] },
+): CustomerProductVersionDto {
+  return {
+    id: v.id,
+    productId: v.productId,
+    version: v.version,
+    releaseNotes: v.releaseNotes,
+    releasedAt: v.releasedAt ? v.releasedAt.toISOString() : null,
+    files: (v.files || []).map((f) => ({
+      id: f.id,
+      productVersionId: f.productVersionId,
+      fileName: f.fileName,
+      contentType: f.contentType,
+      sizeBytes: f.sizeBytes,
+      sha256: f.sha256,
+      isPrimary: f.isPrimary,
+    })),
   };
 }
 

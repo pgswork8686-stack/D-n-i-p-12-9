@@ -26,6 +26,7 @@ import {
   generateStorageKey,
   checkVersionEligibility,
   mapProductVersionToDto,
+  mapToCustomerProductVersionDto,
   DownloadVersionEngineError,
 } from "@nexus/database";
 import {
@@ -36,6 +37,8 @@ import {
 import {
   ProductVersionDto,
   ProductVersionFileDto,
+  CustomerProductVersionDto,
+  CustomerProductVersionFileDto,
   PublishVersionResponse,
   DownloadUrlResponse,
   CheckUpdateResponse,
@@ -313,7 +316,7 @@ export class DownloadsService {
   async listEligibleVersionsForEntitlement(
     userId: string,
     entitlementId: string,
-  ): Promise<ProductVersionDto[]> {
+  ): Promise<CustomerProductVersionDto[]> {
     const entitlement = await prisma.entitlement.findUnique({
       where: { id: entitlementId },
     });
@@ -342,7 +345,7 @@ export class DownloadsService {
       checkVersionEligibility(v.releasedAt, entitlement.updatesUntil),
     );
 
-    return eligibleVersions.map((v) => mapProductVersionToDto(v));
+    return eligibleVersions.map((v) => mapToCustomerProductVersionDto(v));
   }
 
   // ----------------------------------------------------

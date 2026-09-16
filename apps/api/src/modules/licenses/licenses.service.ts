@@ -10,6 +10,7 @@ import {
   listCustomerLicenses,
   getCustomerLicense,
   customerRevealLicenseKey,
+  customerDeactivateDomain,
   activateInternalLicense,
   validateInternalLicense,
   deactivateInternalLicense,
@@ -81,6 +82,18 @@ export class LicensesService {
   ): Promise<RevealLicenseResponse> {
     try {
       return await customerRevealLicenseKey({ licenseId, userId });
+    } catch (err) {
+      this.handleError(err);
+    }
+  }
+
+  async customerDeactivateDomain(
+    licenseId: string,
+    userId: string,
+    domain: string,
+  ): Promise<DeactivateLicenseResponse> {
+    try {
+      return await customerDeactivateDomain({ licenseId, userId, domain });
     } catch (err) {
       this.handleError(err);
     }
