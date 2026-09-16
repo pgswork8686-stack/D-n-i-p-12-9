@@ -498,11 +498,40 @@ async function runPhase10Acceptance() {
     },
   });
 
+  const order3 = await prisma.order.create({
+    data: {
+      orderNumber: `ORD-P10-C2-INT-${Date.now()}`,
+      userId: customer2Id,
+      status: OrderStatus.PAID,
+      currency: "USD",
+      subtotalAmount: 4900,
+      discountAmount: 0,
+      totalAmount: 4900,
+      items: {
+        create: {
+          productId: testProduct.id,
+          variantId: testVariant.id,
+          productName: "Portal Test Theme",
+          variantName: "Standard License",
+          sku: "NXS-PORTAL-03",
+          productType: ProductType.LICENSED_SOFTWARE,
+          fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+          unitAmount: 4900,
+          quantity: 1,
+          lineTotalAmount: 4900,
+          currency: "USD",
+          maxActivations: 1,
+        },
+      },
+    },
+    include: { items: true },
+  });
+
   const entitlement2Internal = await prisma.entitlement.create({
     data: {
       userId: customer2Id,
-      orderId: order2.id,
-      orderItemId: order2.items[0].id,
+      orderId: order3.id,
+      orderItemId: order3.items[0].id,
       productId: testProduct.id,
       variantId: testVariant.id,
       productType: ProductType.LICENSED_SOFTWARE,
@@ -548,11 +577,40 @@ async function runPhase10Acceptance() {
 
   // Gate 22: Expired / Revoked Entitlement Reflects Authoritative State
   console.log("\n[Gate 22] Revoked entitlement reflects terminal state...");
+  const orderRevoked = await prisma.order.create({
+    data: {
+      orderNumber: `ORD-P10-C1-REV-${Date.now()}`,
+      userId: customer1Id,
+      status: OrderStatus.PAID,
+      currency: "USD",
+      subtotalAmount: 2900,
+      discountAmount: 0,
+      totalAmount: 2900,
+      items: {
+        create: {
+          productId: testProduct.id,
+          variantId: testVariant.id,
+          productName: "Portal Test Theme",
+          variantName: "Basic License",
+          sku: "NXS-PORTAL-REV",
+          productType: ProductType.LICENSED_SOFTWARE,
+          fulfillmentType: FulfillmentType.INTERNAL_LICENSE,
+          unitAmount: 2900,
+          quantity: 1,
+          lineTotalAmount: 2900,
+          currency: "USD",
+          maxActivations: 1,
+        },
+      },
+    },
+    include: { items: true },
+  });
+
   const revokedEnt = await prisma.entitlement.create({
     data: {
       userId: customer1Id,
-      orderId: order1.id,
-      orderItemId: order1.items[0].id,
+      orderId: orderRevoked.id,
+      orderItemId: orderRevoked.items[0].id,
       productId: testProduct.id,
       variantId: testVariant.id,
       productType: ProductType.LICENSED_SOFTWARE,
