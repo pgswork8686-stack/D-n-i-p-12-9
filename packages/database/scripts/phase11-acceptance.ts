@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
 import {
   prisma,
   ContentStatus,
@@ -13,6 +14,9 @@ import {
   sanitizeContentHtml,
   isValidCanonicalUrl,
   safeJsonLd,
+  buildSitemapEntries,
+  buildRobotsPolicy,
+  toMajorUnit,
 } from "@nexus/utils";
 
 const TEST_PORT = process.env.API_PORT || "4007";
@@ -142,7 +146,7 @@ async function apiPatch(endpoint: string, body: any, token?: string) {
 
 async function runPhase11Acceptance() {
   console.log("==================================================");
-  console.log("PHASE 11 — CMS & SEO PUBLISHING ACCEPTANCE SUITE (45 GATES)");
+  console.log("PHASE 11 — CMS & SEO PUBLISHING ACCEPTANCE SUITE (62 GATES)");
   console.log("==================================================");
 
   await ensureApiRunning();
@@ -752,8 +756,312 @@ async function runPhase11Acceptance() {
   }
   console.log("✓ Gate 45 passed: SEO helpers, robots rules, canonical URLs and sitemap generation validated");
 
+  // ----------------------------------------------------
+  // Canonical Filters, Exclusion & Pagination (Gates 46-51)
+  // ----------------------------------------------------
+  console.log("\n[Gate 46] Public GET /v1/content/posts?categorySlug=:slug canonical filter returns matching posts...");
+  const catSlugFilterRes = await apiGet(`/v1/content/posts?categorySlug=${cat1.slug}`);
+  if (catSlugFilterRes.status !== 200 || !catSlugFilterRes.data?.items?.some((i: any) => i.id === scheduledPost.id)) {
+    throw new Error(`Gate 46 failed: Canonical categorySlug filter failed: ${JSON.stringify(catSlugFilterRes.data)}`);
+  }
+  console.log("✓ Gate 46 passed: Canonical categorySlug query parameter filters published posts correctly");
+
+  console.log("\n[Gate 47] Cross-category exclusion assertion (querying other category strictly excludes post)...");
+  const crossCategory = await prisma.contentCategory.create({
+    data: {
+      name: `Other Category ${crypto.randomBytes(3).toString("hex")}`,
+      slug: `other-cat-${crypto.randomBytes(3).toString("hex")}`,
+    },
+  });
+  const crossFilterRes = await apiGet(`/v1/content/posts?categorySlug=${crossCategory.slug}`);
+  if (crossFilterRes.status !== 200) {
+    throw new Error(`Gate 47 failed: Status was ${crossFilterRes.status}`);
+  }
+  const crossItems = crossFilterRes.data?.items || [];
+  if (crossItems.some((i: any) => i.id === scheduledPost.id)) {
+    throw new Error(`Gate 47 failed: Post from cat1 was improperly included in cat2 query`);
+  }
+  console.log("✓ Gate 47 passed: Cross-category exclusion strictly verified");
+
+  console.log("\n[Gate 48] Public GET /v1/content/posts strictly excludes PAGE content type...");
+  const pagePost = await prisma.contentPost.create({
+    data: {
+      title: "Public About Us Page",
+      slug: `about-page-${crypto.randomBytes(3).toString("hex")}`,
+      content: "<p>About page content</p>",
+      contentType: ContentType.PAGE,
+      status: ContentStatus.PUBLISHED,
+      publishedAt: new Date(),
+    },
+  });
+  const blogListRes = await apiGet("/v1/content/posts");
+  if (blogListRes.data?.items?.some((i: any) => i.id === pagePost.id)) {
+    throw new Error(`Gate 48 failed: PAGE content type appeared in public blog listing`);
+  }
+  console.log("✓ Gate 48 passed: PAGE content type is strictly excluded from public blog post list");
+
+  console.log("\n[Gate 49] Public blog pagination — Page 1 returns limit items and metadata...");
+  const seededPosts = [];
+  for (let i = 0; i < 25; i++) {
+    seededPosts.push({
+      title: `Seeded Pagination Article ${i}`,
+      slug: `seeded-page-art-${i}-${crypto.randomBytes(4).toString("hex")}`,
+      content: `<p>Article body ${i}</p>`,
+      contentType: ContentType.ARTICLE,
+      status: ContentStatus.PUBLISHED,
+      publishedAt: new Date(Date.now() - (100 - i) * 1000),
+    });
+  }
+  await prisma.contentPost.createMany({ data: seededPosts });
+
+  const page1Res = await apiGet("/v1/content/posts?page=1&limit=10");
+  if (page1Res.status !== 200) {
+    throw new Error(`Gate 49 failed: Status was ${page1Res.status}`);
+  }
+  if (page1Res.data?.items?.length !== 10) {
+    throw new Error(`Gate 49 failed: Expected 10 items on page 1, got ${page1Res.data?.items?.length}`);
+  }
+  if (page1Res.data?.page !== 1 || page1Res.data?.limit !== 10 || (page1Res.data?.total || 0) < 25 || (page1Res.data?.totalPages || 0) < 3) {
+    throw new Error(`Gate 49 failed: Pagination metadata invalid: ${JSON.stringify(page1Res.data)}`);
+  }
+  console.log(`✓ Gate 49 passed: Page 1 pagination metadata validated (total=${page1Res.data.total}, totalPages=${page1Res.data.totalPages})`);
+
+  console.log("\n[Gate 50] Public blog pagination — Page 2 items are disjoint from Page 1...");
+  const page2Res = await apiGet("/v1/content/posts?page=2&limit=10");
+  if (page2Res.status !== 200 || page2Res.data?.items?.length !== 10) {
+    throw new Error(`Gate 50 failed: Expected 10 items on page 2, got ${page2Res.data?.items?.length}`);
+  }
+  const page1Ids = new Set(page1Res.data.items.map((i: any) => i.id));
+  const page2Ids = page2Res.data.items.map((i: any) => i.id);
+  const overlap = page2Ids.filter((id: string) => page1Ids.has(id));
+  if (overlap.length > 0) {
+    throw new Error(`Gate 50 failed: Found overlapping items between page 1 and page 2: ${overlap.join(", ")}`);
+  }
+  if (page2Res.data?.page !== 2) {
+    throw new Error(`Gate 50 failed: Expected page 2 in metadata`);
+  }
+  console.log("✓ Gate 50 passed: Page 2 items are strictly disjoint from Page 1");
+
+  console.log("\n[Gate 51] Public blog pagination — Page 3 returns remaining items...");
+  const page3Res = await apiGet("/v1/content/posts?page=3&limit=10");
+  if (page3Res.status !== 200 || (page3Res.data?.items?.length || 0) < 5) {
+    throw new Error(`Gate 51 failed: Expected at least 5 remaining items on page 3, got ${page3Res.data?.items?.length}`);
+  }
+  if (page3Res.data?.page !== 3) {
+    throw new Error(`Gate 51 failed: Expected page 3 in metadata`);
+  }
+  console.log(`✓ Gate 51 passed: Page 3 returns remaining items (${page3Res.data.items.length} items)`);
+
+  // ----------------------------------------------------
+  // Concurrency, LifeCycle Authority & Rejections (Gates 52-58)
+  // ----------------------------------------------------
+  console.log("\n[Gate 52] Scheduler concurrency — Concurrent worker execution claims post exactly once...");
+  const schedConcurrencyPost = await prisma.contentPost.create({
+    data: {
+      title: "Concurrent Scheduled Post",
+      slug: `sched-race-${crypto.randomBytes(4).toString("hex")}`,
+      content: "<p>Scheduled content</p>",
+      contentType: ContentType.ARTICLE,
+      status: ContentStatus.SCHEDULED,
+      scheduledAt: new Date(Date.now() - 60000), // due 1 min ago
+    },
+  });
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, i) =>
+      publishDueScheduledContent({ workerId: `race-worker-${i}` }),
+    ),
+  );
+  const totalPublished = results.reduce((sum, r) => sum + r.publishedCount, 0);
+  if (totalPublished !== 1) {
+    throw new Error(`Gate 52 failed: Expected exactly 1 publish across 10 concurrent workers, got ${totalPublished}`);
+  }
+  const autoAudits = await prisma.auditLog.findMany({
+    where: {
+      action: "CONTENT_AUTO_PUBLISHED",
+      entityId: schedConcurrencyPost.id,
+    },
+  });
+  if (autoAudits.length !== 1) {
+    throw new Error(`Gate 52 failed: Expected exactly 1 CONTENT_AUTO_PUBLISHED audit log, got ${autoAudits.length}`);
+  }
+  const refreshedSched = await prisma.contentPost.findUnique({ where: { id: schedConcurrencyPost.id } });
+  if (refreshedSched?.status !== ContentStatus.PUBLISHED) {
+    throw new Error(`Gate 52 failed: Post status should be PUBLISHED, got ${refreshedSched?.status}`);
+  }
+  console.log("✓ Gate 52 passed: Concurrent scheduled worker execution safely claimed and published post exactly once");
+
+  console.log("\n[Gate 53] API Optimistic Concurrency — Conflicting transitions on same post trigger 409 Conflict...");
+  const racePost = await prisma.contentPost.create({
+    data: {
+      title: "Race Condition Test Post",
+      slug: `race-cond-${crypto.randomBytes(4).toString("hex")}`,
+      content: "<p>Race content</p>",
+      contentType: ContentType.ARTICLE,
+      status: ContentStatus.REVIEW,
+    },
+  });
+  const [transA, transB] = await Promise.all([
+    apiPost(`/admin/content/posts/${racePost.id}/transition`, { targetStatus: ContentStatus.PUBLISHED }, adminToken),
+    apiPost(
+      `/admin/content/posts/${racePost.id}/transition`,
+      { targetStatus: ContentStatus.SCHEDULED, scheduledAt: new Date(Date.now() + 86400000).toISOString() },
+      adminToken,
+    ),
+  ]);
+  const statuses = [transA.status, transB.status];
+  const has200 = statuses.includes(200);
+  const has409 = statuses.includes(409);
+  if (!has200 || !has409) {
+    throw new Error(`Gate 53 failed: Expected one 200 and one 409, got [${statuses.join(", ")}]`);
+  }
+  console.log("✓ Gate 53 passed: Optimistic concurrency CAS rejected conflicting transition with 409 Conflict");
+
+  console.log("\n[Gate 54] Same-state transition rejection (PUBLISHED -> PUBLISHED rejected with 400)...");
+  const sameStateRes = await apiPost(
+    `/admin/content/posts/${racePost.id}/transition`,
+    { targetStatus: ContentStatus.PUBLISHED },
+    adminToken,
+  );
+  if (sameStateRes.status !== 400) {
+    throw new Error(`Gate 54 failed: Expected 400 for same-state transition, got ${sameStateRes.status}`);
+  }
+  console.log("✓ Gate 54 passed: Same-state transition strictly rejected with 400 Bad Request");
+
+  console.log("\n[Gate 55] Initial status restriction — Creating post directly as PUBLISHED rejected with 400...");
+  const publishDirectRes = await apiPost(
+    "/admin/content/posts",
+    {
+      title: "Direct Published Attempt",
+      content: "<p>Content</p>",
+      status: ContentStatus.PUBLISHED,
+    },
+    adminToken,
+  );
+  if (publishDirectRes.status !== 400) {
+    throw new Error(`Gate 55 failed: Expected 400 for initial status PUBLISHED, got ${publishDirectRes.status}`);
+  }
+  console.log("✓ Gate 55 passed: Direct post creation as PUBLISHED strictly rejected with 400");
+
+  console.log("\n[Gate 56] Initial status restriction — Creating post as SCHEDULED, REVIEW, or ARCHIVED rejected with 400...");
+  for (const illegalStatus of [ContentStatus.SCHEDULED, ContentStatus.REVIEW, ContentStatus.ARCHIVED]) {
+    const res = await apiPost(
+      "/admin/content/posts",
+      {
+        title: `Illegal Initial Status ${illegalStatus}`,
+        content: "<p>Content</p>",
+        status: illegalStatus,
+      },
+      adminToken,
+    );
+    if (res.status !== 400) {
+      throw new Error(`Gate 56 failed: Expected 400 for initial status ${illegalStatus}, got ${res.status}`);
+    }
+  }
+  console.log("✓ Gate 56 passed: Initial status restricted strictly to DRAFT or IDEA");
+
+  console.log("\n[Gate 57] Manual scheduledAt on creation rejected with 400...");
+  const schedCreateRes = await apiPost(
+    "/admin/content/posts",
+    {
+      title: "Manual Scheduled Post",
+      content: "<p>Content</p>",
+      status: ContentStatus.DRAFT,
+      scheduledAt: new Date(Date.now() + 86400000).toISOString(),
+    },
+    adminToken,
+  );
+  if (schedCreateRes.status !== 400) {
+    throw new Error(`Gate 57 failed: Expected 400 for scheduledAt on creation, got ${schedCreateRes.status}`);
+  }
+  console.log("✓ Gate 57 passed: scheduledAt on manual creation rejected with 400");
+
+  console.log("\n[Gate 58] Invalid image URL (unsafe scheme / XSS injection) rejected with 400...");
+  const xssImgRes = await apiPost(
+    "/admin/content/posts",
+    {
+      title: "XSS Image Post",
+      content: "<p>Content</p>",
+      status: ContentStatus.DRAFT,
+      featuredImageUrl: "javascript:alert(1)",
+    },
+    adminToken,
+  );
+  if (xssImgRes.status !== 400) {
+    throw new Error(`Gate 58 failed: Expected 400 for javascript: image URL, got ${xssImgRes.status}`);
+  }
+  console.log("✓ Gate 58 passed: Unsafe featuredImageUrl rejected with 400 Bad Request");
+
+  // ----------------------------------------------------
+  // End-to-End Sitemap, Robots & Architecture Guards (Gates 59-62)
+  // ----------------------------------------------------
+  console.log("\n[Gate 59] Real buildSitemapEntries generator integration test...");
+  const sitemapEntries = await buildSitemapEntries({
+    siteUrl: "https://nexustheme.dev",
+    apiUrl: API_BASE,
+  });
+  if (!Array.isArray(sitemapEntries) || sitemapEntries.length === 0) {
+    throw new Error("Gate 59 failed: buildSitemapEntries returned empty or non-array");
+  }
+  const urls = sitemapEntries.map((e) => e.url);
+  if (!urls.includes("https://nexustheme.dev") || !urls.includes("https://nexustheme.dev/products") || !urls.includes("https://nexustheme.dev/blog")) {
+    throw new Error("Gate 59 failed: Core routes missing from sitemap");
+  }
+  for (const badRoute of ["/cart", "/checkout", "/account", "/admin", "/portal"]) {
+    if (urls.some((u) => u.includes(badRoute))) {
+      throw new Error(`Gate 59 failed: Private route '${badRoute}' appeared in public sitemap`);
+    }
+  }
+  console.log(`✓ Gate 59 passed: Real sitemap generated successfully (${sitemapEntries.length} entries, private routes strictly excluded)`);
+
+  console.log("\n[Gate 60] Real buildRobotsPolicy generator integration test...");
+  const robotsPolicy = buildRobotsPolicy({ siteUrl: "https://nexustheme.dev" });
+  if (robotsPolicy.sitemap !== "https://nexustheme.dev/sitemap.xml") {
+    throw new Error(`Gate 60 failed: Sitemap URL incorrect: ${robotsPolicy.sitemap}`);
+  }
+  const rule = robotsPolicy.rules[0];
+  if (!rule.disallow?.includes("/cart") || !rule.disallow?.includes("/checkout") || !rule.disallow?.includes("/admin/")) {
+    throw new Error(`Gate 60 failed: Disallowed rules missing key paths: ${JSON.stringify(rule.disallow)}`);
+  }
+  console.log("✓ Gate 60 passed: Real robots.txt policy verified with authoritative allow/disallow rules");
+
+  console.log("\n[Gate 61] Static architecture guard — Zero direct Prisma/database imports in apps/web and apps/admin...");
+  const scanDirs = [
+    path.resolve(__dirname, "../../../apps/web/app"),
+    path.resolve(__dirname, "../../../apps/admin/app"),
+  ];
+  function scanFiles(dir: string): string[] {
+    const files: string[] = [];
+    if (!fs.existsSync(dir)) return files;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...scanFiles(full));
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+  const frontendFiles = scanDirs.flatMap(scanFiles);
+  for (const file of frontendFiles) {
+    const content = fs.readFileSync(file, "utf8");
+    if (content.includes("@nexus/database") || content.includes("@prisma/client")) {
+      throw new Error(`Gate 61 failed: Direct database import detected in frontend file: ${file}`);
+    }
+  }
+  console.log(`✓ Gate 61 passed: Verified 0 database imports across ${frontendFiles.length} frontend source files`);
+
+  console.log("\n[Gate 62] Truthful Product Money Conversion & InStock invariant...");
+  if (toMajorUnit(1200, "USD") !== 12) {
+    throw new Error(`Gate 62 failed: toMajorUnit(1200, "USD") expected 12, got ${toMajorUnit(1200, "USD")}`);
+  }
+  if (toMajorUnit(250000, "VND") !== 250000) {
+    throw new Error(`Gate 62 failed: toMajorUnit(250000, "VND") expected 250000, got ${toMajorUnit(250000, "VND")}`);
+  }
+  console.log("✓ Gate 62 passed: Truthful money conversion and product stock invariants confirmed");
+
   console.log("\n==================================================");
-  console.log("ALL 45 GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 62 GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

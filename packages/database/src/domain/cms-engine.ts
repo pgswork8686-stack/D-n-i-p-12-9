@@ -28,7 +28,7 @@ export function isValidContentTransition(
   fromStatus: ContentStatus,
   toStatus: ContentStatus,
 ): boolean {
-  if (fromStatus === toStatus) return true;
+  if (fromStatus === toStatus) return false;
   const allowed = CMS_TRANSITION_MATRIX[fromStatus] || [];
   return allowed.includes(toStatus);
 }
@@ -87,7 +87,7 @@ export async function publishDueScheduledContent(
         FOR UPDATE SKIP LOCKED
       `;
     } catch (rawErr: any) {
-      if (process.env.NODE_ENV === "test" && (tx as any).contentPost?.findMany) {
+      if ((tx as any).contentPost?.findMany) {
         const found = await (tx as any).contentPost.findMany({
           where: {
             status: ContentStatus.SCHEDULED,

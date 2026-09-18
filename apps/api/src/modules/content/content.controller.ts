@@ -10,6 +10,7 @@ import {
   PublicContentListItemDto,
   PublicContentPostDto,
   ContentCategoryDto,
+  PaginatedResponse,
 } from "@nexus/contracts";
 
 @Controller(["content", "v1/content"])
@@ -19,7 +20,7 @@ export class ContentController {
   @Get("posts")
   async listPublicPosts(
     @Query() query: QueryPublicPostsDto,
-  ): Promise<{ items: PublicContentListItemDto[]; total: number }> {
+  ): Promise<PaginatedResponse<PublicContentListItemDto>> {
     return this.contentService.listPublicPosts(query);
   }
 

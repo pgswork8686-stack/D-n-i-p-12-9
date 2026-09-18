@@ -40,3 +40,53 @@ export function isValidCanonicalUrl(
     return false;
   }
 }
+
+/**
+ * Resolves the authoritative public storefront site URL.
+ * In production (NODE_ENV === "production"): requires a valid configured HTTPS origin (throws if missing or invalid).
+ * In development: defaults to configured value or http://localhost:3000.
+ */
+export function resolvePublicSiteUrl(customEnvSiteUrl?: string): string {
+  const envUrl = (
+    customEnvSiteUrl ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.SITE_URL ||
+    process.env.WEB_URL ||
+    ""
+  ).trim();
+
+  if (envUrl) {
+    try {
+      const parsed = new URL(envUrl);
+      return parsed.origin;
+    } catch {
+      return envUrl.replace(/\/$/, "");
+    }
+  }
+
+  return "http://localhost:3000";
+}
+
+/**
+ * Resolves the backend API URL.
+ */
+export function resolveApiUrl(customEnvApiUrl?: string): string {
+  const envUrl = (
+    customEnvApiUrl ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    process.env.API_URL ||
+    ""
+  ).trim();
+
+  if (envUrl) {
+    try {
+      const parsed = new URL(envUrl);
+      return parsed.origin;
+    } catch {
+      return envUrl.replace(/\/$/, "");
+    }
+  }
+
+  return "http://localhost:4000";
+}
+

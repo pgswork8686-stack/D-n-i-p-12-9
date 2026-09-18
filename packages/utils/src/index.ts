@@ -7,4 +7,5 @@ export * from "./slugify";
 export * from "./sanitize";
 export * from "./url-validator";
 export * from "./json-ld";
+export * from "./seo-builders";
 

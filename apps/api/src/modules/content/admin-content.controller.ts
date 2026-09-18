@@ -23,7 +23,11 @@ import {
   UpdateContentCategoryDto,
   QueryContentPostsDto,
 } from "./dto/content.dto";
-import { AdminContentPostDto, ContentCategoryDto } from "@nexus/contracts";
+import {
+  AdminContentPostDto,
+  ContentCategoryDto,
+  PaginatedResponse,
+} from "@nexus/contracts";
 
 @Controller(["admin/content", "v1/admin/content"])
 @UseGuards(AuthGuard, PermissionsGuard)
@@ -38,7 +42,7 @@ export class AdminContentController {
   @RequirePermissions("content.read")
   async listPosts(
     @Query() query: QueryContentPostsDto,
-  ): Promise<{ items: AdminContentPostDto[]; total: number }> {
+  ): Promise<PaginatedResponse<AdminContentPostDto>> {
     return this.contentService.listAdminPosts(query);
   }
 

@@ -114,7 +114,7 @@ export interface CreateContentPostDto {
   slug?: string;
   excerpt?: string;
   content: string;
-  status?: ContentStatus;
+  status?: ContentStatus.DRAFT | ContentStatus.IDEA;
   contentType?: ContentType;
   categoryId?: string;
   seoTitle?: string;
@@ -123,7 +123,6 @@ export interface CreateContentPostDto {
   featuredImageUrl?: string;
   featuredImageAlt?: string;
   ogImageUrl?: string;
-  scheduledAt?: string;
 }
 
 export interface UpdateContentPostDto {
@@ -152,6 +151,7 @@ export interface QueryContentPostsDto {
   status?: ContentStatus;
   categoryId?: string;
   search?: string;
+  page?: number;
   limit?: number;
   offset?: number;
   sortBy?: "createdAt" | "publishedAt" | "title";
@@ -161,7 +161,8 @@ export interface QueryContentPostsDto {
 export interface QueryPublicPostsDto {
   categorySlug?: string;
   search?: string;
-  limit?: number;
   page?: number;
+  limit?: number;
   offset?: number;
 }
+

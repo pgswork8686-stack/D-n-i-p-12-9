@@ -2,9 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@nexus/ui";
-
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
 
 interface CategoryPageProps {
   params: Promise<{ slug: string }>;
@@ -12,10 +10,11 @@ interface CategoryPageProps {
 }
 
 async function getCategoryData(slug: string, page: number = 1) {
+  const apiUrl = resolveApiUrl();
   try {
     const [catsRes, postsRes] = await Promise.all([
-      fetch(`${API_URL}/v1/content/categories`, { cache: "no-store" }),
-      fetch(`${API_URL}/v1/content/posts?category=${encodeURIComponent(slug)}&page=${page}&limit=12`, {
+      fetch(`${apiUrl}/v1/content/categories`, { cache: "no-store" }),
+      fetch(`${apiUrl}/v1/content/posts?categorySlug=${encodeURIComponent(slug)}&page=${page}&limit=12`, {
         cache: "no-store",
       }),
     ]);
@@ -62,16 +61,18 @@ export async function generateMetadata({
     category.description ||
     `Browse all published articles and guides in ${category.name} on NEXUSTHEME.`;
 
+  const siteUrl = resolvePublicSiteUrl();
+
   return {
     title: `${title} | NEXUSTHEME`,
     description,
     alternates: {
-      canonical: `${SITE_URL}/blog/category/${category.slug}`,
+      canonical: `${siteUrl}/blog/category/${category.slug}`,
     },
     openGraph: {
       title: `${title} | NEXUSTHEME`,
       description,
-      url: `${SITE_URL}/blog/category/${category.slug}`,
+      url: `${siteUrl}/blog/category/${category.slug}`,
       siteName: "NEXUSTHEME",
     },
   };

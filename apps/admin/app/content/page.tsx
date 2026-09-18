@@ -1,14 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+import { AdminContentPostDto, ContentStatus } from "@nexus/contracts";
+import { useAuth, isDevAuthToolsEnabled } from "../context/auth-context";
+import { getApiClient } from "../lib/api";
 
 const STATUS_COLORS: Record<string, "info" | "success" | "warning" | "error"> = {
   IDEA: "info",
@@ -21,61 +18,53 @@ const STATUS_COLORS: Record<string, "info" | "success" | "warning" | "error"> = 
 };
 
 export default function AdminContentPage() {
-  const [posts, setPosts] = useState<any[]>([]);
+  const { token, user, isLoading: authLoading, loginWithDevToken } = useAuth();
+  const [posts, setPosts] = useState<AdminContentPostDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [page, setPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalItems, setTotalItems] = useState<number>(0);
 
-  const fetchPosts = () => {
-    if (!authToken) {
-      setError("Access Denied (401 Unauthorized): Please provide an authenticated admin token.");
-      setLoading(false);
-      setPosts([]);
+  const fetchPosts = useCallback(async () => {
+    if (!token) {
+      if (!authLoading) {
+        setError("Access Denied (401 Unauthorized): Please sign in with an authenticated admin account.");
+        setLoading(false);
+        setPosts([]);
+      }
       return;
     }
 
     setLoading(true);
-    const params = new URLSearchParams();
-    if (statusFilter) params.append("status", statusFilter);
-    if (search) params.append("search", search);
-    params.append("page", page.toString());
-    params.append("limit", "15");
+    try {
+      const client = getApiClient(token);
+      const res = await client.listAdminContentPosts({
+        status: statusFilter ? (statusFilter as ContentStatus) : undefined,
+        search: search.trim() || undefined,
+        page,
+        limit: 15,
+      });
 
-    fetch(`${API_URL}/admin/content/posts?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || `Failed with status ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setPosts(data.items || []);
-        setTotalPages(data.totalPages || 1);
-        setTotalItems(data.total || 0);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setPosts([]);
-      })
-      .finally(() => setLoading(false));
-  };
+      setPosts(res.items || []);
+      setTotalPages(res.totalPages || 1);
+      setTotalItems(res.total || 0);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to load content posts.");
+      setPosts([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, authLoading, statusFilter, search, page]);
 
   useEffect(() => {
-    fetchPosts();
-  }, [authToken, statusFilter, page]);
+    if (!authLoading) {
+      fetchPosts();
+    }
+  }, [authLoading, fetchPosts]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,35 +72,29 @@ export default function AdminContentPage() {
     fetchPosts();
   };
 
+  const showDevTools = isDevAuthToolsEnabled();
+
   return (
     <main className="max-w-7xl mx-auto py-10 px-6 font-sans">
-      {isDevAuthToolsEnabled && (
+      {showDevTools && (
         <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
           <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
           <div className="flex gap-2">
             <button
-              onClick={() => setAuthToken("dev-admin-token")}
+              onClick={() => loginWithDevToken("dev-admin-token")}
               className={`px-2.5 py-1 rounded border font-medium ${
-                authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"
+                token === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"
               }`}
             >
               Admin Token (Pass)
             </button>
             <button
-              onClick={() => setAuthToken("dev-customer-token")}
+              onClick={() => loginWithDevToken("dev-customer-token")}
               className={`px-2.5 py-1 rounded border font-medium ${
-                authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"
+                token === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"
               }`}
             >
               Customer Token (403)
-            </button>
-            <button
-              onClick={() => setAuthToken("")}
-              className={`px-2.5 py-1 rounded border font-medium ${
-                !authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"
-              }`}
-            >
-              No Token (401)
             </button>
           </div>
         </div>
@@ -178,12 +161,21 @@ export default function AdminContentPage() {
       </div>
 
       {error ? (
-        <div className="p-8 bg-red-50 border border-red-200 rounded-xl text-center space-y-2 mb-6">
+        <div className="p-8 bg-red-50 border border-red-200 rounded-xl text-center space-y-3 mb-6">
           <div className="text-2xl">⚠️</div>
           <h3 className="text-sm font-bold text-red-800">Error Loading Content Posts</h3>
           <p className="text-xs text-red-600">{error}</p>
+          {!token && (
+            <div className="pt-2">
+              <Link href="/login">
+                <Button variant="primary" size="sm">
+                  Sign In to Super Admin
+                </Button>
+              </Link>
+            </div>
+          )}
         </div>
-      ) : loading ? (
+      ) : loading || authLoading ? (
         <div className="p-12 text-center text-gray-500 text-sm">Loading articles...</div>
       ) : posts.length === 0 ? (
         <Card>

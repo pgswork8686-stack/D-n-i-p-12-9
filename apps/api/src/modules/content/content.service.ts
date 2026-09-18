@@ -22,6 +22,7 @@ import {
   PublicContentListItemDto,
   PublicContentPostDto,
   ContentCategoryDto,
+  PaginatedResponse,
 } from "@nexus/contracts";
 import {
   CreateContentPostDto,
@@ -39,11 +40,39 @@ export class ContentService {
   constructor(private readonly auditService: AuditService) {}
 
   // --------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------
+
+  private isValidImageUrl(url: string): boolean {
+    if (!url || typeof url !== "string") return false;
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizeAndValidateSlug(raw: string, entityName: string = "Slug"): string {
+    const normalized = slugify(raw);
+    if (!normalized || normalized.trim() === "") {
+      throw new BadRequestException(`${entityName} cannot be empty or contain only symbols.`);
+    }
+    if (isReservedSlug(normalized)) {
+      throw new BadRequestException(`${entityName} '${normalized}' is reserved.`);
+    }
+    if (normalized.length > 200) {
+      throw new BadRequestException(`${entityName} exceeds maximum length of 200 characters.`);
+    }
+    return normalized;
+  }
+
+  // --------------------------------------------------------
   // Slug Generation & Collision Resolution
   // --------------------------------------------------------
 
   async generateUniquePostSlug(baseTitle: string, explicitSlug?: string): Promise<string> {
-    const raw = explicitSlug ? slugify(explicitSlug) : slugify(baseTitle);
+    const raw = explicitSlug ? this.normalizeAndValidateSlug(explicitSlug, "Post slug") : slugify(baseTitle);
     const candidate = raw || `post-${Date.now()}`;
 
     if (isReservedSlug(candidate)) {
@@ -80,13 +109,9 @@ export class ContentService {
   }
 
   async generateUniqueCategorySlug(name: string, explicitSlug?: string): Promise<string> {
-    const candidate = explicitSlug ? slugify(explicitSlug) : slugify(name);
-    if (!candidate) {
-      throw new BadRequestException("Category slug cannot be empty.");
-    }
-    if (isReservedSlug(candidate)) {
-      throw new BadRequestException(`Category slug '${candidate}' is reserved.`);
-    }
+    const candidate = explicitSlug
+      ? this.normalizeAndValidateSlug(explicitSlug, "Category slug")
+      : this.normalizeAndValidateSlug(name, "Category slug");
 
     const existing = await prisma.contentCategory.findUnique({
       where: { slug: candidate },
@@ -102,33 +127,35 @@ export class ContentService {
   // --------------------------------------------------------
 
   async createPost(actorId: string, data: CreateContentPostDto): Promise<AdminContentPostDto> {
-    const slug = await this.generateUniquePostSlug(data.title, data.slug);
+    // Authority Boundary: Normal admin manual creation permits ONLY DRAFT or IDEA
+    const initialStatus = data.status || ContentStatus.DRAFT;
+    if (initialStatus !== ContentStatus.DRAFT && initialStatus !== ContentStatus.IDEA) {
+      throw new BadRequestException(
+        `Invalid initial status '${initialStatus}'. Manual creation permits only DRAFT or IDEA status. Publishing and scheduling require workflow transitions.`,
+      );
+    }
+
+    if ((data as any).scheduledAt) {
+      throw new BadRequestException(
+        "Scheduling is not permitted during initial post creation; use workflow transition REVIEW -> SCHEDULED.",
+      );
+    }
 
     if (data.canonicalUrl && !isValidCanonicalUrl(data.canonicalUrl)) {
       throw new BadRequestException("Invalid canonical URL format or unsafe protocol.");
     }
 
+    if (data.featuredImageUrl && !this.isValidImageUrl(data.featuredImageUrl)) {
+      throw new BadRequestException("Invalid featured image URL: must use http or https protocol.");
+    }
+
+    if (data.ogImageUrl && !this.isValidImageUrl(data.ogImageUrl)) {
+      throw new BadRequestException("Invalid OpenGraph image URL: must use http or https protocol.");
+    }
+
+    const slug = await this.generateUniquePostSlug(data.title, data.slug);
     const sanitizedContent = sanitizeContentHtml(data.content);
     const readingTimeMinutes = estimateReadingTimeMinutes(sanitizedContent);
-
-    let publishedAt: Date | null = null;
-    let scheduledAt: Date | null = null;
-    const initialStatus = data.status || ContentStatus.DRAFT;
-
-    if (initialStatus === ContentStatus.PUBLISHED) {
-      publishedAt = new Date();
-    } else if (initialStatus === ContentStatus.SCHEDULED) {
-      if (!data.scheduledAt) {
-        throw new BadRequestException("Scheduled status requires scheduledAt timestamp.");
-      }
-      const sched = new Date(data.scheduledAt);
-      if (sched.getTime() <= Date.now()) {
-        throw new BadRequestException("Scheduled time must be in the future.");
-      }
-      scheduledAt = sched;
-    } else if (data.scheduledAt) {
-      scheduledAt = new Date(data.scheduledAt);
-    }
 
     const post = await prisma.contentPost.create({
       data: {
@@ -145,8 +172,8 @@ export class ContentService {
         featuredImageUrl: data.featuredImageUrl ?? null,
         featuredImageAlt: data.featuredImageAlt ?? null,
         ogImageUrl: data.ogImageUrl ?? null,
-        publishedAt,
-        scheduledAt,
+        publishedAt: null,
+        scheduledAt: null,
         categoryId: data.categoryId ?? null,
         readingTimeMinutes,
       },
@@ -182,10 +209,7 @@ export class ContentService {
 
     let slug = existing.slug;
     if (data.slug && data.slug !== existing.slug) {
-      const candidate = slugify(data.slug);
-      if (isReservedSlug(candidate)) {
-        throw new BadRequestException(`Slug '${candidate}' is reserved.`);
-      }
+      const candidate = this.normalizeAndValidateSlug(data.slug, "Post slug");
       const conflict = await prisma.contentPost.findUnique({
         where: { slug: candidate },
       });
@@ -199,14 +223,17 @@ export class ContentService {
       throw new BadRequestException("Invalid canonical URL format or unsafe protocol.");
     }
 
+    if (data.featuredImageUrl && !this.isValidImageUrl(data.featuredImageUrl)) {
+      throw new BadRequestException("Invalid featured image URL: must use http or https protocol.");
+    }
+
+    if (data.ogImageUrl && !this.isValidImageUrl(data.ogImageUrl)) {
+      throw new BadRequestException("Invalid OpenGraph image URL: must use http or https protocol.");
+    }
+
     const sanitizedContent =
       data.content !== undefined ? sanitizeContentHtml(data.content) : existing.content;
     const readingTimeMinutes = estimateReadingTimeMinutes(sanitizedContent);
-
-    let scheduledAt = existing.scheduledAt;
-    if (data.scheduledAt !== undefined) {
-      scheduledAt = data.scheduledAt ? new Date(data.scheduledAt) : null;
-    }
 
     const updated = await prisma.contentPost.update({
       where: { id },
@@ -223,7 +250,6 @@ export class ContentService {
         ...(data.featuredImageUrl !== undefined ? { featuredImageUrl: data.featuredImageUrl } : {}),
         ...(data.featuredImageAlt !== undefined ? { featuredImageAlt: data.featuredImageAlt } : {}),
         ...(data.ogImageUrl !== undefined ? { ogImageUrl: data.ogImageUrl } : {}),
-        scheduledAt,
         readingTimeMinutes,
       },
       include: {
@@ -251,79 +277,105 @@ export class ContentService {
     actorId: string,
     transition: ContentPostTransitionDto,
   ): Promise<AdminContentPostDto> {
-    const existing = await prisma.contentPost.findUnique({
-      where: { id },
-    });
+    return prisma.$transaction(async (tx) => {
+      const existing = await tx.contentPost.findUnique({
+        where: { id },
+      });
 
-    if (!existing) {
-      throw new NotFoundException(`Content post '${id}' not found.`);
-    }
-
-    if (!isValidContentTransition(existing.status, transition.targetStatus)) {
-      throw new BadRequestException(
-        `Invalid status transition from '${existing.status}' to '${transition.targetStatus}'.`,
-      );
-    }
-
-    let publishedAt = existing.publishedAt;
-    let scheduledAt = existing.scheduledAt;
-
-    if (transition.targetStatus === ContentStatus.PUBLISHED) {
-      publishedAt = new Date();
-    } else if (transition.targetStatus === ContentStatus.SCHEDULED) {
-      const schedTimestamp = transition.scheduledAt || existing.scheduledAt?.toISOString();
-      if (!schedTimestamp) {
-        throw new BadRequestException("Scheduling requires a scheduledAt timestamp.");
+      if (!existing) {
+        throw new NotFoundException(`Content post '${id}' not found.`);
       }
-      const sched = new Date(schedTimestamp);
-      if (sched.getTime() <= Date.now()) {
-        throw new BadRequestException("Scheduled time must be in the future.");
+
+      if (existing.status === transition.targetStatus) {
+        throw new BadRequestException(
+          `Post is already in status '${transition.targetStatus}'. Same-state transitions are disallowed.`,
+        );
       }
-      scheduledAt = sched;
-    }
 
-    const updated = await prisma.contentPost.update({
-      where: { id },
-      data: {
-        status: transition.targetStatus,
-        publishedAt,
-        scheduledAt,
-      },
-      include: {
-        author: { select: { id: true, email: true, profile: { select: { displayName: true } } } },
-        category: true,
-      },
+      if (!isValidContentTransition(existing.status, transition.targetStatus)) {
+        throw new BadRequestException(
+          `Invalid status transition from '${existing.status}' to '${transition.targetStatus}'.`,
+        );
+      }
+
+      let publishedAt = existing.publishedAt;
+      let scheduledAt = existing.scheduledAt;
+
+      if (transition.targetStatus === ContentStatus.PUBLISHED) {
+        publishedAt = existing.publishedAt || new Date();
+      } else if (transition.targetStatus === ContentStatus.SCHEDULED) {
+        const schedTimestamp = transition.scheduledAt || existing.scheduledAt?.toISOString();
+        if (!schedTimestamp) {
+          throw new BadRequestException("Scheduling requires a scheduledAt timestamp.");
+        }
+        const sched = new Date(schedTimestamp);
+        if (sched.getTime() <= Date.now()) {
+          throw new BadRequestException("Scheduled time must be in the future.");
+        }
+        scheduledAt = sched;
+      }
+
+      // Concurrency CAS update: ensures status was not mutated concurrently
+      const updateResult = await tx.contentPost.updateMany({
+        where: {
+          id,
+          status: existing.status,
+        },
+        data: {
+          status: transition.targetStatus,
+          publishedAt,
+          scheduledAt,
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new ConflictException(
+          `Concurrent transition conflict: content post '${id}' status was changed by another process.`,
+        );
+      }
+
+      let action = "CONTENT_STATUS_CHANGED";
+      if (transition.targetStatus === ContentStatus.PUBLISHED) {
+        action = "CONTENT_PUBLISHED";
+      } else if (transition.targetStatus === ContentStatus.ARCHIVED) {
+        action = "CONTENT_ARCHIVED";
+      }
+
+      // Atomic audit write within the same database transaction
+      await tx.auditLog.create({
+        data: {
+          action,
+          entity: "ContentPost",
+          entityId: id,
+          actorId,
+          details: {
+            previousStatus: existing.status,
+            newStatus: transition.targetStatus,
+            notes: transition.notes,
+            publishedAt: publishedAt?.toISOString(),
+            scheduledAt: scheduledAt?.toISOString(),
+          },
+        },
+      });
+
+      const updated = await tx.contentPost.findUniqueOrThrow({
+        where: { id },
+        include: {
+          author: { select: { id: true, email: true, profile: { select: { displayName: true } } } },
+          category: true,
+        },
+      });
+
+      return this.mapAdminPost(updated);
     });
-
-    let action = "CONTENT_STATUS_CHANGED";
-    if (transition.targetStatus === ContentStatus.PUBLISHED) {
-      action = "CONTENT_PUBLISHED";
-    } else if (transition.targetStatus === ContentStatus.ARCHIVED) {
-      action = "CONTENT_ARCHIVED";
-    }
-
-    await this.auditService.logAction({
-      action,
-      entity: "ContentPost",
-      entityId: id,
-      actorId,
-      details: {
-        previousStatus: existing.status,
-        newStatus: transition.targetStatus,
-        notes: transition.notes,
-        publishedAt: publishedAt?.toISOString(),
-        scheduledAt: scheduledAt?.toISOString(),
-      },
-    });
-
-    return this.mapAdminPost(updated);
   }
 
   async listAdminPosts(
     query?: QueryContentPostsDto,
-  ): Promise<{ items: AdminContentPostDto[]; total: number }> {
+  ): Promise<PaginatedResponse<AdminContentPostDto>> {
+    const page = Math.max(query?.page || 1, 1);
     const limit = Math.min(Math.max(query?.limit || 20, 1), 100);
-    const offset = Math.max(query?.offset || 0, 0);
+    const offset = query?.offset !== undefined ? Math.max(query.offset, 0) : (page - 1) * limit;
 
     const where: any = {};
     if (query?.status) {
@@ -361,9 +413,14 @@ export class ContentService {
       prisma.contentPost.count({ where }),
     ]);
 
+    const totalPages = Math.ceil(total / limit);
+
     return {
       items: items.map((p) => this.mapAdminPost(p)),
       total,
+      page,
+      limit,
+      totalPages,
     };
   }
 
@@ -411,7 +468,7 @@ export class ContentService {
 
     let slug = existing.slug;
     if (data.slug && data.slug !== existing.slug) {
-      const candidate = slugify(data.slug);
+      const candidate = this.normalizeAndValidateSlug(data.slug, "Category slug");
       const conflict = await prisma.contentCategory.findUnique({ where: { slug: candidate } });
       if (conflict && conflict.id !== id) {
         throw new ConflictException(`Category slug '${candidate}' already in use.`);
@@ -448,22 +505,25 @@ export class ContentService {
   }
 
   // --------------------------------------------------------
-  // Public Content (PUBLISHED ONLY)
+  // Public Content (PUBLISHED ARTICLE ONLY)
   // --------------------------------------------------------
 
   async listPublicPosts(
     query?: QueryPublicPostsDto,
-  ): Promise<{ items: PublicContentListItemDto[]; total: number }> {
+  ): Promise<PaginatedResponse<PublicContentListItemDto>> {
+    const page = Math.max(query?.page || 1, 1);
     const limit = Math.min(Math.max(query?.limit || 10, 1), 50);
-    const offset = query?.offset !== undefined ? Math.max(query.offset, 0) : ((query?.page || 1) - 1) * limit;
+    const offset = query?.offset !== undefined ? Math.max(query.offset, 0) : (page - 1) * limit;
 
     const where: any = {
       status: ContentStatus.PUBLISHED,
+      contentType: ContentType.ARTICLE, // Strictly ARTICLE only in public blog
     };
 
-    if (query?.categorySlug) {
+    const catSlug = query?.categorySlug || query?.category;
+    if (catSlug) {
       where.category = {
-        slug: query.categorySlug,
+        slug: catSlug,
       };
     }
 
@@ -498,6 +558,8 @@ export class ContentService {
       prisma.contentPost.count({ where }),
     ]);
 
+    const totalPages = Math.ceil(total / limit);
+
     return {
       items: posts.map((p) => ({
         id: p.id,
@@ -511,6 +573,9 @@ export class ContentService {
         category: p.category,
       })),
       total,
+      page,
+      limit,
+      totalPages,
     };
   }
 
@@ -519,6 +584,7 @@ export class ContentService {
       where: {
         slug,
         status: ContentStatus.PUBLISHED,
+        contentType: ContentType.ARTICLE, // Strictly ARTICLE only
       },
       select: {
         id: true,
@@ -543,7 +609,7 @@ export class ContentService {
     });
 
     if (!post) {
-      // Clean 404 for non-existent or un-published posts (anti-enumeration)
+      // Clean 404 for non-existent or non-published posts (anti-enumeration)
       throw new NotFoundException(`Article '${slug}' not found.`);
     }
 
@@ -574,7 +640,7 @@ export class ContentService {
         _count: {
           select: {
             posts: {
-              where: { status: ContentStatus.PUBLISHED },
+              where: { status: ContentStatus.PUBLISHED, contentType: ContentType.ARTICLE },
             },
           },
         },
@@ -637,3 +703,4 @@ export class ContentService {
     };
   }
 }
+

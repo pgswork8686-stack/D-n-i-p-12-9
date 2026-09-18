@@ -24,11 +24,16 @@ jest.mock("@nexus/database", () => {
       },
       contentPost: {
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         findFirst: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
+      },
+      auditLog: {
+        create: jest.fn(),
       },
     },
   };
@@ -151,6 +156,69 @@ describe("ContentService", () => {
         ),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it("should reject manual creation with PUBLISHED status", async () => {
+      await expect(
+        service.createPost(
+          "user_1",
+          {
+            title: "Bypass Post",
+            content: "Content here",
+            status: ContentStatus.PUBLISHED as any,
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("should reject manual creation with SCHEDULED status", async () => {
+      await expect(
+        service.createPost(
+          "user_1",
+          {
+            title: "Bypass Scheduled Post",
+            content: "Content here",
+            status: ContentStatus.SCHEDULED as any,
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("should reject manual creation with REVIEW status", async () => {
+      await expect(
+        service.createPost(
+          "user_1",
+          {
+            title: "Bypass Review Post",
+            content: "Content here",
+            status: ContentStatus.REVIEW as any,
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("should reject manual creation with AI_DRAFT or ARCHIVED status", async () => {
+      await expect(
+        service.createPost(
+          "user_1",
+          {
+            title: "Bypass AI Draft",
+            content: "Content here",
+            status: ContentStatus.AI_DRAFT as any,
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.createPost(
+          "user_1",
+          {
+            title: "Bypass Archived",
+            content: "Content here",
+            status: ContentStatus.ARCHIVED as any,
+          },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe("State Machine Transitions", () => {
@@ -171,7 +239,8 @@ describe("ContentService", () => {
         category: null,
       };
       (prisma.contentPost.findUnique as jest.Mock).mockResolvedValue(mockPost);
-      (prisma.contentPost.update as jest.Mock).mockResolvedValue({
+      (prisma.contentPost.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.contentPost.findUniqueOrThrow as jest.Mock).mockResolvedValue({
         ...mockPost,
         status: ContentStatus.REVIEW,
       });
@@ -183,11 +252,44 @@ describe("ContentService", () => {
       );
 
       expect(res.status).toBe(ContentStatus.REVIEW);
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: "CONTENT_STATUS_CHANGED",
+          data: expect.objectContaining({
+            action: "CONTENT_STATUS_CHANGED",
+          }),
         }),
       );
+    });
+
+    it("should reject same-state transition with BadRequestException", async () => {
+      (prisma.contentPost.findUnique as jest.Mock).mockResolvedValue({
+        id: "post_1",
+        status: ContentStatus.PUBLISHED,
+      });
+
+      await expect(
+        service.transitionPost(
+          "post_1",
+          "editor_1",
+          { targetStatus: ContentStatus.PUBLISHED },
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("should throw ConflictException on concurrent CAS collision (count = 0)", async () => {
+      (prisma.contentPost.findUnique as jest.Mock).mockResolvedValue({
+        id: "post_1",
+        status: ContentStatus.REVIEW,
+      });
+      (prisma.contentPost.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.transitionPost(
+          "post_1",
+          "editor_1",
+          { targetStatus: ContentStatus.PUBLISHED },
+        ),
+      ).rejects.toThrow(ConflictException);
     });
 
     it("should reject invalid transition ARCHIVED -> SCHEDULED", async () => {
@@ -234,12 +336,12 @@ describe("ContentService", () => {
         category: null,
       };
       (prisma.contentPost.findUnique as jest.Mock).mockResolvedValue(mockPost);
-      (prisma.contentPost.update as jest.Mock).mockImplementation(({ data }) =>
-        Promise.resolve({
-          ...mockPost,
-          ...data,
-        }),
-      );
+      (prisma.contentPost.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.contentPost.findUniqueOrThrow as jest.Mock).mockResolvedValue({
+        ...mockPost,
+        status: ContentStatus.PUBLISHED,
+        publishedAt: new Date(),
+      });
 
       const res = await service.transitionPost(
         "post_1",
@@ -249,9 +351,11 @@ describe("ContentService", () => {
 
       expect(res.status).toBe(ContentStatus.PUBLISHED);
       expect(res.publishedAt).toBeDefined();
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: "CONTENT_PUBLISHED",
+          data: expect.objectContaining({
+            action: "CONTENT_PUBLISHED",
+          }),
         }),
       );
     });

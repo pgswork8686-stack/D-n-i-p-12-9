@@ -1,42 +1,47 @@
 "use client";
 
-import React, { useEffect, useState, use } from "react";
+import React, { useEffect, useState, use, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
+import {
+  AdminContentPostDto,
+  ContentCategoryDto,
+  ContentStatus,
+  ContentType,
+} from "@nexus/contracts";
+import { useAuth } from "../../context/auth-context";
+import { getApiClient } from "../../lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
-
-const STATUS_TRANSITIONS: Record<string, { label: string; target: string; variant: "primary" | "secondary" | "outline" | "danger" }[]> = {
-  IDEA: [{ label: "Start Draft", target: "DRAFT", variant: "primary" }],
+const STATUS_TRANSITIONS: Record<
+  string,
+  { label: string; target: ContentStatus; variant: "primary" | "secondary" | "outline" | "danger" }[]
+> = {
+  IDEA: [{ label: "Start Draft", target: ContentStatus.DRAFT, variant: "primary" }],
   DRAFT: [
-    { label: "Submit for Review", target: "REVIEW", variant: "primary" },
-    { label: "Archive", target: "ARCHIVED", variant: "danger" },
+    { label: "Submit for Review", target: ContentStatus.REVIEW, variant: "primary" },
+    { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   AI_DRAFT: [
-    { label: "Submit for Review", target: "REVIEW", variant: "primary" },
-    { label: "Convert to Manual Draft", target: "DRAFT", variant: "secondary" },
-    { label: "Archive", target: "ARCHIVED", variant: "danger" },
+    { label: "Submit for Review", target: ContentStatus.REVIEW, variant: "primary" },
+    { label: "Convert to Manual Draft", target: ContentStatus.DRAFT, variant: "secondary" },
+    { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   REVIEW: [
-    { label: "🚀 Publish Now", target: "PUBLISHED", variant: "primary" },
-    { label: "📅 Schedule Publication", target: "SCHEDULED", variant: "secondary" },
-    { label: "Send Back to Draft", target: "DRAFT", variant: "outline" },
-    { label: "Archive", target: "ARCHIVED", variant: "danger" },
+    { label: "🚀 Publish Now", target: ContentStatus.PUBLISHED, variant: "primary" },
+    { label: "📅 Schedule Publication", target: ContentStatus.SCHEDULED, variant: "secondary" },
+    { label: "Send Back to Draft", target: ContentStatus.DRAFT, variant: "outline" },
+    { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   SCHEDULED: [
-    { label: "Publish Immediately", target: "PUBLISHED", variant: "primary" },
-    { label: "Revert to Draft", target: "DRAFT", variant: "outline" },
-    { label: "Archive", target: "ARCHIVED", variant: "danger" },
+    { label: "Publish Immediately", target: ContentStatus.PUBLISHED, variant: "primary" },
+    { label: "Revert to Draft", target: ContentStatus.DRAFT, variant: "outline" },
+    { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   PUBLISHED: [
-    { label: "Archive Post", target: "ARCHIVED", variant: "danger" },
+    { label: "Archive Post", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   ARCHIVED: [
-    { label: "Restore to Draft", target: "DRAFT", variant: "secondary" },
+    { label: "Restore to Draft", target: ContentStatus.DRAFT, variant: "secondary" },
   ],
 };
 
@@ -56,25 +61,22 @@ export default function EditContentPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const { token, isLoading: authLoading } = useAuth();
 
-  const [post, setPost] = useState<any>(null);
-  const [categories, setCategories] = useState<any[]>([]);
+  const [post, setPost] = useState<AdminContentPostDto | null>(null);
+  const [categories, setCategories] = useState<ContentCategoryDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
-
   // Form fields
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   const [excerpt, setExcerpt] = useState("");
   const [content, setContent] = useState("");
-  const [contentType, setContentType] = useState("ARTICLE");
+  const [contentType, setContentType] = useState<ContentType>(ContentType.ARTICLE);
   const [categoryId, setCategoryId] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
 
@@ -90,30 +92,22 @@ export default function EditContentPage({
   const [scheduleTargetTime, setScheduleTargetTime] = useState("");
   const [showScheduleModal, setShowScheduleModal] = useState(false);
 
-  const fetchPostAndCategories = async () => {
-    if (!authToken) {
-      setError("Unauthorized (401): Please provide an admin auth token.");
-      setLoading(false);
+  const fetchPostAndCategories = useCallback(async () => {
+    if (!token) {
+      if (!authLoading) {
+        setError("Unauthorized (401): Please sign in with an admin auth token.");
+        setLoading(false);
+      }
       return;
     }
 
     setLoading(true);
     try {
-      const [postRes, catRes] = await Promise.all([
-        fetch(`${API_URL}/admin/content/posts/${id}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
-        fetch(`${API_URL}/admin/content/categories`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        }),
+      const client = getApiClient(token);
+      const [postData, catData] = await Promise.all([
+        client.getAdminContentPost(id),
+        client.listAdminContentCategories().catch(() => []),
       ]);
-
-      if (!postRes.ok) {
-        throw new Error(`Failed to load post (status ${postRes.status})`);
-      }
-
-      const postData = await postRes.json();
-      const catData = catRes.ok ? await catRes.json() : [];
 
       setPost(postData);
       setCategories(Array.isArray(catData) ? catData : []);
@@ -123,9 +117,13 @@ export default function EditContentPage({
       setSlug(postData.slug || "");
       setExcerpt(postData.excerpt || "");
       setContent(postData.content || "");
-      setContentType(postData.contentType || "ARTICLE");
+      setContentType((postData.contentType as ContentType) || ContentType.ARTICLE);
       setCategoryId(postData.categoryId || "");
-      setScheduledAt(postData.scheduledAt ? new Date(postData.scheduledAt).toISOString().slice(0, 16) : "");
+      setScheduledAt(
+        postData.scheduledAt
+          ? new Date(postData.scheduledAt).toISOString().slice(0, 16)
+          : "",
+      );
       setSeoTitle(postData.seoTitle || "");
       setSeoDescription(postData.seoDescription || "");
       setCanonicalUrl(postData.canonicalUrl || "");
@@ -138,21 +136,25 @@ export default function EditContentPage({
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, token, authLoading]);
 
   useEffect(() => {
-    fetchPostAndCategories();
-  }, [id, authToken]);
+    if (!authLoading) {
+      fetchPostAndCategories();
+    }
+  }, [authLoading, fetchPostAndCategories]);
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!token) return;
+
     setSaving(true);
     setError(null);
     setSuccessMsg(null);
 
     const payload: any = {
-      title,
-      slug,
+      title: title.trim(),
+      slug: slug.trim(),
       excerpt: excerpt.trim() || null,
       content,
       contentType,
@@ -165,26 +167,9 @@ export default function EditContentPage({
       ogImageUrl: ogImageUrl.trim() || null,
     };
 
-    if (scheduledAt) {
-      payload.scheduledAt = new Date(scheduledAt).toISOString();
-    }
-
     try {
-      const res = await fetch(`${API_URL}/admin/content/posts/${id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || `Failed to update post (${res.status})`);
-      }
-
-      const updated = await res.json();
+      const client = getApiClient(token);
+      const updated = await client.updateContentPost(id, payload);
       setPost(updated);
       setSuccessMsg("Content post updated successfully.");
     } catch (err: any) {
@@ -194,37 +179,27 @@ export default function EditContentPage({
     }
   };
 
-  const handleTransition = async (targetStatus: string, customScheduledAt?: string) => {
+  const handleTransition = async (targetStatus: ContentStatus, customScheduledAt?: string) => {
+    if (!token) return;
+
     setTransitioning(true);
     setError(null);
     setSuccessMsg(null);
 
+    if (targetStatus === ContentStatus.SCHEDULED && !customScheduledAt) {
+      setShowScheduleModal(true);
+      setTransitioning(false);
+      return;
+    }
+
     const payload: any = { targetStatus };
-    if (targetStatus === "SCHEDULED") {
-      if (!customScheduledAt) {
-        setShowScheduleModal(true);
-        setTransitioning(false);
-        return;
-      }
+    if (targetStatus === ContentStatus.SCHEDULED && customScheduledAt) {
       payload.scheduledAt = new Date(customScheduledAt).toISOString();
     }
 
     try {
-      const res = await fetch(`${API_URL}/admin/content/posts/${id}/transition`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || `Status transition failed (${res.status})`);
-      }
-
-      const updated = await res.json();
+      const client = getApiClient(token);
+      const updated = await client.transitionContentPost(id, payload);
       setPost(updated);
       setShowScheduleModal(false);
       setSuccessMsg(`Status transitioned to '${targetStatus}' successfully.`);
@@ -235,7 +210,7 @@ export default function EditContentPage({
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return <div className="max-w-4xl mx-auto py-12 px-6 text-sm text-gray-500">Loading post...</div>;
   }
 
@@ -255,7 +230,7 @@ export default function EditContentPage({
             )}
           </div>
           <p className="text-xs text-gray-400 mt-1 font-mono">
-            ID: {id} • Reading Time: ~{post?.readingTimeMinutes || 1} min • Created: {new Date(post?.createdAt).toLocaleDateString()}
+            ID: {id} • Reading Time: ~{post?.readingTimeMinutes || 1} min • Created: {post?.createdAt ? new Date(post.createdAt).toLocaleDateString() : ""}
           </p>
         </div>
         {post?.status === "PUBLISHED" && (
@@ -336,7 +311,7 @@ export default function EditContentPage({
                 variant="primary"
                 size="sm"
                 disabled={!scheduleTargetTime}
-                onClick={() => handleTransition("SCHEDULED", scheduleTargetTime)}
+                onClick={() => handleTransition(ContentStatus.SCHEDULED, scheduleTargetTime)}
               >
                 Confirm Schedule
               </Button>
@@ -412,11 +387,11 @@ export default function EditContentPage({
                 </label>
                 <select
                   value={contentType}
-                  onChange={(e) => setContentType(e.target.value)}
+                  onChange={(e) => setContentType(e.target.value as ContentType)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value="ARTICLE">ARTICLE</option>
-                  <option value="PAGE">PAGE</option>
+                  <option value={ContentType.ARTICLE}>ARTICLE</option>
+                  <option value={ContentType.PAGE}>PAGE</option>
                 </select>
               </div>
 
@@ -528,6 +503,18 @@ export default function EditContentPage({
                 />
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1">
+                OpenGraph Image URL
+              </label>
+              <input
+                type="url"
+                value={ogImageUrl}
+                onChange={(e) => setOgImageUrl(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
+              />
+            </div>
           </div>
         </Card>
 
@@ -537,7 +524,7 @@ export default function EditContentPage({
               Close
             </Button>
           </Link>
-          <Button type="submit" variant="primary" disabled={saving}>
+          <Button type="submit" variant="primary" disabled={saving || authLoading}>
             {saving ? "Saving Changes..." : "Save Changes"}
           </Button>
         </div>

@@ -1,68 +1,72 @@
+import sanitizeHtml from "sanitize-html";
+
+export const ALLOWED_CONTENT_TAGS = [
+  "p",
+  "br",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "u",
+  "s",
+  "blockquote",
+  "ul",
+  "ol",
+  "li",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "code",
+  "pre",
+  "a",
+  "img",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
+  "hr",
+];
+
+export const ALLOWED_CONTENT_ATTRIBUTES: Record<string, string[]> = {
+  a: ["href", "title", "target", "rel"],
+  img: ["src", "alt", "title", "width", "height", "loading"],
+  th: ["colspan", "rowspan", "scope"],
+  td: ["colspan", "rowspan"],
+};
+
 /**
- * Robust HTML & Markdown content sanitization pipeline.
- * Neutralizes scripts, inline event handlers, and unsafe URI protocols.
+ * Robust HTML content sanitization pipeline using an authoritative parser allowlist.
+ * Neutralizes scripts, inline event handlers, style attributes, and unsafe schemes
+ * (including entity-encoded and obfuscated javascript: / data: / vbscript:).
  */
 export function sanitizeContentHtml(rawHtml: string): string {
-  if (!rawHtml) return "";
+  if (!rawHtml || typeof rawHtml !== "string") return "";
 
-  let sanitized = rawHtml;
-
-  // 1. Remove dangerous blocks: <script>...</script>, <style>...</style>, <iframe>...</iframe>, <object>, <embed>, <applet>
-  sanitized = sanitized.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script\s*>/gi, "");
-  sanitized = sanitized.replace(/<script\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<\/script\s*>/gi, "");
-
-  sanitized = sanitized.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style\s*>/gi, "");
-  sanitized = sanitized.replace(/<style\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<\/style\s*>/gi, "");
-
-  sanitized = sanitized.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe\s*>/gi, "");
-  sanitized = sanitized.replace(/<iframe\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<\/iframe\s*>/gi, "");
-
-  sanitized = sanitized.replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object\s*>/gi, "");
-  sanitized = sanitized.replace(/<object\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<\/object\s*>/gi, "");
-
-  sanitized = sanitized.replace(/<embed\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<link\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<meta\b[^>]*>/gi, "");
-  sanitized = sanitized.replace(/<base\b[^>]*>/gi, "");
-
-  // 2. Remove all inline event handlers: e.g. onclick=..., onerror=..., onload=...
-  // Matches inside HTML tags: on[a-zA-Z]+=(?:'[^']*'|"[^"]*"|[^\s>]+)
-  sanitized = sanitized.replace(
-    /\s+on[a-zA-Z]+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi,
-    "",
-  );
-
-  // 3. Sanitize dangerous schemes in href / src / action / data attributes:
-  // e.g. href="javascript:..." or src='javascript:...'
-  const dangerousProtocols = /(?:javascript|vbscript|data\s*:\s*text\/html)/i;
-
-  // For href attributes:
-  sanitized = sanitized.replace(
-    /\b(href\s*=\s*)(["'])([^"']*)\2/gi,
-    (match, prefix, quote, val) => {
-      const trimmed = val.trim().toLowerCase();
-      if (dangerousProtocols.test(trimmed)) {
-        return `${prefix}${quote}#${quote}`;
-      }
-      return match;
+  return sanitizeHtml(rawHtml, {
+    allowedTags: ALLOWED_CONTENT_TAGS,
+    allowedAttributes: ALLOWED_CONTENT_ATTRIBUTES,
+    allowedSchemes: ["http", "https", "mailto"],
+    allowedSchemesByTag: {
+      img: ["http", "https"],
+      a: ["http", "https", "mailto"],
     },
-  );
-
-  // For src attributes:
-  sanitized = sanitized.replace(
-    /\b(src\s*=\s*)(["'])([^"']*)\2/gi,
-    (match, prefix, quote, val) => {
-      const trimmed = val.trim().toLowerCase();
-      if (dangerousProtocols.test(trimmed)) {
-        return `${prefix}${quote}about:blank${quote}`;
-      }
-      return match;
+    allowProtocolRelative: false,
+    transformTags: {
+      a: (tagName, attribs) => {
+        if (attribs.target === "_blank") {
+          attribs.rel = "noopener noreferrer";
+        }
+        return {
+          tagName,
+          attribs,
+        };
+      },
     },
-  );
-
-  return sanitized;
+  });
 }
+

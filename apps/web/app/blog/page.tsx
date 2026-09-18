@@ -1,49 +1,51 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge, Card } from "@nexus/ui";
+import { resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-export const metadata: Metadata = {
-  title: "Blog & Technical Guides | NEXUSTHEME",
-  description:
-    "Engineering guides, architectural patterns, and WooCommerce theme & plugin optimization insights.",
-  alternates: {
-    canonical: `${SITE_URL}/blog`,
-  },
-  openGraph: {
+export async function generateMetadata(): Promise<Metadata> {
+  const siteUrl = resolvePublicSiteUrl();
+  return {
     title: "Blog & Technical Guides | NEXUSTHEME",
     description:
       "Engineering guides, architectural patterns, and WooCommerce theme & plugin optimization insights.",
-    url: `${SITE_URL}/blog`,
-    siteName: "NEXUSTHEME",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Blog & Technical Guides | NEXUSTHEME",
-    description:
-      "Engineering guides, architectural patterns, and WooCommerce theme & plugin optimization insights.",
-  },
-};
+    alternates: {
+      canonical: `${siteUrl}/blog`,
+    },
+    openGraph: {
+      title: "Blog & Technical Guides | NEXUSTHEME",
+      description:
+        "Engineering guides, architectural patterns, and WooCommerce theme & plugin optimization insights.",
+      url: `${siteUrl}/blog`,
+      siteName: "NEXUSTHEME",
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: "Blog & Technical Guides | NEXUSTHEME",
+      description:
+        "Engineering guides, architectural patterns, and WooCommerce theme & plugin optimization insights.",
+    },
+  };
+}
 
 interface BlogPageProps {
   searchParams: Promise<{ category?: string; page?: string }>;
 }
 
 async function getBlogData(categorySlug?: string, page: number = 1) {
+  const apiUrl = resolveApiUrl();
   const params = new URLSearchParams();
-  if (categorySlug) params.append("category", categorySlug);
-  params.append("page", page.toString());
-  params.append("limit", "12");
+  if (categorySlug) params.set("categorySlug", categorySlug);
+  params.set("page", page.toString());
+  params.set("limit", "12");
 
   try {
     const [postsRes, catsRes] = await Promise.all([
-      fetch(`${API_URL}/v1/content/posts?${params.toString()}`, {
+      fetch(`${apiUrl}/v1/content/posts?${params.toString()}`, {
         cache: "no-store",
       }),
-      fetch(`${API_URL}/v1/content/categories`, {
+      fetch(`${apiUrl}/v1/content/categories`, {
         cache: "no-store",
       }),
     ]);

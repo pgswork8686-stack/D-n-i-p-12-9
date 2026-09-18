@@ -1271,12 +1271,13 @@ export class NexusApiClient {
 
   async listAdminContentPosts(
     query?: QueryContentPostsDto,
-  ): Promise<{ items: AdminContentPostDto[]; total: number }> {
+  ): Promise<PaginatedResponse<AdminContentPostDto>> {
     const params = new URLSearchParams();
     if (query?.status) params.set("status", query.status);
     if (query?.categoryId) params.set("categoryId", query.categoryId);
     if (query?.search) params.set("search", query.search);
     if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.page !== undefined) params.set("page", String(query.page));
     if (query?.offset !== undefined) params.set("offset", String(query.offset));
     if (query?.sortBy) params.set("sortBy", query.sortBy);
     if (query?.sortOrder) params.set("sortOrder", query.sortOrder);
@@ -1290,7 +1291,7 @@ export class NexusApiClient {
       const err = await res.text();
       throw new Error(`List admin content posts failed (${res.status}): ${err}`);
     }
-    return (await res.json()) as { items: AdminContentPostDto[]; total: number };
+    return (await res.json()) as PaginatedResponse<AdminContentPostDto>;
   }
 
   async getAdminContentPost(id: string): Promise<AdminContentPostDto> {
@@ -1405,7 +1406,7 @@ export class NexusApiClient {
 
   async listPublicContentPosts(
     query?: QueryPublicPostsDto,
-  ): Promise<{ items: PublicContentListItemDto[]; total: number }> {
+  ): Promise<PaginatedResponse<PublicContentListItemDto>> {
     const params = new URLSearchParams();
     if (query?.categorySlug) params.set("categorySlug", query.categorySlug);
     if (query?.search) params.set("search", query.search);
@@ -1422,10 +1423,7 @@ export class NexusApiClient {
       const err = await res.text();
       throw new Error(`List public content posts failed (${res.status}): ${err}`);
     }
-    return (await res.json()) as {
-      items: PublicContentListItemDto[];
-      total: number;
-    };
+    return (await res.json()) as PaginatedResponse<PublicContentListItemDto>;
   }
 
   async getPublicContentPostBySlug(slug: string): Promise<PublicContentPostDto> {

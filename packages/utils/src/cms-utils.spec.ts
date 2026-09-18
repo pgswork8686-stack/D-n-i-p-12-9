@@ -2,6 +2,7 @@ import { slugify, removeVietnameseAccents, isReservedSlug } from "./slugify";
 import { sanitizeContentHtml } from "./sanitize";
 import { isValidCanonicalUrl } from "./url-validator";
 import { safeJsonLd } from "./json-ld";
+import { toMajorUnit } from "./money";
 
 describe("CMS & SEO Utilities", () => {
   describe("Slugify & Vietnamese Accents", () => {
@@ -35,7 +36,7 @@ describe("CMS & SEO Utilities", () => {
     });
   });
 
-  describe("HTML Content Sanitization", () => {
+  describe("HTML Content Sanitization - XSS Attack Matrix", () => {
     it("strips executable <script> tags completely", () => {
       const malicious = '<p>Hello world</p><script>alert("XSS")</script><p>End</p>';
       const sanitized = sanitizeContentHtml(malicious);
@@ -46,29 +47,88 @@ describe("CMS & SEO Utilities", () => {
     });
 
     it("strips inline event handlers like onerror and onload", () => {
-      const malicious = '<img src="valid.jpg" onerror="alert(1)" onload="evil()" alt="pic">';
+      const malicious = '<img src="https://example.com/valid.jpg" onerror="alert(1)" onload="evil()" alt="pic">';
       const sanitized = sanitizeContentHtml(malicious);
       expect(sanitized).not.toContain("onerror");
       expect(sanitized).not.toContain("onload");
-      expect(sanitized).toContain('src="valid.jpg"');
+      expect(sanitized).not.toContain("evil()");
+      expect(sanitized).toContain('src="https://example.com/valid.jpg"');
       expect(sanitized).toContain('alt="pic"');
     });
 
-    it("neutralizes dangerous javascript: URI in href", () => {
-      const malicious = '<a href="javascript:alert(document.cookie)">Click me</a>';
+    it("neutralizes literal javascript: href", () => {
+      const malicious = '<a href="javascript:alert(1)">Click me</a>';
       const sanitized = sanitizeContentHtml(malicious);
       expect(sanitized).not.toContain("javascript:");
-      expect(sanitized).toContain('href="#"');
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).toContain("<a>Click me</a>");
     });
 
-    it("neutralizes dangerous javascript: URI in src", () => {
-      const malicious = '<iframe src="javascript:alert(1)"></iframe>';
+    it("neutralizes entity-encoded javascript: href (&#x73;)", () => {
+      const malicious = '<a href="java&#x73;cript:alert(1)">x</a>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).not.toContain("javascript:");
+      expect(sanitized).toContain("<a>x</a>");
+    });
+
+    it("neutralizes decimal entity-encoded javascript: href (&#97;)", () => {
+      const malicious = '<a href="jav&#97;script:alert(1)">x</a>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).not.toContain("javascript:");
+      expect(sanitized).toContain("<a>x</a>");
+    });
+
+    it("neutralizes mixed-casing and whitespace obfuscated javascript: href", () => {
+      const malicious = '<a href="JaVaScRiPt:alert(1)">x</a>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).not.toContain("JaVaScRiPt");
+      expect(sanitized).toContain("<a>x</a>");
+    });
+
+    it("neutralizes tab/newline obfuscated scheme", () => {
+      const malicious = '<a href="jav&#x09;ascript:alert(1)">x</a>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).toContain("<a>x</a>");
+    });
+
+    it("removes dangerous <iframe>, <object>, <embed>", () => {
+      const malicious = '<iframe src="https://example.com"></iframe><object data="test"></object><embed src="evil.swf">';
       const sanitized = sanitizeContentHtml(malicious);
       expect(sanitized).not.toContain("<iframe");
-      expect(sanitized).not.toContain("javascript:");
+      expect(sanitized).not.toContain("<object");
+      expect(sanitized).not.toContain("<embed");
     });
 
-    it("preserves safe formatting HTML tags", () => {
+    it("neutralizes SVG with onload and xlink:href", () => {
+      const malicious = '<svg onload="alert(1)"><a xlink:href="javascript:alert(2)"><text>click</text></a></svg>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("<svg");
+      expect(sanitized).not.toContain("onload");
+      expect(sanitized).not.toContain("xlink:href");
+      expect(sanitized).not.toContain("alert(1)");
+      expect(sanitized).not.toContain("alert(2)");
+    });
+
+    it("strips style attribute to prevent CSS-based URL injection", () => {
+      const malicious = '<p style="background-image: url(javascript:alert(1))">content</p>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("style");
+      expect(sanitized).not.toContain("javascript:");
+      expect(sanitized).toContain("<p>content</p>");
+    });
+
+    it("disallows data: URIs in img src and links", () => {
+      const malicious = '<img src="data:image/svg+xml;base64,PHN2Zz4=" alt="bad"><a href="data:text/html,<script>alert(1)</script>">link</a>';
+      const sanitized = sanitizeContentHtml(malicious);
+      expect(sanitized).not.toContain("data:");
+      expect(sanitized).not.toContain("<script");
+    });
+
+    it("preserves safe formatting HTML tags and safe links", () => {
       const safe = '<p>This is <strong>bold</strong> and <em>italic</em> with a <a href="https://example.com">link</a>.</p>';
       const sanitized = sanitizeContentHtml(safe);
       expect(sanitized).toBe(safe);
@@ -114,6 +174,20 @@ describe("CMS & SEO Utilities", () => {
       expect(serialized).not.toContain("<script>");
       expect(serialized).toContain("\\u003c/script\\u003e");
       expect(serialized).toContain("\\u0026");
+    });
+  });
+
+  describe("toMajorUnit Structured Data Money Converter", () => {
+    it("converts USD cents to major unit dollars", () => {
+      expect(toMajorUnit(1200, "USD")).toBe(12);
+      expect(toMajorUnit(1250, "USD")).toBe(12.5);
+      expect(toMajorUnit(99, "USD")).toBe(0.99);
+      expect(toMajorUnit(0, "USD")).toBe(0);
+    });
+
+    it("preserves VND integer amount without decimal division", () => {
+      expect(toMajorUnit(299000, "VND")).toBe(299000);
+      expect(toMajorUnit(50000, "VND")).toBe(50000);
     });
   });
 });

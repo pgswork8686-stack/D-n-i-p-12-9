@@ -2,18 +2,16 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@nexus/ui";
-import { safeJsonLd } from "@nexus/utils";
-
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { safeJsonLd, resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
 
 interface ArticlePageProps {
   params: Promise<{ slug: string }>;
 }
 
 async function getArticle(slug: string) {
+  const apiUrl = resolveApiUrl();
   try {
-    const res = await fetch(`${API_URL}/v1/content/posts/${encodeURIComponent(slug)}`, {
+    const res = await fetch(`${apiUrl}/v1/content/posts/${encodeURIComponent(slug)}`, {
       cache: "no-store",
     });
 
@@ -40,9 +38,10 @@ export async function generateMetadata({
     };
   }
 
+  const siteUrl = resolvePublicSiteUrl();
   const title = post.seoTitle || post.title;
   const description = post.seoDescription || post.excerpt || `${post.title} on NEXUSTHEME.`;
-  const canonical = post.canonicalUrl || `${SITE_URL}/blog/${post.slug}`;
+  const canonical = post.canonicalUrl || `${siteUrl}/blog/${post.slug}`;
   const ogImage = post.ogImageUrl || post.featuredImageUrl;
 
   return {
@@ -78,9 +77,10 @@ export default async function ArticleDetailPage({ params }: ArticlePageProps) {
     notFound();
   }
 
-  const canonical = post.canonicalUrl || `${SITE_URL}/blog/${post.slug}`;
+  const siteUrl = resolvePublicSiteUrl();
+  const canonical = post.canonicalUrl || `${siteUrl}/blog/${post.slug}`;
 
-  // Build JSON-LD Article structured data
+  // Build JSON-LD Article structured data (truthful, author omitted for V1)
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -92,15 +92,10 @@ export default async function ArticleDetailPage({ params }: ArticlePageProps) {
     },
     datePublished: post.publishedAt,
     dateModified: post.updatedAt,
-    author: {
-      "@type": "Organization",
-      name: "NEXUSTHEME Editorial Team",
-      url: SITE_URL,
-    },
     publisher: {
       "@type": "Organization",
       name: "NEXUSTHEME",
-      url: SITE_URL,
+      url: siteUrl,
     },
     ...(post.featuredImageUrl ? { image: post.featuredImageUrl } : {}),
   };

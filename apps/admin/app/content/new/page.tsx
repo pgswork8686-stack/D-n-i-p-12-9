@@ -4,28 +4,24 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button, Card } from "@nexus/ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+import { ContentCategoryDto, ContentStatus, ContentType } from "@nexus/contracts";
+import { useAuth } from "../../context/auth-context";
+import { getApiClient } from "../../lib/api";
 
 export default function NewContentPage() {
   const router = useRouter();
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
-  const [categories, setCategories] = useState<any[]>([]);
+  const { token, isLoading: authLoading } = useAuth();
+  const [categories, setCategories] = useState<ContentCategoryDto[]>([]);
 
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   const [excerpt, setExcerpt] = useState("");
   const [content, setContent] = useState("");
-  const [contentType, setContentType] = useState("ARTICLE");
-  const [status, setStatus] = useState("DRAFT");
+  const [contentType, setContentType] = useState<ContentType>(ContentType.ARTICLE);
+  const [status, setStatus] = useState<ContentStatus.DRAFT | ContentStatus.IDEA>(
+    ContentStatus.DRAFT,
+  );
   const [categoryId, setCategoryId] = useState("");
-  const [scheduledAt, setScheduledAt] = useState("");
 
   // SEO fields
   const [seoTitle, setSeoTitle] = useState("");
@@ -39,21 +35,18 @@ export default function NewContentPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authToken) return;
-    fetch(`${API_URL}/admin/content/categories`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
-    })
-      .then((res) => res.json())
+    if (!token) return;
+    const client = getApiClient(token);
+    client
+      .listAdminContentCategories()
       .then((data) => setCategories(Array.isArray(data) ? data : []))
       .catch(() => setCategories([]));
-  }, [authToken]);
+  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authToken) {
-      setError("Unauthorized. Please provide an authenticated admin token.");
+    if (!token) {
+      setError("Unauthorized. Please sign in with an authenticated admin account.");
       return;
     }
 
@@ -62,24 +55,18 @@ export default function NewContentPage() {
       return;
     }
 
-    if (status === "SCHEDULED" && !scheduledAt) {
-      setError("Scheduled release date is required when status is SCHEDULED.");
-      return;
-    }
-
     setSaving(true);
     setError(null);
 
     const payload: any = {
-      title,
-      content,
+      title: title.trim(),
+      content: content.trim(),
       contentType,
       status,
     };
     if (slug.trim()) payload.slug = slug.trim();
     if (excerpt.trim()) payload.excerpt = excerpt.trim();
     if (categoryId) payload.categoryId = categoryId;
-    if (scheduledAt) payload.scheduledAt = new Date(scheduledAt).toISOString();
     if (seoTitle.trim()) payload.seoTitle = seoTitle.trim();
     if (seoDescription.trim()) payload.seoDescription = seoDescription.trim();
     if (canonicalUrl.trim()) payload.canonicalUrl = canonicalUrl.trim();
@@ -88,21 +75,8 @@ export default function NewContentPage() {
     if (ogImageUrl.trim()) payload.ogImageUrl = ogImageUrl.trim();
 
     try {
-      const res = await fetch(`${API_URL}/admin/content/posts`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || `Failed to create post (${res.status})`);
-      }
-
-      const created = await res.json();
+      const client = getApiClient(token);
+      const created = await client.createContentPost(payload);
       router.push(`/content/${created.id}`);
     } catch (err: any) {
       setError(err.message || "Failed to create content post.");
@@ -177,18 +151,18 @@ export default function NewContentPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
                   Content Type
                 </label>
                 <select
                   value={contentType}
-                  onChange={(e) => setContentType(e.target.value)}
+                  onChange={(e) => setContentType(e.target.value as ContentType)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value="ARTICLE">ARTICLE</option>
-                  <option value="PAGE">PAGE</option>
+                  <option value={ContentType.ARTICLE}>ARTICLE</option>
+                  <option value={ContentType.PAGE}>PAGE</option>
                 </select>
               </div>
 
@@ -198,32 +172,18 @@ export default function NewContentPage() {
                 </label>
                 <select
                   value={status}
-                  onChange={(e) => setStatus(e.target.value)}
+                  onChange={(e) =>
+                    setStatus(e.target.value as ContentStatus.DRAFT | ContentStatus.IDEA)
+                  }
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value="DRAFT">DRAFT</option>
-                  <option value="IDEA">IDEA</option>
-                  <option value="AI_DRAFT">AI_DRAFT</option>
-                  <option value="REVIEW">REVIEW</option>
-                  <option value="SCHEDULED">SCHEDULED</option>
-                  <option value="PUBLISHED">PUBLISHED</option>
+                  <option value={ContentStatus.DRAFT}>DRAFT</option>
+                  <option value={ContentStatus.IDEA}>IDEA</option>
                 </select>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  New posts start as DRAFT or IDEA. Progress through REVIEW to SCHEDULE or PUBLISH.
+                </p>
               </div>
-
-              {status === "SCHEDULED" && (
-                <div>
-                  <label className="block text-xs font-semibold text-amber-700 mb-1">
-                    Scheduled At <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="datetime-local"
-                    required
-                    value={scheduledAt}
-                    onChange={(e) => setScheduledAt(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                  />
-                </div>
-              )}
             </div>
 
             <div>
@@ -325,6 +285,19 @@ export default function NewContentPage() {
                 />
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1">
+                OpenGraph Image URL
+              </label>
+              <input
+                type="url"
+                value={ogImageUrl}
+                onChange={(e) => setOgImageUrl(e.target.value)}
+                placeholder="https://..."
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
+              />
+            </div>
           </div>
         </Card>
 
@@ -334,7 +307,7 @@ export default function NewContentPage() {
               Cancel
             </Button>
           </Link>
-          <Button type="submit" variant="primary" disabled={saving}>
+          <Button type="submit" variant="primary" disabled={saving || authLoading}>
             {saving ? "Saving..." : "Create Post"}
           </Button>
         </div>

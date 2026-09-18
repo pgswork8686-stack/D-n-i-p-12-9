@@ -1,24 +1,18 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
+import { ContentCategoryDto } from "@nexus/contracts";
+import { useAuth } from "../../context/auth-context";
+import { getApiClient } from "../../lib/api";
 
 export default function AdminContentCategoriesPage() {
-  const [categories, setCategories] = useState<any[]>([]);
+  const { token, isLoading: authLoading } = useAuth();
+  const [categories, setCategories] = useState<ContentCategoryDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
 
   // New Category Form
   const [name, setName] = useState("");
@@ -29,45 +23,39 @@ export default function AdminContentCategoriesPage() {
   const [creating, setCreating] = useState(false);
 
   // Edit category modal state
-  const [editingCat, setEditingCat] = useState<any | null>(null);
+  const [editingCat, setEditingCat] = useState<ContentCategoryDto | null>(null);
 
-  const fetchCategories = () => {
-    if (!authToken) {
-      setError("Unauthorized (401): Admin token required.");
-      setLoading(false);
+  const fetchCategories = useCallback(async () => {
+    if (!token) {
+      if (!authLoading) {
+        setError("Unauthorized (401): Admin token required.");
+        setLoading(false);
+      }
       return;
     }
 
     setLoading(true);
-    fetch(`${API_URL}/admin/content/categories`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || `Failed with status ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setCategories(Array.isArray(data) ? data : []);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(err.message);
-      })
-      .finally(() => setLoading(false));
-  };
+    try {
+      const client = getApiClient(token);
+      const data = await client.listAdminContentCategories();
+      setCategories(Array.isArray(data) ? data : []);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || "Failed to load categories.");
+    } finally {
+      setLoading(false);
+    }
+  }, [token, authLoading]);
 
   useEffect(() => {
-    fetchCategories();
-  }, [authToken]);
+    if (!authLoading) {
+      fetchCategories();
+    }
+  }, [authLoading, fetchCategories]);
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !token) return;
 
     setCreating(true);
     setError(null);
@@ -80,19 +68,8 @@ export default function AdminContentCategoriesPage() {
     if (seoDescription.trim()) payload.seoDescription = seoDescription.trim();
 
     try {
-      const res = await fetch(`${API_URL}/admin/content/categories`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `Failed to create category (${res.status})`);
-      }
+      const client = getApiClient(token);
+      await client.createContentCategory(payload);
 
       setName("");
       setSlug("");
@@ -110,31 +87,20 @@ export default function AdminContentCategoriesPage() {
 
   const handleUpdateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCat) return;
+    if (!editingCat || !token) return;
 
     setError(null);
     setSuccessMsg(null);
 
     try {
-      const res = await fetch(`${API_URL}/admin/content/categories/${editingCat.id}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          name: editingCat.name,
-          slug: editingCat.slug,
-          description: editingCat.description || null,
-          seoTitle: editingCat.seoTitle || null,
-          seoDescription: editingCat.seoDescription || null,
-        }),
+      const client = getApiClient(token);
+      await client.updateContentCategory(editingCat.id, {
+        name: editingCat.name,
+        slug: editingCat.slug,
+        description: editingCat.description || undefined,
+        seoTitle: editingCat.seoTitle || undefined,
+        seoDescription: editingCat.seoDescription || undefined,
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `Failed to update category (${res.status})`);
-      }
 
       setEditingCat(null);
       setSuccessMsg("Category updated successfully!");
@@ -243,7 +209,7 @@ export default function AdminContentCategoriesPage() {
                 />
               </div>
 
-              <Button type="submit" variant="primary" disabled={creating} className="w-full">
+              <Button type="submit" variant="primary" disabled={creating || authLoading} className="w-full">
                 {creating ? "Creating..." : "+ Create Category"}
               </Button>
             </form>
@@ -253,7 +219,7 @@ export default function AdminContentCategoriesPage() {
         {/* Categories List */}
         <div className="lg:col-span-2">
           <Card title="Existing Categories">
-            {loading ? (
+            {loading || authLoading ? (
               <div className="p-8 text-center text-sm text-gray-500">Loading categories...</div>
             ) : categories.length === 0 ? (
               <div className="p-8 text-center text-sm text-gray-500">No categories found. Create one on the left.</div>

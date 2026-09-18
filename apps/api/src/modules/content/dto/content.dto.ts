@@ -9,6 +9,7 @@ import {
   IsInt,
   Min,
   Max,
+  IsIn,
 } from "class-validator";
 import { Type, Transform } from "class-transformer";
 import {
@@ -44,9 +45,11 @@ export class CreateContentPostDto implements ICreateContentPostDto {
   @MaxLength(100000)
   content!: string;
 
-  @IsEnum(ContentStatus)
+  @IsIn([ContentStatus.DRAFT, ContentStatus.IDEA], {
+    message: "Initial status must be either DRAFT or IDEA. Publishing and scheduling require workflow transitions.",
+  })
   @IsOptional()
-  status?: ContentStatus;
+  status?: ContentStatus.DRAFT | ContentStatus.IDEA;
 
   @IsEnum(ContentType)
   @IsOptional()
@@ -85,10 +88,6 @@ export class CreateContentPostDto implements ICreateContentPostDto {
   @IsOptional()
   @MaxLength(2000)
   ogImageUrl?: string;
-
-  @IsISO8601()
-  @IsOptional()
-  scheduledAt?: string;
 }
 
 export class UpdateContentPostDto implements IUpdateContentPostDto {
@@ -146,13 +145,10 @@ export class UpdateContentPostDto implements IUpdateContentPostDto {
   featuredImageAlt?: string;
 
   @IsString()
+  @IsString()
   @IsOptional()
   @MaxLength(2000)
   ogImageUrl?: string;
-
-  @IsISO8601()
-  @IsOptional()
-  scheduledAt?: string | null;
 }
 
 export class ContentPostTransitionDto implements IContentPostTransitionDto {
@@ -246,6 +242,12 @@ export class QueryContentPostsDto implements IQueryContentPostsDto {
 
   @Type(() => Number)
   @IsInt()
+  @Min(1)
+  @IsOptional()
+  page?: number;
+
+  @Type(() => Number)
+  @IsInt()
   @Min(0)
   @IsOptional()
   offset?: number;
@@ -263,6 +265,10 @@ export class QueryPublicPostsDto implements IQueryPublicPostsDto {
   @IsString()
   @IsOptional()
   categorySlug?: string;
+
+  @IsString()
+  @IsOptional()
+  category?: string;
 
   @IsString()
   @IsOptional()
