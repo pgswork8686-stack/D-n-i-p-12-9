@@ -123,6 +123,7 @@ export interface CreateContentPostDto {
   featuredImageUrl?: string;
   featuredImageAlt?: string;
   ogImageUrl?: string;
+  scheduledAt?: string;
 }
 
 export interface UpdateContentPostDto {

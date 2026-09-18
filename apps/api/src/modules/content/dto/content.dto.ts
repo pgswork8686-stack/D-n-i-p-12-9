@@ -88,6 +88,9 @@ export class CreateContentPostDto implements ICreateContentPostDto {
   @IsOptional()
   @MaxLength(2000)
   ogImageUrl?: string;
+
+  @IsOptional()
+  scheduledAt?: string;
 }
 
 export class UpdateContentPostDto implements IUpdateContentPostDto {

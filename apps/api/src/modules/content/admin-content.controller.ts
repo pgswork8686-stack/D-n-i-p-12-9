@@ -10,6 +10,7 @@ import {
   Req,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
@@ -58,6 +59,11 @@ export class AdminContentController {
     @Body() dto: CreateContentPostDto,
     @Req() req: any,
   ): Promise<AdminContentPostDto> {
+    if (req.body?.scheduledAt || dto.scheduledAt) {
+      throw new BadRequestException(
+        "Scheduling is not permitted during initial post creation; use workflow transition REVIEW -> SCHEDULED.",
+      );
+    }
     const actorId = req.user?.id;
     return this.contentService.createPost(actorId, dto);
   }
