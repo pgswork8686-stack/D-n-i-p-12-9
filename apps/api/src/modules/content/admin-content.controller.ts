@@ -23,7 +23,7 @@ import {
 } from "./dto/content.dto";
 import { AdminContentPostDto, ContentCategoryDto } from "@nexus/contracts";
 
-@Controller("admin/content")
+@Controller(["admin/content", "v1/admin/content"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminContentController {
   constructor(private readonly contentService: ContentService) {}
@@ -67,7 +67,7 @@ export class AdminContentController {
     return this.contentService.updatePost(id, actorId, dto);
   }
 
-  @Post("posts/:id/transitions")
+  @Post(["posts/:id/transition", "posts/:id/transitions"])
   @RequirePermissions("content.publish")
   async transitionPost(
     @Param("id") id: string,
