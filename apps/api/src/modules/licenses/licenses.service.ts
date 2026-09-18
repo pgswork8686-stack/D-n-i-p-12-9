@@ -6,9 +6,11 @@ import {
   ForbiddenException,
 } from "@nestjs/common";
 import {
+  prisma,
   listCustomerLicenses,
   getCustomerLicense,
   customerRevealLicenseKey,
+  customerDeactivateDomain,
   activateInternalLicense,
   validateInternalLicense,
   deactivateInternalLicense,
@@ -19,6 +21,7 @@ import {
 } from "@nexus/database";
 import {
   CustomerLicenseDto,
+  CustomerLicenseActivationDto,
   RevealLicenseResponse,
   ActivateLicenseResponse,
   ValidateLicenseResponse,
@@ -79,6 +82,47 @@ export class LicensesService {
   ): Promise<RevealLicenseResponse> {
     try {
       return await customerRevealLicenseKey({ licenseId, userId });
+    } catch (err) {
+      this.handleError(err);
+    }
+  }
+
+  async customerDeactivateDomain(
+    licenseId: string,
+    userId: string,
+    domain: string,
+  ): Promise<DeactivateLicenseResponse> {
+    try {
+      return await customerDeactivateDomain({ licenseId, userId, domain });
+    } catch (err) {
+      this.handleError(err);
+    }
+  }
+
+  async listCustomerLicenseActivations(
+    licenseId: string,
+    userId: string,
+  ): Promise<CustomerLicenseActivationDto[]> {
+    try {
+      const lic = await prisma.internalLicense.findFirst({
+        where: { id: licenseId, userId },
+        include: {
+          activations: {
+            where: { status: "ACTIVE" },
+            orderBy: { activatedAt: "desc" },
+          },
+        },
+      });
+      if (!lic) {
+        throw new NotFoundException("License not found");
+      }
+      return lic.activations.map((a) => ({
+        id: a.id,
+        domain: a.normalizedDomain,
+        status: a.status as any,
+        activatedAt: a.activatedAt.toISOString(),
+        lastValidatedAt: a.lastValidatedAt ? a.lastValidatedAt.toISOString() : null,
+      }));
     } catch (err) {
       this.handleError(err);
     }

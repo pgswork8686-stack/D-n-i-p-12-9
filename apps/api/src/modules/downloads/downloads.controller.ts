@@ -1,6 +1,8 @@
 import {
   Controller,
+  Get,
   Post,
+  Param,
   Body,
   UseGuards,
   Req,
@@ -8,6 +10,7 @@ import {
 import { AuthGuard } from "../auth/auth.guard";
 import { DownloadsService } from "./downloads.service";
 import { RequestDownloadDto } from "./dto/downloads.dto";
+import { CustomerProductVersionDto } from "@nexus/contracts";
 
 @Controller("v1/downloads")
 @UseGuards(AuthGuard)
@@ -25,6 +28,18 @@ export class DownloadsController {
       dto,
       ipAddress,
       userAgent,
+    );
+  }
+
+  @Get("entitlements/:entitlementId/versions")
+  async listEligibleVersions(
+    @Param("entitlementId") entitlementId: string,
+    @Req() req: any,
+  ): Promise<CustomerProductVersionDto[]> {
+    const userId = req.user.id;
+    return this.downloadsService.listEligibleVersionsForEntitlement(
+      userId,
+      entitlementId,
     );
   }
 }

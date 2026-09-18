@@ -25,6 +25,7 @@
     "test:acceptance:phase7": "pnpm --filter @nexus/database acceptance:phase7",
     "test:acceptance:phase8": "pnpm --filter @nexus/database acceptance:phase8",
     "test:acceptance:phase9": "pnpm --filter @nexus/database acceptance:phase9",
+    "test:acceptance:phase10": "pnpm --filter @nexus/database acceptance:phase10",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo clean && rm -rf node_modules"
   },

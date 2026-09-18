@@ -529,6 +529,91 @@ export async function deactivateInternalLicense(
   });
 }
 
+export interface CustomerDeactivateDomainParams {
+  licenseId: string;
+  userId: string;
+  domain: string;
+}
+
+/**
+ * Authenticated customer endpoint function:
+ * Authoritatively deactivates domain activation for license owner.
+ * Returns 404 for cross-user or non-existent license ID (anti-enumeration).
+ * ZERO plaintext license key needed or exposed in request, response, or audit logs.
+ */
+export async function customerDeactivateDomain(
+  params: CustomerDeactivateDomainParams,
+  db: PrismaClient = prisma,
+): Promise<DeactivateLicenseResponse> {
+  let normalizedDomain: string;
+  try {
+    normalizedDomain = normalizeDomain(params.domain);
+  } catch {
+    throw new InternalLicenseEngineError("Invalid domain format", 400);
+  }
+
+  return db.$transaction(async (tx) => {
+    const license = await tx.internalLicense.findFirst({
+      where: {
+        id: params.licenseId,
+        userId: params.userId,
+      },
+    });
+
+    if (!license) {
+      throw new InternalLicenseEngineError("License not found", 404);
+    }
+
+    if (license.status === "REVOKED") {
+      throw new InternalLicenseEngineError("License has been revoked", 409);
+    }
+
+    const deactivationTime = new Date();
+    const updateResult = await tx.licenseActivation.updateMany({
+      where: {
+        licenseId: license.id,
+        normalizedDomain,
+        status: "ACTIVE",
+      },
+      data: {
+        status: "DEACTIVATED",
+        deactivatedAt: deactivationTime,
+      },
+    });
+
+    if (updateResult.count > 0) {
+      const actRecord = await tx.licenseActivation.findFirst({
+        where: {
+          licenseId: license.id,
+          normalizedDomain,
+        },
+        select: { id: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: "LICENSE_DEACTIVATED",
+          entity: "LicenseActivation",
+          entityId: actRecord?.id ?? license.id,
+          actorId: params.userId,
+          details: {
+            licenseId: license.id,
+            entitlementId: license.entitlementId,
+            normalizedDomain,
+            keyLast4: license.keyLast4,
+          },
+        },
+      });
+    }
+
+    return {
+      success: true,
+      domain: normalizedDomain,
+      deactivatedAt: deactivationTime.toISOString(),
+    };
+  });
+}
+
 export interface CustomerRevealLicenseParams {
   licenseId: string;
   userId: string;

@@ -632,13 +632,15 @@ async function runPhase6Acceptance() {
     data: { status: EntitlementStatus.REVOKED, revokedAt: new Date() },
   });
 
-  // Trigger reconciliation
-  const reconResult = await reconcileExternalAllocations({ workerId: "acceptance-worker" });
-  if (reconResult.transitionedCount < 1 || !reconResult.allocationIds.includes(allocForWorker.id)) {
-    throw new Error(`Gate 20 failed: worker reconciliation did not pick up allocation ${allocForWorker.id}`);
+  // Trigger reconciliation if background worker has not already processed it
+  await reconcileExternalAllocations({ workerId: "acceptance-worker" });
+
+  let updatedAlloc = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: allocForWorker.id } });
+  for (let i = 0; i < 10 && updatedAlloc.status !== "DEACTIVATION_PENDING"; i++) {
+    await sleep(500);
+    updatedAlloc = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: allocForWorker.id } });
   }
 
-  const updatedAlloc = await prisma.licenseAllocation.findUniqueOrThrow({ where: { id: allocForWorker.id } });
   if (updatedAlloc.status !== "DEACTIVATION_PENDING") {
     throw new Error(`Gate 20 failed: expected status DEACTIVATION_PENDING, got ${updatedAlloc.status}`);
   }

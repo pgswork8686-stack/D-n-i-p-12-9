@@ -24,6 +24,9 @@ import {
   recordDownloadIssuance,
   sanitizeFilename,
   generateStorageKey,
+  checkVersionEligibility,
+  mapProductVersionToDto,
+  mapToCustomerProductVersionDto,
   DownloadVersionEngineError,
 } from "@nexus/database";
 import {
@@ -34,6 +37,8 @@ import {
 import {
   ProductVersionDto,
   ProductVersionFileDto,
+  CustomerProductVersionDto,
+  CustomerProductVersionFileDto,
   PublishVersionResponse,
   DownloadUrlResponse,
   CheckUpdateResponse,
@@ -306,6 +311,41 @@ export class DownloadsService {
       sha256: file.sha256,
       expiresIn: effectiveTtl,
     };
+  }
+
+  async listEligibleVersionsForEntitlement(
+    userId: string,
+    entitlementId: string,
+  ): Promise<CustomerProductVersionDto[]> {
+    const entitlement = await prisma.entitlement.findUnique({
+      where: { id: entitlementId },
+    });
+    if (!entitlement || entitlement.userId !== userId) {
+      throw new HttpException("Entitlement not found", HttpStatus.NOT_FOUND);
+    }
+
+    if (entitlement.status !== "ACTIVE") {
+      return [];
+    }
+
+    const versions = await prisma.productVersion.findMany({
+      where: {
+        productId: entitlement.productId,
+        status: "PUBLISHED",
+      },
+      include: {
+        files: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    const eligibleVersions = versions.filter((v) =>
+      checkVersionEligibility(v.releasedAt, entitlement.updatesUntil),
+    );
+
+    return eligibleVersions.map((v) => mapToCustomerProductVersionDto(v));
   }
 
   // ----------------------------------------------------

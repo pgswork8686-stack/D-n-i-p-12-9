@@ -2,6 +2,14 @@ export type LicenseStatus = "ACTIVE" | "REVOKED";
 
 export type LicenseActivationStatus = "ACTIVE" | "DEACTIVATED";
 
+export interface CustomerLicenseActivationDto {
+  id: string;
+  domain: string;
+  status: LicenseActivationStatus;
+  activatedAt: string;
+  lastValidatedAt: string | null;
+}
+
 export interface CustomerLicenseDto {
   id: string;
   productId: string;
@@ -53,6 +61,10 @@ export interface ValidateLicenseResponse {
 
 export interface DeactivateLicenseRequest {
   licenseKey: string;
+  domain: string;
+}
+
+export interface DeactivateLicenseDomainRequest {
   domain: string;
 }
 

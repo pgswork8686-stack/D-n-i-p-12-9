@@ -37,6 +37,12 @@ export class DeactivateLicenseDto implements DeactivateLicenseRequest {
   domain!: string;
 }
 
+export class DeactivateLicenseDomainDto {
+  @IsNotEmpty({ message: "domain is required" })
+  @IsString({ message: "domain must be a string" })
+  domain!: string;
+}
+
 export enum AdminLicenseRevokeReasonEnum {
   ADMINISTRATIVE = "ADMINISTRATIVE",
   REFUND = "REFUND",
