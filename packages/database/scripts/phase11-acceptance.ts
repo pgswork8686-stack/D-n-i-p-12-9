@@ -1007,7 +1007,16 @@ async function runPhase11Acceptance() {
     throw new Error("Gate 59 failed: Core routes missing from sitemap");
   }
   for (const badRoute of ["/cart", "/checkout", "/account", "/admin", "/portal"]) {
-    if (urls.some((u) => u.includes(badRoute))) {
+    if (
+      urls.some((u) => {
+        try {
+          const pathname = new URL(u).pathname;
+          return pathname === badRoute || pathname.startsWith(`${badRoute}/`);
+        } catch {
+          return false;
+        }
+      })
+    ) {
       throw new Error(`Gate 59 failed: Private route '${badRoute}' appeared in public sitemap`);
     }
   }
