@@ -212,6 +212,11 @@ export default function AdminHomePage() {
             📦 Manage Catalog & Products →
           </Button>
         </a>
+        <a href="/content">
+          <Button variant="primary" size="sm">
+            ✍️ Manage Content (CMS) →
+          </Button>
+        </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">
             ← Return to Marketplace

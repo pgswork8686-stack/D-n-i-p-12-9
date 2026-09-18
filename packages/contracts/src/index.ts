@@ -7,6 +7,7 @@ export * from "./entitlements";
 export * from "./allocations";
 export * from "./licenses";
 export * from "./downloads";
+export * from "./content";
 
 
 

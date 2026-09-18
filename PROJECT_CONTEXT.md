@@ -363,6 +363,43 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Portal Pure Action Abstractions & Real Behavioral Tests**: Extracted page action controllers (`resolveEntitlementActionCta`, `filterExternalManagedEntitlements`, `loadAllocationsForEntitlements`, `executeDomainDeactivation`, `executeLicenseReveal`, `syncPaymentResultStatus`) into `apps/portal/app/lib/portal-actions.ts`. Replaced mock-heavy tests in `apps/portal/app/__tests__/portal-components.spec.tsx` with real behavioral tests validating auth deadlock prevention, 401 local signout, 5xx session preservation, token deduplication, license secret hygiene, canonical allocation filtering, and payment read-only guarantees.
 - **Acceptance Suite Expanded to 60 Gates**: `packages/database/scripts/phase10-acceptance.ts` expanded to 60 gates, adding validation for production login fields, dev preset omission, real auth hydration, connectivity error preservation, zero `storageKey` exposure, signed download URL gating, `EXTERNAL_MANAGED` filtering & actions, relative payment return URLs, read-only payment result safety, and plaintext-free owner domain deactivation with cross-user 404 anti-enumeration.
 
+### Phase 11: CMS & SEO Publishing Platform (Completed)
+- **CMS Database Domain & Additive Migration**: Added `ContentCategory` and `ContentPost` models with enums `ContentStatus` (`IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`) and `ContentType` (`ARTICLE`, `PAGE`). Relation between `User` and `ContentPost` via `authorId`. Migration `20260918000000_20260918_phase11_cms_seo` applied additively without touching commerce, license, entitlement, or payment tables.
+- **Authoritative State Machine & Lifecycle Transitions**: Implemented state machine engine in `@nexus/database` (`isValidContentTransition`) enforcing transition matrix:
+  - `IDEA` -> `DRAFT`
+  - `DRAFT` -> `REVIEW`, `ARCHIVED`
+  - `AI_DRAFT` -> `REVIEW`, `DRAFT`, `ARCHIVED`
+  - `REVIEW` -> `PUBLISHED`, `SCHEDULED`, `DRAFT`, `ARCHIVED`
+  - `SCHEDULED` -> `PUBLISHED`, `DRAFT`, `ARCHIVED`
+  - `PUBLISHED` -> `ARCHIVED`
+  - `ARCHIVED` -> `DRAFT` (reactivation)
+  Transition to `SCHEDULED` strictly enforces future `scheduledAt` timestamp; direct jump from `DRAFT` to `PUBLISHED` without review is strictly blocked.
+- **Worker Scheduled Publishing (`publishDueScheduledContent`)**: Background worker atomically transitions `SCHEDULED` posts with `scheduledAt <= NOW()` to `PUBLISHED` using PostgreSQL `FOR UPDATE SKIP LOCKED` to prevent concurrent worker race conditions. Automatically records `CONTENT_AUTO_PUBLISHED` audit log.
+- **Shared Utils & Sanitization (`@nexus/utils`)**:
+  - `slugify`: Vietnamese diacritics removal and URL normalization with reserved slug protection (`admin`, `blog`, `cart`, `robots`, `sitemap`, etc.).
+  - `sanitizeContentHtml`: Strips `<script>`, `<iframe>`, inline `on*` event handlers, and dangerous URI schemes (`javascript:`, `data:`).
+  - `isValidCanonicalUrl`: Validates standard safe HTTP/HTTPS URL structures.
+  - `safeJsonLd`: Serializes structured data escaping `<` to `\u003c` preventing script breakout vulnerabilities.
+- **Public Storefront & Anti-Enumeration (`apps/web`)**:
+  - `/blog`: Public index with category filters and pagination, returning strictly `PUBLISHED` posts.
+  - `/blog/[slug]`: Article page with Server-Rendered metadata, canonical link, and `Article` Schema.org JSON-LD. Non-published slugs return clean HTTP 404 to eliminate enumeration risks.
+  - `/blog/category/[slug]`: Category archive route with dynamic metadata and post filtering.
+  - Dynamic `robots.txt` (`/robots.ts`) and `sitemap.xml` (`/sitemap.ts`) including static routes, published products, and published blog posts.
+  - Enhanced `/products/[slug]` with `Product` Schema.org JSON-LD structured data.
+- **Admin CMS Operations (`apps/admin`)**:
+  - `/content`: List articles with status filtering (`ALL`, `IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`), search, and pagination.
+  - `/content/new`: Form to create articles with slug preview, category selection, and SEO metadata.
+  - `/content/[id]`: Editor with authoritative lifecycle transition buttons and schedule date picker.
+  - `/content/categories`: Taxonomy manager with post counters and SEO customization.
+  - Mirrored `/admin/content` route aliases for operational consistency.
+- **Security & RBAC Enforcement**:
+  - Guarded all write and admin read routes with `AuthGuard` and `PermissionsGuard`.
+  - Roles `content_editor`, `admin`, and `super_admin` have content permissions (`content.read`, `content.write`, `content.publish`); customer tokens receive clean 403 Forbidden.
+  - Frontend apps access content solely via NestJS API endpoints; zero direct database or raw Prisma access.
+  - Comprehensive audit logging: `CONTENT_CREATED`, `CONTENT_UPDATED`, `CONTENT_STATUS_CHANGED`, `CONTENT_PUBLISHED`, `CONTENT_ARCHIVED`, `CONTENT_AUTO_PUBLISHED`.
+- **45-Gate Acceptance Test Suite (`phase11-acceptance.ts`)**: Built comprehensive 45-gate end-to-end verification suite covering category taxonomy, Vietnamese slug generation, collision resolution, sanitization, reading time, SEO metadata, full transition state machine, worker scheduled publishing, public anti-enumeration, RBAC isolation, audit trails, and sitemap/robots validation.
+
+
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

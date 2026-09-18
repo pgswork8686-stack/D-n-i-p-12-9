@@ -15,6 +15,7 @@ import { EntitlementsModule } from "./modules/entitlements/entitlements.module";
 import { AllocationsModule } from "./modules/allocations/allocations.module";
 import { LicensesModule } from "./modules/licenses/licenses.module";
 import { DownloadsModule } from "./modules/downloads/downloads.module";
+import { ContentModule } from "./modules/content/content.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -36,6 +37,7 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     AllocationsModule,
     LicensesModule,
     DownloadsModule,
+    ContentModule,
     HealthModule,
     StorageModule,
     AuthModule,

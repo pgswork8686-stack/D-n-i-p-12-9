@@ -63,6 +63,17 @@ import {
   DeactivateLicenseResponse,
   CreatePaymentSessionRequest,
   PaymentSessionResponse,
+  ContentCategoryDto,
+  CreateContentCategoryDto,
+  UpdateContentCategoryDto,
+  AdminContentPostDto,
+  PublicContentListItemDto,
+  PublicContentPostDto,
+  CreateContentPostDto,
+  UpdateContentPostDto,
+  ContentPostTransitionDto,
+  QueryContentPostsDto,
+  QueryPublicPostsDto,
 } from "@nexus/contracts";
 
 
@@ -1252,6 +1263,195 @@ export class NexusApiClient {
       throw new Error(`List entitlement versions failed (${res.status}): ${err}`);
     }
     return (await res.json()) as CustomerProductVersionDto[];
+  }
+
+  // --------------------------------------------------------
+  // Phase 11 — CMS & SEO Methods
+  // --------------------------------------------------------
+
+  async listAdminContentPosts(
+    query?: QueryContentPostsDto,
+  ): Promise<{ items: AdminContentPostDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.categoryId) params.set("categoryId", query.categoryId);
+    if (query?.search) params.set("search", query.search);
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.offset !== undefined) params.set("offset", String(query.offset));
+    if (query?.sortBy) params.set("sortBy", query.sortBy);
+    if (query?.sortOrder) params.set("sortOrder", query.sortOrder);
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/posts${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List admin content posts failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as { items: AdminContentPostDto[]; total: number };
+  }
+
+  async getAdminContentPost(id: string): Promise<AdminContentPostDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/posts/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get admin content post failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as AdminContentPostDto;
+  }
+
+  async createContentPost(
+    data: CreateContentPostDto,
+  ): Promise<AdminContentPostDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/posts`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Create content post failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as AdminContentPostDto;
+  }
+
+  async updateContentPost(
+    id: string,
+    data: UpdateContentPostDto,
+  ): Promise<AdminContentPostDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/posts/${id}`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update content post failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as AdminContentPostDto;
+  }
+
+  async transitionContentPost(
+    id: string,
+    transition: ContentPostTransitionDto,
+  ): Promise<AdminContentPostDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/content/posts/${id}/transitions`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(transition),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Transition content post failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as AdminContentPostDto;
+  }
+
+  async listAdminContentCategories(): Promise<ContentCategoryDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/categories`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(
+        `List admin content categories failed (${res.status}): ${err}`,
+      );
+    }
+    return (await res.json()) as ContentCategoryDto[];
+  }
+
+  async createContentCategory(
+    data: CreateContentCategoryDto,
+  ): Promise<ContentCategoryDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/content/categories`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Create content category failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ContentCategoryDto;
+  }
+
+  async updateContentCategory(
+    id: string,
+    data: UpdateContentCategoryDto,
+  ): Promise<ContentCategoryDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/content/categories/${id}`,
+      {
+        method: "PATCH",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(data),
+      },
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Update content category failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as ContentCategoryDto;
+  }
+
+  async listPublicContentPosts(
+    query?: QueryPublicPostsDto,
+  ): Promise<{ items: PublicContentListItemDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.categorySlug) params.set("categorySlug", query.categorySlug);
+    if (query?.search) params.set("search", query.search);
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+    if (query?.page !== undefined) params.set("page", String(query.page));
+    if (query?.offset !== undefined) params.set("offset", String(query.offset));
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/content/posts${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`List public content posts failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as {
+      items: PublicContentListItemDto[];
+      total: number;
+    };
+  }
+
+  async getPublicContentPostBySlug(slug: string): Promise<PublicContentPostDto> {
+    const res = await fetch(`${this.baseUrl}/v1/content/posts/${slug}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Get public content post failed (${res.status}): ${err}`);
+    }
+    return (await res.json()) as PublicContentPostDto;
+  }
+
+  async listPublicContentCategories(): Promise<ContentCategoryDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/content/categories`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(
+        `List public content categories failed (${res.status}): ${err}`,
+      );
+    }
+    return (await res.json()) as ContentCategoryDto[];
   }
 
   private buildHeaders(): Record<string, string> {

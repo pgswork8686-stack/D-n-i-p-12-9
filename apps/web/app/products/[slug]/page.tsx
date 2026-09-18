@@ -4,9 +4,10 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge, Card, Button } from "@nexus/ui";
-import { formatMoney } from "@nexus/utils";
+import { formatMoney, safeJsonLd } from "@nexus/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
 export default function PublicProductDetailPage() {
   const params = useParams();
@@ -63,8 +64,37 @@ export default function PublicProductDetailPage() {
     product.variants?.find((v: any) => v.id === selectedVariantId) ||
     product.variants?.[0];
 
+  const productSchema = product
+    ? {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        name: product.name,
+        description: product.shortDescription || product.description,
+        brand: {
+          "@type": "Brand",
+          name: product.brand || "NEXUSTHEME",
+        },
+        offers: product.variants?.map((v: any) => {
+          const price = v.prices?.[0];
+          return {
+            "@type": "Offer",
+            price: price ? price.amount : 0,
+            priceCurrency: price ? price.currency : "VND",
+            availability: "https://schema.org/InStock",
+            url: `${SITE_URL}/products/${product.slug}`,
+          };
+        }),
+      }
+    : null;
+
   return (
     <main className="max-w-5xl mx-auto py-12 px-6 font-sans">
+      {productSchema && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: safeJsonLd(productSchema) }}
+        />
+      )}
       <Link href="/products" className="text-sm text-gray-500 hover:text-gray-700 block mb-6">
         ← Back to Catalog
       </Link>
