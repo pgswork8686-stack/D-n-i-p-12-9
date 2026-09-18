@@ -12,28 +12,7 @@ import { Skeleton } from "../../components/skeleton";
 import { ErrorState } from "../../components/error-state";
 import { Button, Card } from "@nexus/ui";
 import { EntitlementDto, CustomerProductVersionDto } from "@nexus/contracts";
-interface EntitlementActionCta {
-  label: string;
-  href: string;
-}
-
-function resolveEntitlementActionCta(
-  fulfillmentType: string,
-): EntitlementActionCta | null {
-  if (fulfillmentType === "INTERNAL_LICENSE") {
-    return {
-      label: "View License Keys 🔑",
-      href: "/licenses",
-    };
-  }
-  if (fulfillmentType === "EXTERNAL_MANAGED") {
-    return {
-      label: "Manage Domain Allocations 🌐",
-      href: "/allocations",
-    };
-  }
-  return null;
-}
+import { resolveEntitlementActionCta } from "../../lib/portal-actions";
 
 export default function EntitlementDetailPage() {
   const params = useParams();
@@ -148,21 +127,25 @@ export default function EntitlementDetailPage() {
                 </div>
 
                 <div className="mt-6 flex flex-wrap gap-3">
-                  {entitlement.fulfillmentType === "INTERNAL_LICENSE" && (
-                    <Link href="/licenses">
-                      <Button variant="primary" size="sm">
-                        View License Keys 🔑
-                      </Button>
-                    </Link>
-                  )}
-
-                  {entitlement.fulfillmentType === "EXTERNAL_MANAGED" && (
-                    <Link href="/allocations">
-                      <Button variant="primary" size="sm">
-                        Manage Domain Allocations 🌐
-                      </Button>
-                    </Link>
-                  )}
+                  {(() => {
+                    const actionCta = resolveEntitlementActionCta(entitlement.fulfillmentType);
+                    if (!actionCta) return null;
+                    return (
+                      <Link href={actionCta.href}>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          aria-label={
+                            entitlement.fulfillmentType === "EXTERNAL_MANAGED"
+                              ? "Manage Domain Allocations"
+                              : actionCta.label
+                          }
+                        >
+                          {actionCta.label}
+                        </Button>
+                      </Link>
+                    );
+                  })()}
 
                   <Link href="/downloads">
                     <Button variant="outline" size="sm">

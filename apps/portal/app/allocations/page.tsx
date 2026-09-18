@@ -15,36 +15,10 @@ import {
   EntitlementDto,
   CustomerAllocationDto,
 } from "@nexus/contracts";
-
-interface EntitlementAllocations {
-  entitlement: EntitlementDto;
-  allocations: CustomerAllocationDto[];
-}
-
-function filterExternalManagedEntitlements(
-  entitlements: EntitlementDto[],
-): EntitlementDto[] {
-  return entitlements.filter(
-    (e) => e.fulfillmentType === "EXTERNAL_MANAGED" && e.status === "ACTIVE",
-  );
-}
-
-async function loadAllocationsForEntitlements(
-  client: { listAllocations: (id: string) => Promise<CustomerAllocationDto[]> },
-  entitlements: EntitlementDto[],
-): Promise<EntitlementAllocations[]> {
-  const externalEntitlements = filterExternalManagedEntitlements(entitlements);
-  const loaded: EntitlementAllocations[] = [];
-  for (const ent of externalEntitlements) {
-    try {
-      const allocs = await client.listAllocations(ent.id);
-      loaded.push({ entitlement: ent, allocations: allocs || [] });
-    } catch {
-      loaded.push({ entitlement: ent, allocations: [] });
-    }
-  }
-  return loaded;
-}
+import {
+  EntitlementAllocations,
+  loadAllocationsForEntitlements,
+} from "../lib/portal-actions";
 
 export default function AllocationsPage() {
   const { token } = useAuth();

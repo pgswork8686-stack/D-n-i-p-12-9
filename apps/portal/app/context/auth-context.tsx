@@ -58,17 +58,24 @@ export interface HydrationOptions {
   isMounted?: () => boolean;
 }
 
+export type HydrationStatus = "authenticated" | "unauthorized" | "unavailable";
+
+export type HydrationResult =
+  | { status: "authenticated" }
+  | { status: "unauthorized"; error?: string }
+  | { status: "unavailable"; error?: string };
+
 /**
  * Authoritative session hydration helper.
- * - Sets token & user state when profile succeeds.
- * - On 401: Clears state and invokes signOut with explicit local scope ({ scope: "local" }).
- * - On 5xx/network error: Preserves session token, sets connectivity flag (setIsConnectivityError(true)), does NOT sign out.
+ * - Sets token & user state when profile succeeds -> { status: "authenticated" }.
+ * - On 401: Clears state and invokes signOut with explicit local scope ({ scope: "local" }) -> { status: "unauthorized" }.
+ * - On 5xx/network error: Preserves session token, sets connectivity flag (setIsConnectivityError(true)), does NOT sign out -> { status: "unavailable" }.
  */
 export async function handleAuthSessionHydration(
   authToken: string,
   actions: HydrationActions,
   options: HydrationOptions = {},
-): Promise<boolean> {
+): Promise<HydrationResult> {
   const isMounted = options.isMounted ?? (() => true);
   const client = options.apiClient ?? getApiClient(authToken);
   const supabase =
@@ -88,7 +95,7 @@ export async function handleAuthSessionHydration(
 
   try {
     const profile = await client.getAuthMe();
-    if (!isMounted()) return false;
+    if (!isMounted()) return { status: "unavailable", error: "Component unmounted" };
 
     actions.setToken(authToken);
     actions.setUser(profile);
@@ -97,9 +104,9 @@ export async function handleAuthSessionHydration(
     if (storage && !supabase && devAuthEnabled) {
       storage.setItem(TOKEN_KEY, authToken);
     }
-    return true;
+    return { status: "authenticated" };
   } catch (err: any) {
-    if (!isMounted()) return false;
+    if (!isMounted()) return { status: "unavailable", error: "Component unmounted" };
     const status = err?.status || err?.statusCode;
     const msg = String(err?.message || "").toLowerCase();
     const isAuthError =
@@ -116,16 +123,23 @@ export async function handleAuthSessionHydration(
       if (supabase) {
         await supabase.auth.signOut({ scope: "local" }).catch(() => {});
       }
-      if (!isMounted()) return false;
+      if (!isMounted()) return { status: "unauthorized", error: "Unauthorized" };
       actions.setToken(null);
       actions.setUser(null);
       actions.setIsConnectivityError(false);
-      return false;
+      return {
+        status: "unauthorized",
+        error: "Your account could not be authorized for the customer portal.",
+      };
     } else {
       // Network error / 5xx / timeout -> PRESERVE session and token
       actions.setToken(authToken);
       actions.setIsConnectivityError(true);
-      return false;
+      return {
+        status: "unavailable",
+        error:
+          "Authentication succeeded, but the customer portal is temporarily unavailable. Please try again.",
+      };
     }
   }
 }
@@ -170,9 +184,70 @@ export function createSupabaseAuthListener(
 export function shouldSkipDuplicateHydration(
   activeHydratedToken: string | null,
   newAuthToken: string,
-  user: any | null,
+  inFlightToken?: string | null,
 ): boolean {
-  return activeHydratedToken === newAuthToken && user !== null;
+  return (
+    activeHydratedToken === newAuthToken ||
+    (Boolean(inFlightToken) && inFlightToken === newAuthToken)
+  );
+}
+
+export async function performPasswordLogin(
+  supabase: {
+    auth: {
+      signInWithPassword: (creds: {
+        email: string;
+        password: string;
+      }) => Promise<{
+        data: { session: { access_token: string } | null };
+        error: any;
+      }>;
+    };
+  } | null,
+  credentials: { email: string; password: string },
+  hydrate: (token: string) => Promise<HydrationResult>,
+): Promise<{ success: boolean; error?: string }> {
+  if (!supabase) {
+    return {
+      success: false,
+      error: "Supabase client is not configured for authentication.",
+    };
+  }
+
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword(credentials);
+
+    if (error || !data.session?.access_token) {
+      return {
+        success: false,
+        error: error?.message || "Invalid email or password.",
+      };
+    }
+
+    const hydrationResult = await hydrate(data.session.access_token);
+
+    if (hydrationResult.status === "authenticated") {
+      return { success: true };
+    }
+
+    if (hydrationResult.status === "unauthorized") {
+      return {
+        success: false,
+        error: "Your account could not be authorized for the customer portal.",
+      };
+    }
+
+    return {
+      success: false,
+      error:
+        "Authentication succeeded, but the customer portal is temporarily unavailable. Please try again.",
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Authentication failed. Please try again.",
+    };
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -181,9 +256,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isConnectivityError, setIsConnectivityError] = useState<boolean>(false);
 
-  // Track the most recently hydrated token to prevent duplicate /auth/me requests
-  // between synchronous sign-in resolution and async onAuthStateChange events.
+  // Track the most recently hydrated token and any currently in-flight hydration
+  // to prevent duplicate /auth/me requests across synchronous sign-in and async events.
   const activeHydratedTokenRef = useRef<string | null>(null);
+  const inFlightHydrationTokenRef = useRef<string | null>(null);
+  const inFlightHydrationPromiseRef = useRef<{
+    token: string;
+    promise: Promise<HydrationResult>;
+  } | null>(null);
   const isMountedRef = useRef<boolean>(true);
 
   useEffect(() => {
@@ -194,31 +274,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const hydrateSession = useCallback(
-    async (authToken: string): Promise<boolean> => {
-      if (shouldSkipDuplicateHydration(activeHydratedTokenRef.current, authToken, user)) {
-        return true;
+    async (authToken: string): Promise<HydrationResult> => {
+      // 1. If already hydrated with this exact token, skip
+      if (activeHydratedTokenRef.current === authToken) {
+        return { status: "authenticated" };
       }
 
-      const success = await handleAuthSessionHydration(
-        authToken,
-        {
-          setToken,
-          setUser,
-          setIsConnectivityError,
-        },
-        {
-          isMounted: () => isMountedRef.current,
-        },
-      );
-
-      if (success) {
-        activeHydratedTokenRef.current = authToken;
-      } else {
-        activeHydratedTokenRef.current = null;
+      // 2. If an in-flight hydration for this exact token is already in progress, await it
+      if (
+        inFlightHydrationPromiseRef.current &&
+        inFlightHydrationPromiseRef.current.token === authToken
+      ) {
+        return await inFlightHydrationPromiseRef.current.promise;
       }
-      return success;
+
+      // 3. Mark in-flight
+      inFlightHydrationTokenRef.current = authToken;
+
+      const promise = (async (): Promise<HydrationResult> => {
+        try {
+          const result = await handleAuthSessionHydration(
+            authToken,
+            {
+              setToken,
+              setUser,
+              setIsConnectivityError,
+            },
+            {
+              isMounted: () => isMountedRef.current,
+            },
+          );
+
+          if (result.status === "authenticated") {
+            activeHydratedTokenRef.current = authToken;
+          } else {
+            activeHydratedTokenRef.current = null;
+          }
+          return result;
+        } finally {
+          if (inFlightHydrationTokenRef.current === authToken) {
+            inFlightHydrationTokenRef.current = null;
+          }
+          if (inFlightHydrationPromiseRef.current?.token === authToken) {
+            inFlightHydrationPromiseRef.current = null;
+          }
+        }
+      })();
+
+      inFlightHydrationPromiseRef.current = {
+        token: authToken,
+        promise,
+      };
+
+      return await promise;
     },
-    [user],
+    [],
   );
 
   useEffect(() => {
@@ -229,7 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // 1. Restore official Supabase session on mount
       supabase.auth
         .getSession()
-        .then(({ data: { session }, error }) => {
+        .then(({ data: { session } }) => {
           if (!isMounted) return;
           if (session?.access_token) {
             hydrateSession(session.access_token).finally(() => {
@@ -262,6 +372,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
         () => {
           activeHydratedTokenRef.current = null;
+          inFlightHydrationTokenRef.current = null;
+          inFlightHydrationPromiseRef.current = null;
           setToken(null);
           setUser(null);
           setIsConnectivityError(false);
@@ -295,44 +407,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [hydrateSession]);
 
+
   const loginWithPassword = useCallback(
     async (
       email: string,
       password: string,
     ): Promise<{ success: boolean; error?: string }> => {
       setIsLoading(true);
-      const supabase = getSupabaseClient();
-      if (!supabase) {
-        setIsLoading(false);
-        return {
-          success: false,
-          error: "Supabase client is not configured for authentication.",
-        };
-      }
-
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (error || !data.session?.access_token) {
-          setIsLoading(false);
-          return {
-            success: false,
-            error: error?.message || "Invalid email or password.",
-          };
-        }
-
-        await hydrateSession(data.session.access_token);
+        const supabase = getSupabaseClient();
+        return await performPasswordLogin(
+          supabase,
+          { email, password },
+          hydrateSession,
+        );
+      } finally {
         setIsLoading(false);
-        return { success: true };
-      } catch (err: any) {
-        setIsLoading(false);
-        return {
-          success: false,
-          error: err?.message || "Authentication failed. Please try again.",
-        };
       }
     },
     [hydrateSession],
@@ -344,9 +434,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
       setIsLoading(true);
-      const success = await hydrateSession(devToken);
+      const result = await hydrateSession(devToken);
       setIsLoading(false);
-      return success;
+      return result.status === "authenticated";
     },
     [hydrateSession],
   );
@@ -368,6 +458,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   const logout = useCallback(async () => {
     activeHydratedTokenRef.current = null;
+    inFlightHydrationTokenRef.current = null;
+    inFlightHydrationPromiseRef.current = null;
     if (typeof window !== "undefined") {
       localStorage.removeItem(TOKEN_KEY);
     }

@@ -15,24 +15,10 @@ import {
   CustomerLicenseDto,
   CustomerLicenseActivationDto,
 } from "@nexus/contracts";
-
-async function executeDomainDeactivation(
-  client: {
-    deactivateLicenseDomain: (licenseId: string, domain: string) => Promise<any>;
-  },
-  licenseId: string,
-  domain: string,
-): Promise<any> {
-  return await client.deactivateLicenseDomain(licenseId, domain);
-}
-
-async function executeLicenseReveal(
-  client: { revealLicense: (licenseId: string) => Promise<{ licenseKey: string }> },
-  licenseId: string,
-): Promise<string> {
-  const res = await client.revealLicense(licenseId);
-  return res.licenseKey;
-}
+import {
+  executeDomainDeactivation,
+  executeLicenseReveal,
+} from "../../lib/portal-actions";
 
 export default function LicenseDetailPage() {
   const params = useParams();

@@ -11,13 +11,7 @@ import { StatusBadge } from "../../components/status-badge";
 import { Skeleton } from "../../components/skeleton";
 import { Button, Card } from "@nexus/ui";
 import { OrderDto } from "@nexus/contracts";
-
-async function syncPaymentResultStatus(
-  client: { getOrder: (orderId: string) => Promise<OrderDto> },
-  orderId: string,
-): Promise<OrderDto> {
-  return await client.getOrder(orderId);
-}
+import { syncPaymentResultStatus } from "../../lib/portal-actions";
 
 function PaymentResultContent() {
   const searchParams = useSearchParams();

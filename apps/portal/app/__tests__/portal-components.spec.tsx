@@ -6,6 +6,7 @@ import {
   handleAuthSessionHydration,
   createSupabaseAuthListener,
   shouldSkipDuplicateHydration,
+  performPasswordLogin,
   HydrationActions,
 } from "../context/auth-context";
 import {
@@ -430,7 +431,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
       };
     });
 
-    it("clears token/user and invokes signOut({ scope: 'local' }) on 401 Unauthorized", async () => {
+    it("clears token/user, invokes signOut({ scope: 'local' }), and returns unauthorized result on 401", async () => {
       const mockApiClient = {
         getAuthMe: jest.fn().mockRejectedValue({
           status: 401,
@@ -438,7 +439,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
         }),
       };
 
-      const success = await handleAuthSessionHydration(
+      const result = await handleAuthSessionHydration(
         "invalid-token",
         mockActions,
         {
@@ -448,7 +449,10 @@ describe("Portal Components Acceptance & Security Suites", () => {
         },
       );
 
-      expect(success).toBe(false);
+      expect(result.status).toBe("unauthorized");
+      if (result.status === "unauthorized") {
+        expect(result.error).toContain("authorized");
+      }
       expect(mockApiClient.getAuthMe).toHaveBeenCalledTimes(1);
       expect(mockActions.setToken).toHaveBeenCalledWith(null);
       expect(mockActions.setUser).toHaveBeenCalledWith(null);
@@ -458,7 +462,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
       expect(mockSupabaseClient.auth.signOut).toHaveBeenCalledWith({ scope: "local" });
     });
 
-    it("preserves token and sets connectivity flag on transient 5xx or network error", async () => {
+    it("preserves token, sets connectivity flag, and returns unavailable result on 5xx or network error", async () => {
       const mockApiClient = {
         getAuthMe: jest.fn().mockRejectedValue({
           status: 503,
@@ -466,7 +470,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
         }),
       };
 
-      const success = await handleAuthSessionHydration(
+      const result = await handleAuthSessionHydration(
         "valid-token-during-outage",
         mockActions,
         {
@@ -476,7 +480,10 @@ describe("Portal Components Acceptance & Security Suites", () => {
         },
       );
 
-      expect(success).toBe(false);
+      expect(result.status).toBe("unavailable");
+      if (result.status === "unavailable") {
+        expect(result.error).toContain("unavailable");
+      }
       expect(mockApiClient.getAuthMe).toHaveBeenCalledTimes(1);
       // Session MUST be preserved
       expect(mockSupabaseClient.auth.signOut).not.toHaveBeenCalled();
@@ -484,13 +491,13 @@ describe("Portal Components Acceptance & Security Suites", () => {
       expect(mockActions.setIsConnectivityError).toHaveBeenCalledWith(true);
     });
 
-    it("successfully sets user and resets connectivity flag on successful hydration", async () => {
+    it("successfully sets user, resets connectivity flag, and returns authenticated result on success", async () => {
       const mockUser = { id: "cust-100", email: "customer100@example.com", roles: ["CUSTOMER"] } as any;
       const mockApiClient = {
         getAuthMe: jest.fn().mockResolvedValue(mockUser),
       };
 
-      const success = await handleAuthSessionHydration(
+      const result = await handleAuthSessionHydration(
         "fresh-valid-token",
         mockActions,
         {
@@ -500,7 +507,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
         },
       );
 
-      expect(success).toBe(true);
+      expect(result.status).toBe("authenticated");
       expect(mockApiClient.getAuthMe).toHaveBeenCalledTimes(1);
       expect(mockActions.setUser).toHaveBeenCalledWith(mockUser);
       expect(mockActions.setToken).toHaveBeenCalledWith("fresh-valid-token");
@@ -508,21 +515,18 @@ describe("Portal Components Acceptance & Security Suites", () => {
       expect(mockSupabaseClient.auth.signOut).not.toHaveBeenCalled();
     });
 
-    it("de-duplicates /auth/me call when token is already active and hydrated using shouldSkipDuplicateHydration", () => {
-      // If active token is identical and user already loaded -> skip duplicate fetch
-      expect(
-        shouldSkipDuplicateHydration("token-abc", "token-abc", { id: "user-1" }),
-      ).toBe(true);
+    it("de-duplicates hydration when token is already active or in-flight using shouldSkipDuplicateHydration", () => {
+      // Active token match -> skip
+      expect(shouldSkipDuplicateHydration("token-abc", "token-abc")).toBe(true);
 
-      // If token changed -> do not skip
-      expect(
-        shouldSkipDuplicateHydration("token-abc", "token-xyz", { id: "user-1" }),
-      ).toBe(false);
+      // In-flight token match -> skip
+      expect(shouldSkipDuplicateHydration(null, "token-abc", "token-abc")).toBe(true);
 
-      // If user is null (not yet hydrated) -> do not skip
-      expect(
-        shouldSkipDuplicateHydration("token-abc", "token-abc", null),
-      ).toBe(false);
+      // Token changed -> do not skip
+      expect(shouldSkipDuplicateHydration("token-abc", "token-xyz")).toBe(false);
+
+      // Neither active nor in-flight -> do not skip
+      expect(shouldSkipDuplicateHydration(null, "token-abc", null)).toBe(false);
     });
   });
 
@@ -546,6 +550,122 @@ describe("Portal Components Acceptance & Security Suites", () => {
 
       const undefinedCta = resolveEntitlementActionCta(undefined);
       expect(undefinedCta).toBeNull();
+    });
+  });
+
+  describe("9. Password Login Completion & Result Semantics", () => {
+    it("returns success: false without hydration when Supabase authentication fails", async () => {
+      const mockSupabase = {
+        auth: {
+          signInWithPassword: jest.fn().mockResolvedValue({
+            data: { session: null },
+            error: { message: "Invalid login credentials" },
+          }),
+        },
+      };
+      const mockHydrate = jest.fn();
+
+      const result = await performPasswordLogin(
+        mockSupabase as any,
+        { email: "user@test.com", password: "wrongpassword" },
+        mockHydrate,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Invalid login credentials");
+      expect(mockSupabase.auth.signInWithPassword).toHaveBeenCalledTimes(1);
+      expect(mockHydrate).not.toHaveBeenCalled();
+    });
+
+    it("returns success: false with authorization error when Supabase succeeds but hydration returns unauthorized (401)", async () => {
+      const mockSupabase = {
+        auth: {
+          signInWithPassword: jest.fn().mockResolvedValue({
+            data: { session: { access_token: "sb-access-token-123" } },
+            error: null,
+          }),
+        },
+      };
+      const mockHydrate = jest.fn().mockResolvedValue({
+        status: "unauthorized",
+        error: "Your account could not be authorized for the customer portal.",
+      });
+
+      const result = await performPasswordLogin(
+        mockSupabase as any,
+        { email: "stranger@test.com", password: "validpassword" },
+        mockHydrate,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Your account could not be authorized for the customer portal.");
+      expect(mockSupabase.auth.signInWithPassword).toHaveBeenCalledTimes(1);
+      expect(mockHydrate).toHaveBeenCalledWith("sb-access-token-123");
+    });
+
+    it("returns success: false with availability error when Supabase succeeds but hydration returns unavailable (5xx/network)", async () => {
+      const mockSupabase = {
+        auth: {
+          signInWithPassword: jest.fn().mockResolvedValue({
+            data: { session: { access_token: "sb-access-token-456" } },
+            error: null,
+          }),
+        },
+      };
+      const mockHydrate = jest.fn().mockResolvedValue({
+        status: "unavailable",
+        error: "Authentication succeeded, but the customer portal is temporarily unavailable. Please try again.",
+      });
+
+      const result = await performPasswordLogin(
+        mockSupabase as any,
+        { email: "customer@test.com", password: "validpassword" },
+        mockHydrate,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("temporarily unavailable");
+      expect(mockSupabase.auth.signInWithPassword).toHaveBeenCalledTimes(1);
+      expect(mockHydrate).toHaveBeenCalledWith("sb-access-token-456");
+    });
+
+    it("returns success: true when both Supabase authentication and customer hydration succeed", async () => {
+      const mockSupabase = {
+        auth: {
+          signInWithPassword: jest.fn().mockResolvedValue({
+            data: { session: { access_token: "sb-valid-token-789" } },
+            error: null,
+          }),
+        },
+      };
+      const mockHydrate = jest.fn().mockResolvedValue({
+        status: "authenticated",
+      });
+
+      const result = await performPasswordLogin(
+        mockSupabase as any,
+        { email: "customer@test.com", password: "correctpassword" },
+        mockHydrate,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(mockSupabase.auth.signInWithPassword).toHaveBeenCalledTimes(1);
+      expect(mockHydrate).toHaveBeenCalledWith("sb-valid-token-789");
+    });
+
+    it("returns success: false when Supabase client is unconfigured", async () => {
+      const mockHydrate = jest.fn();
+
+      const result = await performPasswordLogin(
+        null,
+        { email: "customer@test.com", password: "any" },
+        mockHydrate,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Supabase client is not configured for authentication.");
+      expect(mockHydrate).not.toHaveBeenCalled();
     });
   });
 });
