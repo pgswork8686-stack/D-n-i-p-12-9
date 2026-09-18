@@ -916,16 +916,21 @@ async function runPhase11Acceptance() {
   }
   console.log("✓ Gate 53 passed: Optimistic concurrency CAS rejected conflicting transition with 409 Conflict");
 
-  console.log("\n[Gate 54] Same-state transition rejection (PUBLISHED -> PUBLISHED rejected with 400)...");
+  console.log("\n[Gate 54] Same-state transition rejection (same targetStatus rejected with 400)...");
+  const postForSameState = await prisma.contentPost.findUniqueOrThrow({
+    where: { id: racePost.id },
+  });
   const sameStateRes = await apiPost(
     `/admin/content/posts/${racePost.id}/transition`,
-    { targetStatus: ContentStatus.PUBLISHED },
+    { targetStatus: postForSameState.status },
     adminToken,
   );
   if (sameStateRes.status !== 400) {
-    throw new Error(`Gate 54 failed: Expected 400 for same-state transition, got ${sameStateRes.status}`);
+    throw new Error(
+      `Gate 54 failed: Expected 400 for same-state transition (${postForSameState.status} -> ${postForSameState.status}), got ${sameStateRes.status}`,
+    );
   }
-  console.log("✓ Gate 54 passed: Same-state transition strictly rejected with 400 Bad Request");
+  console.log(`✓ Gate 54 passed: Same-state transition (${postForSameState.status} -> ${postForSameState.status}) strictly rejected with 400 Bad Request`);
 
   console.log("\n[Gate 55] Initial status restriction — Creating post directly as PUBLISHED rejected with 400...");
   const publishDirectRes = await apiPost(
