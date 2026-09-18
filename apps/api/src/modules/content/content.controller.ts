@@ -12,7 +12,7 @@ import {
   ContentCategoryDto,
 } from "@nexus/contracts";
 
-@Controller("content")
+@Controller(["content", "v1/content"])
 export class ContentController {
   constructor(private readonly contentService: ContentService) {}
 
