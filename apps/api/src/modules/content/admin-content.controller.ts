@@ -8,6 +8,8 @@ import {
   Query,
   UseGuards,
   Req,
+  HttpCode,
+  HttpStatus,
 } from "@nestjs/common";
 import { AuthGuard } from "../auth/auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
@@ -68,6 +70,7 @@ export class AdminContentController {
   }
 
   @Post(["posts/:id/transition", "posts/:id/transitions"])
+  @HttpCode(HttpStatus.OK)
   @RequirePermissions("content.publish")
   async transitionPost(
     @Param("id") id: string,
