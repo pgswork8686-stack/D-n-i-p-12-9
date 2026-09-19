@@ -187,10 +187,25 @@ describe("Web Storefront SEO & Fetch Semantics", () => {
   });
 
   describe("Trusted Production Origin Contract", () => {
+    const originalEnv = { ...process.env };
+
+    beforeEach(() => {
+      delete process.env.NEXT_PUBLIC_SITE_URL;
+      delete process.env.SITE_URL;
+      delete process.env.WEB_URL;
+      delete process.env.NEXT_PUBLIC_API_URL;
+      delete process.env.API_URL;
+    });
+
+    afterAll(() => {
+      process.env = originalEnv;
+    });
+
     it("11. resolvePublicSiteUrl enforces HTTPS and blocks localhost in production", () => {
       expect(resolvePublicSiteUrl("https://nexustheme.dev", { isProduction: true })).toBe("https://nexustheme.dev");
       expect(() => resolvePublicSiteUrl("http://localhost:3000", { isProduction: true })).toThrow(/must use HTTPS/);
       expect(() => resolvePublicSiteUrl("https://localhost", { isProduction: true })).toThrow(/cannot target localhost/);
+      expect(() => resolvePublicSiteUrl("", { isProduction: true })).toThrow(/Production requires a configured public site URL/);
       expect(() => resolvePublicSiteUrl(undefined, { isProduction: true })).toThrow(/Production requires a configured public site URL/);
     });
 
@@ -198,6 +213,7 @@ describe("Web Storefront SEO & Fetch Semantics", () => {
       expect(resolveApiUrl("https://api.nexustheme.dev", { isProduction: true })).toBe("https://api.nexustheme.dev");
       expect(() => resolveApiUrl("http://localhost:4000", { isProduction: true })).toThrow(/must use HTTPS/);
       expect(() => resolveApiUrl("http://api.nexustheme.dev", { isProduction: true })).toThrow(/must use HTTPS/);
+      expect(() => resolveApiUrl("", { isProduction: true })).toThrow(/Production requires a configured API URL/);
       expect(() => resolveApiUrl(undefined, { isProduction: true })).toThrow(/Production requires a configured API URL/);
     });
   });
