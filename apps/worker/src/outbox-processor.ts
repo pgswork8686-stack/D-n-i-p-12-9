@@ -1,4 +1,4 @@
-import { prisma, OutboxEventStatus } from "@nexus/database";
+import { prisma, OutboxEventStatus, enqueueOrderPaidEmailJob } from "@nexus/database";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
 
 export interface ProcessOutboxOptions {
@@ -138,6 +138,9 @@ export async function processOutboxEvents(
         }
 
         await issueEntitlementsForOrder(authoritativeOrderId);
+
+        // Phase 12: Idempotently enqueue ORDER_PAID_EMAIL automation job
+        await enqueueOrderPaidEmailJob(authoritativeOrderId);
       } else {
         throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }

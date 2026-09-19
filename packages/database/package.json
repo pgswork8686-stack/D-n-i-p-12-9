@@ -24,6 +24,7 @@
     "acceptance:phase9": "ts-node --transpile-only scripts/phase9-acceptance.ts",
     "acceptance:phase10": "ts-node --transpile-only scripts/phase10-acceptance.ts",
     "acceptance:phase11": "ts-node --transpile-only scripts/phase11-acceptance.ts",
+    "acceptance:phase12": "ts-node --transpile-only scripts/phase12-acceptance.ts",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1130.0",
     "@nexus/config": "workspace:*",
+    "@nexus/sdk": "workspace:*",
     "@types/ioredis": "^5.0.0",
     "@types/node": "^22.13.9",
     "@typescript-eslint/eslint-plugin": "^8.26.0",

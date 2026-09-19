@@ -74,6 +74,10 @@ import {
   ContentPostTransitionDto,
   QueryContentPostsDto,
   QueryPublicPostsDto,
+  AutomationJobDto,
+  CreateAiDraftJobDto,
+  ListAutomationJobsQuery,
+  PaginatedAutomationJobsDto,
 } from "@nexus/contracts";
 
 
@@ -1489,6 +1493,83 @@ export class NexusApiClient {
       await handleCmsError(res, "List public content categories failed");
     }
     return (await res.json()) as ContentCategoryDto[];
+  }
+
+  // --------------------------------------------------------
+  // Phase 12 — Automation & AI Content Orchestration
+  // --------------------------------------------------------
+
+  async listAutomationJobs(
+    query?: ListAutomationJobsQuery,
+  ): Promise<PaginatedAutomationJobsDto> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.type) params.set("type", query.type);
+    if (query?.page !== undefined) params.set("page", String(query.page));
+    if (query?.limit !== undefined) params.set("limit", String(query.limit));
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/admin/automation/jobs${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List automation jobs failed");
+    }
+    return (await res.json()) as PaginatedAutomationJobsDto;
+  }
+
+  async getAutomationJob(id: string): Promise<AutomationJobDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/automation/jobs/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get automation job failed");
+    }
+    return (await res.json()) as AutomationJobDto;
+  }
+
+  async retryAutomationJob(id: string): Promise<AutomationJobDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/automation/jobs/${id}/retry`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Retry automation job failed");
+    }
+    return (await res.json()) as AutomationJobDto;
+  }
+
+  async cancelAutomationJob(id: string): Promise<AutomationJobDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/automation/jobs/${id}/cancel`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Cancel automation job failed");
+    }
+    return (await res.json()) as AutomationJobDto;
+  }
+
+  async createAiDraftRequest(
+    dto: CreateAiDraftJobDto,
+  ): Promise<AutomationJobDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/automation/ai-draft`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create AI draft request failed");
+    }
+    return (await res.json()) as AutomationJobDto;
   }
 
   private buildHeaders(): Record<string, string> {

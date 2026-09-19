@@ -60,6 +60,10 @@ export const SEED_PERMISSIONS = [
 
   // Settings
   { name: "settings.manage", displayName: "Manage Settings", module: "settings", description: "Manage platform settings" },
+
+  // Automation
+  { name: "automation.read", displayName: "Read Automation", module: "automation", description: "View automation jobs and statuses" },
+  { name: "automation.manage", displayName: "Manage Automation", module: "automation", description: "Trigger, retry and manage automation jobs" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -113,6 +117,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "payment.read",
     "payment.manage",
     "audit.read",
+    "automation.read",
+    "automation.manage",
   ],
   admin: [
     "profile.read",
@@ -139,6 +145,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "finance.read",
     "audit.read",
     "settings.manage",
+    "automation.read",
+    "automation.manage",
   ],
   super_admin: [
     "profile.read",
@@ -165,6 +173,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "finance.read",
     "audit.read",
     "settings.manage",
+    "automation.read",
+    "automation.manage",
   ],
 };
 

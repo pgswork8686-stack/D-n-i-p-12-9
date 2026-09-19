@@ -27,6 +27,8 @@
     "test:acceptance:phase9": "pnpm --filter @nexus/database acceptance:phase9",
     "test:acceptance:phase10": "pnpm --filter @nexus/database acceptance:phase10",
     "test:acceptance:phase11": "pnpm --filter @nexus/database acceptance:phase11",
+    "test:acceptance:phase12": "pnpm --filter @nexus/database acceptance:phase12",
+    "n8n:validate": "node automation/n8n/scripts/validate-workflows.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "clean": "turbo clean && rm -rf node_modules"
   },

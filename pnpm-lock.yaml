@@ -446,6 +446,9 @@ importers:
       '@nexus/config':
         specifier: workspace:*
         version: link:../config
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@types/ioredis':
         specifier: ^5.0.0
         version: 5.0.0(supports-color@8.1.1)

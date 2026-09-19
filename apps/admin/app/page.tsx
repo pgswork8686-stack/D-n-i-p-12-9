@@ -262,6 +262,11 @@ export default function AdminHomePage() {
             ✍️ Manage Content (CMS) →
           </Button>
         </a>
+        <a href="/automation">
+          <Button variant="primary" size="sm">
+            ⚡ Automation & AI Engine →
+          </Button>
+        </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">
             ← Return to Marketplace
