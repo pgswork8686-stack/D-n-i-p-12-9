@@ -51,3 +51,22 @@ export function toMinorUnit(amountMajor: number, currency: string): number {
   }
   return Math.round(amountMajor);
 }
+
+/**
+ * Converts integer minor currency unit (e.g. 1200 USD cents or 299000 VND dong)
+ * into major unit for structured data / decimal displays.
+ * e.g.:
+ * USD 1200 -> 12
+ * VND 299000 -> 299000
+ */
+export function toMajorUnit(amountMinor: number, currency: string): number {
+  const normalizedCurrency = (currency || "").toUpperCase();
+  if (normalizedCurrency === "USD") {
+    return Number((amountMinor / 100).toFixed(2));
+  }
+  if (normalizedCurrency === "VND") {
+    return amountMinor;
+  }
+  return amountMinor;
+}
+

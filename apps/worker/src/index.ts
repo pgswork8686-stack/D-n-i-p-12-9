@@ -10,6 +10,7 @@ import {
   provisionInternalLicenses,
   reconcileInternalLicenses,
 } from "./license-provisioner";
+import { publishDueScheduledContent } from "./content-scheduler";
 
 
 // Load root .env file
@@ -99,6 +100,9 @@ const runPollingTick = async () => {
 
     // 5. Authoritative reconciliation of internal licenses whose parent entitlement is REVOKED or EXPIRED
     await reconcileInternalLicenses({ workerId });
+
+    // 6. Authoritative publishing of scheduled content posts whose scheduledAt <= NOW()
+    await publishDueScheduledContent({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({

@@ -1,24 +1,19 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
+import { useAuth, isDevAuthToolsEnabled } from "./context/auth-context";
+import { getApiUrl } from "./lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
 const PORTAL_URL =
   process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
 
-// Gate dev auth tools in UI (M01)
-const isDevAuthToolsEnabled =
-  process.env.NODE_ENV !== "production" &&
-  process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS === "true";
-
 export default function AdminHomePage() {
+  const { token, user, logout, loginWithDevToken, isLoading: authLoading } = useAuth();
   const [apiHealth, setApiHealth] = useState<string>("Checking...");
   const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
   const [adminAccess, setAdminAccess] = useState<{
     allowed: boolean;
     statusText: string;
@@ -29,7 +24,18 @@ export default function AdminHomePage() {
   });
 
   useEffect(() => {
-    fetch(`${API_URL}/health`)
+    let apiUrl: string;
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setIsHealthy(false);
+      setApiHealth(
+        "Admin API configuration unavailable: Production requires a valid HTTPS API URL.",
+      );
+      return;
+    }
+
+    fetch(`${apiUrl}/health`)
       .then((res) => res.json())
       .then((data) => {
         setIsHealthy(data.status === "ok");
@@ -42,17 +48,28 @@ export default function AdminHomePage() {
   }, []);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!token) {
       setAdminAccess({
         allowed: false,
-        statusText: "Access Denied (401 Unauthorized): Please provide an authenticated admin token.",
+        statusText: "Access Denied (401 Unauthorized): Please sign in with an authenticated admin account.",
       });
       return;
     }
 
-    fetch(`${API_URL}/admin/roles`, {
+    let apiUrl: string;
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setAdminAccess({
+        allowed: false,
+        statusText: "Admin API configuration unavailable",
+      });
+      return;
+    }
+
+    fetch(`${apiUrl}/admin/roles`, {
       headers: {
-        Authorization: `Bearer ${authToken}`,
+        Authorization: `Bearer ${token}`,
       },
     })
       .then(async (res) => {
@@ -77,7 +94,9 @@ export default function AdminHomePage() {
           statusText: err.message,
         });
       });
-  }, [authToken]);
+  }, [token]);
+
+  const showDevTools = isDevAuthToolsEnabled();
 
   return (
     <main className="max-w-4xl mx-auto py-12 px-6">
@@ -90,7 +109,7 @@ export default function AdminHomePage() {
             Central Operations & Control Center (apps/admin — Port 3002)
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <Badge
             variant={
               isHealthy ? "success" : isHealthy === false ? "error" : "warning"
@@ -105,10 +124,21 @@ export default function AdminHomePage() {
           <Badge variant={adminAccess.allowed ? "success" : "error"}>
             {adminAccess.allowed ? "Admin Verified" : "Access Denied"}
           </Badge>
+          {token ? (
+            <Button variant="outline" size="sm" onClick={() => logout()}>
+              Sign Out
+            </Button>
+          ) : (
+            <Link href="/login">
+              <Button variant="primary" size="sm">
+                Sign In
+              </Button>
+            </Link>
+          )}
         </div>
       </div>
 
-      {isDevAuthToolsEnabled && (
+      {showDevTools && (
         <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 flex items-center justify-between">
           <div>
             <span className="text-sm font-semibold text-gray-800">
@@ -120,9 +150,9 @@ export default function AdminHomePage() {
           </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setAuthToken("dev-admin-token")}
+              onClick={() => loginWithDevToken("dev-admin-token")}
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                authToken === "dev-admin-token"
+                token === "dev-admin-token"
                   ? "bg-[#0037b0] text-white border-[#0037b0]"
                   : "bg-white text-gray-700 border-gray-300"
               }`}
@@ -130,9 +160,9 @@ export default function AdminHomePage() {
               Admin Token (Pass)
             </button>
             <button
-              onClick={() => setAuthToken("dev-customer-token")}
+              onClick={() => loginWithDevToken("dev-customer-token")}
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                authToken === "dev-customer-token"
+                token === "dev-customer-token"
                   ? "bg-amber-600 text-white border-amber-600"
                   : "bg-white text-gray-700 border-gray-300"
               }`}
@@ -140,9 +170,9 @@ export default function AdminHomePage() {
               Customer Token (403)
             </button>
             <button
-              onClick={() => setAuthToken("")}
+              onClick={() => logout()}
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                !authToken
+                !token
                   ? "bg-red-600 text-white border-red-600"
                   : "bg-white text-gray-700 border-gray-300"
               }`}
@@ -192,13 +222,28 @@ export default function AdminHomePage() {
               <p className="text-[11px] text-gray-500">
                 Client-side UI respects server authority. Access cannot be bypassed by client tampering.
               </p>
+              {!token && (
+                <div className="pt-2">
+                  <Link href="/login">
+                    <Button variant="primary" size="sm">
+                      Go to Sign In
+                    </Button>
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </Card>
 
         <Card
           title="Backend API Health"
-          subtitle={`Live probe to ${API_URL}/health`}
+          subtitle={(() => {
+            try {
+              return `Live probe to ${getApiUrl()}/health`;
+            } catch {
+              return "Live probe to /health (configuration unavailable)";
+            }
+          })()}
         >
           <pre className="bg-gray-900 text-emerald-400 p-4 rounded-xl text-xs overflow-x-auto h-52">
             {apiHealth}
@@ -210,6 +255,11 @@ export default function AdminHomePage() {
         <a href="/admin/products">
           <Button variant="primary" size="sm">
             📦 Manage Catalog & Products →
+          </Button>
+        </a>
+        <a href="/content">
+          <Button variant="primary" size="sm">
+            ✍️ Manage Content (CMS) →
           </Button>
         </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">

@@ -3,4 +3,11 @@ export * from "./money";
 export * from "./domain-normalizer";
 export * from "./license-crypto";
 export * from "./semver";
+export * from "./slugify";
+export * from "./sanitize";
+export * from "./url-validator";
+export * from "./json-ld";
+export * from "./seo-builders";
+export * from "./product-seo";
+export * from "./article-seo";
 

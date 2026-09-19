@@ -1,70 +1,57 @@
-"use client";
-
-import React, { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import React from "react";
+import { Metadata } from "next";
+import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Badge, Card, Button } from "@nexus/ui";
-import { formatMoney } from "@nexus/utils";
+import { Badge } from "@nexus/ui";
+import {
+  safeJsonLd,
+  resolvePublicSiteUrl,
+  resolveApiUrl,
+  buildProductMetadata,
+  buildProductJsonLd,
+} from "@nexus/utils";
+import { ProductVariantSelector } from "./product-variant-selector";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { fetchProductBySlug } from "../../lib/storefront-fetch";
 
-export default function PublicProductDetailPage() {
-  const params = useParams();
-  const slug = params.slug as string;
+export const dynamic = "force-dynamic";
 
-  const [product, setProduct] = useState<any>(null);
-  const [selectedVariantId, setSelectedVariantId] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+interface ProductPageProps {
+  params: { slug: string };
+}
 
-  useEffect(() => {
-    if (!slug) return;
-    setLoading(true);
-    fetch(`${API_URL}/products/${slug}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error("Product not found or currently unavailable.");
-        }
-        return res.json();
-      })
-      .then((data) => {
-        setProduct(data);
-        if (data.variants && data.variants.length > 0) {
-          setSelectedVariantId(data.variants[0].id);
-        }
-      })
-      .catch((err) => {
-        setError(err.message);
-      })
-      .finally(() => setLoading(false));
-  }, [slug]);
+async function getProduct(slug: string): Promise<any | null> {
+  return fetchProductBySlug(slug);
+}
 
-  if (loading) {
-    return (
-      <main className="max-w-4xl mx-auto py-16 px-6 font-sans text-center text-gray-400">
-        Loading product information...
-      </main>
-    );
+export async function generateMetadata({ params }: ProductPageProps): Promise<Metadata> {
+  let product = null;
+  try {
+    product = await getProduct(params.slug);
+  } catch (err) {
+    throw err;
   }
 
-  if (error || !product) {
-    return (
-      <main className="max-w-4xl mx-auto py-16 px-6 font-sans text-center">
-        <h2 className="text-2xl font-bold text-gray-800">Product Unavailable</h2>
-        <p className="text-gray-500 mt-2">{error || "This product does not exist or is not active."}</p>
-        <Link href="/products" className="inline-block mt-6 text-blue-600 underline">
-          ← Back to All Products
-        </Link>
-      </main>
-    );
+  const siteUrl = resolvePublicSiteUrl();
+  return buildProductMetadata({ product, siteUrl });
+}
+
+export default async function PublicProductDetailPage({ params }: ProductPageProps) {
+  const product = await getProduct(params.slug);
+  if (!product) {
+    notFound();
   }
 
-  const selectedVariant =
-    product.variants?.find((v: any) => v.id === selectedVariantId) ||
-    product.variants?.[0];
+  const siteUrl = resolvePublicSiteUrl();
+  const productSchema = buildProductJsonLd({ product, siteUrl });
 
   return (
     <main className="max-w-5xl mx-auto py-12 px-6 font-sans">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: safeJsonLd(productSchema) }}
+      />
+
       <Link href="/products" className="text-sm text-gray-500 hover:text-gray-700 block mb-6">
         ← Back to Catalog
       </Link>
@@ -111,109 +98,12 @@ export default function PublicProductDetailPage() {
           )}
         </div>
 
-        {/* Purchase / Variant Card */}
+        {/* Purchase / Variant Card (Client Interactive) */}
         <div>
-          <Card className="p-6 border border-gray-200 shadow-sm sticky top-8">
-            <h3 className="font-bold text-gray-900 text-base mb-4">Choose Variant</h3>
-
-            {/* Variant Options */}
-            <div className="space-y-3 mb-6">
-              {product.variants?.map((v: any) => {
-                const isSelected = v.id === selectedVariant?.id;
-                const defaultPrice = v.prices?.[0];
-
-                return (
-                  <div
-                    key={v.id}
-                    onClick={() => setSelectedVariantId(v.id)}
-                    className={`p-3 rounded-lg border cursor-pointer transition ${
-                      isSelected
-                        ? "border-[#0037b0] bg-blue-50/50"
-                        : "border-gray-200 hover:border-gray-300 bg-white"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`text-sm font-semibold ${isSelected ? "text-[#0037b0]" : "text-gray-800"}`}>
-                        {v.name}
-                      </span>
-                      <span className="text-sm font-bold text-gray-900">
-                        {defaultPrice ? formatMoney(defaultPrice.amount, defaultPrice.currency) : "N/A"}
-                      </span>
-                    </div>
-
-                    {v.licensePlan && (
-                      <div className="mt-1 text-xs text-gray-500">
-                        Up to {v.licensePlan.maxActivations} website(s)
-                        {v.licensePlan.isLifetime ? " • Lifetime" : ""}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Selected Pricing Breakdown */}
-            {selectedVariant && (
-              <div className="p-4 bg-gray-50 rounded-lg mb-6 border border-gray-100">
-                <span className="text-xs text-gray-500 block mb-1">Total Pricing</span>
-                <div className="flex flex-col gap-1">
-                  {selectedVariant.prices?.map((pr: any) => (
-                    <div key={pr.id} className="flex justify-between items-center">
-                      <span className="text-xs font-mono text-gray-400">{pr.currency}:</span>
-                      <span className="text-lg font-extrabold text-[#0037b0]">
-                        {formatMoney(pr.amount, pr.currency)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <Button variant="primary" className="w-full justify-center text-sm py-2.5">
-              {getCtaLabel(product.fulfillmentType, product.productType)}
-            </Button>
-            <p className="text-xs text-center text-gray-500 mt-3 leading-relaxed">
-              {getFulfillmentCopy(product.fulfillmentType)}
-            </p>
-          </Card>
+          <ProductVariantSelector product={product} />
         </div>
       </div>
     </main>
   );
 }
 
-function getFulfillmentCopy(fulfillmentType?: string): string {
-  switch (fulfillmentType) {
-    case "DIGITAL_DOWNLOAD":
-      return "Download access is provided after a valid entitlement is created.";
-    case "INTERNAL_LICENSE":
-      return "License access is provisioned after order and entitlement processing.";
-    case "EXTERNAL_MANAGED":
-      return "Activation is managed after purchase. You may be asked to provide the target domain.";
-    case "MEMBERSHIP_ACCESS":
-      return "Membership access is enabled after successful order processing.";
-    case "MANUAL_SERVICE":
-      return "Our team will contact you to begin service fulfillment.";
-    default:
-      return "Fulfillment access is enabled after successful order and entitlement processing.";
-  }
-}
-
-function getCtaLabel(fulfillmentType?: string, productType?: string): string {
-  switch (fulfillmentType) {
-    case "DIGITAL_DOWNLOAD":
-      return "Download Asset";
-    case "INTERNAL_LICENSE":
-      return "Purchase License";
-    case "EXTERNAL_MANAGED":
-      return "Order Managed License";
-    case "MEMBERSHIP_ACCESS":
-      return "Join Membership";
-    case "MANUAL_SERVICE":
-      return "Request Service";
-    default:
-      if (productType === "SERVICE") return "Request Service";
-      if (productType === "MEMBERSHIP") return "Join Membership";
-      return "Acquire Product";
-  }
-}

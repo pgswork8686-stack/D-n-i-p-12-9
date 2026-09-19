@@ -4,8 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button, Card } from "@nexus/ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { getApiUrl } from "../../../lib/api";
 
 const PRODUCT_TYPES = [
   "DOWNLOADABLE_ASSET",
@@ -70,7 +69,8 @@ export default function NewProductPage() {
     setError(null);
 
     try {
-      const res = await fetch(`${API_URL}/admin/products`, {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/admin/products`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
