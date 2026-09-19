@@ -2,7 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@nexus/ui";
-import { safeJsonLd, resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
+import {
+  safeJsonLd,
+  resolvePublicSiteUrl,
+  resolveApiUrl,
+  buildArticleMetadata,
+  buildArticleJsonLd,
+} from "@nexus/utils";
+
+export const dynamic = "force-dynamic";
 
 interface ArticlePageProps {
   params: Promise<{ slug: string }>;
@@ -10,63 +18,39 @@ interface ArticlePageProps {
 
 async function getArticle(slug: string) {
   const apiUrl = resolveApiUrl();
+  let res: Response;
   try {
-    const res = await fetch(`${apiUrl}/v1/content/posts/${encodeURIComponent(slug)}`, {
+    res = await fetch(`${apiUrl}/v1/content/posts/${encodeURIComponent(slug)}`, {
       cache: "no-store",
     });
-
-    if (!res.ok) {
-      return null;
-    }
-
-    return await res.json();
   } catch {
+    throw new Error("Unable to connect to content service.");
+  }
+
+  if (res.status === 404) {
     return null;
   }
+
+  if (!res.ok) {
+    throw new Error(`Content service returned error: ${res.status}`);
+  }
+
+  return await res.json();
 }
 
 export async function generateMetadata({
   params,
 }: ArticlePageProps): Promise<Metadata> {
   const { slug } = await params;
-  const post = await getArticle(slug);
-
-  if (!post) {
-    return {
-      title: "Article Not Found | NEXUSTHEME",
-      description: "The requested article could not be found.",
-    };
+  let post = null;
+  try {
+    post = await getArticle(slug);
+  } catch (err) {
+    throw err;
   }
 
   const siteUrl = resolvePublicSiteUrl();
-  const title = post.seoTitle || post.title;
-  const description = post.seoDescription || post.excerpt || `${post.title} on NEXUSTHEME.`;
-  const canonical = post.canonicalUrl || `${siteUrl}/blog/${post.slug}`;
-  const ogImage = post.ogImageUrl || post.featuredImageUrl;
-
-  return {
-    title: `${title} | NEXUSTHEME`,
-    description,
-    alternates: {
-      canonical,
-    },
-    openGraph: {
-      title,
-      description,
-      url: canonical,
-      siteName: "NEXUSTHEME",
-      type: "article",
-      publishedTime: post.publishedAt,
-      modifiedTime: post.updatedAt,
-      images: ogImage ? [{ url: ogImage, alt: post.featuredImageAlt || title }] : undefined,
-    },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-      images: ogImage ? [ogImage] : undefined,
-    },
-  };
+  return buildArticleMetadata({ post, siteUrl }) as Metadata;
 }
 
 export default async function ArticleDetailPage({ params }: ArticlePageProps) {
@@ -78,27 +62,7 @@ export default async function ArticleDetailPage({ params }: ArticlePageProps) {
   }
 
   const siteUrl = resolvePublicSiteUrl();
-  const canonical = post.canonicalUrl || `${siteUrl}/blog/${post.slug}`;
-
-  // Build JSON-LD Article structured data (truthful, author omitted for V1)
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "Article",
-    headline: post.seoTitle || post.title,
-    description: post.seoDescription || post.excerpt,
-    mainEntityOfPage: {
-      "@type": "WebPage",
-      "@id": canonical,
-    },
-    datePublished: post.publishedAt,
-    dateModified: post.updatedAt,
-    publisher: {
-      "@type": "Organization",
-      name: "NEXUSTHEME",
-      url: siteUrl,
-    },
-    ...(post.featuredImageUrl ? { image: post.featuredImageUrl } : {}),
-  };
+  const jsonLd = buildArticleJsonLd({ post, siteUrl });
 
   return (
     <article className="max-w-4xl mx-auto py-12 px-6 font-sans">

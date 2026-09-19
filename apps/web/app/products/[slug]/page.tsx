@@ -3,8 +3,16 @@ import { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@nexus/ui";
-import { safeJsonLd, toMajorUnit, resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
+import {
+  safeJsonLd,
+  resolvePublicSiteUrl,
+  resolveApiUrl,
+  buildProductMetadata,
+  buildProductJsonLd,
+} from "@nexus/utils";
 import { ProductVariantSelector } from "./product-variant-selector";
+
+export const dynamic = "force-dynamic";
 
 interface ProductPageProps {
   params: { slug: string };
@@ -12,52 +20,36 @@ interface ProductPageProps {
 
 async function getProduct(slug: string): Promise<any | null> {
   const apiUrl = resolveApiUrl();
+  let res: Response;
   try {
-    const res = await fetch(`${apiUrl}/products/${slug}`, {
+    res = await fetch(`${apiUrl}/products/${encodeURIComponent(slug)}`, {
       cache: "no-store",
     });
-    if (!res.ok) {
-      return null;
-    }
-    return await res.json();
   } catch {
+    throw new Error("Unable to connect to product catalog service.");
+  }
+
+  if (res.status === 404) {
     return null;
   }
+
+  if (!res.ok) {
+    throw new Error(`Product catalog service returned error: ${res.status}`);
+  }
+
+  return await res.json();
 }
 
 export async function generateMetadata({ params }: ProductPageProps): Promise<Metadata> {
-  const product = await getProduct(params.slug);
-  if (!product) {
-    return {
-      title: "Product Not Found | NEXUSTHEME",
-      description: "The requested product is unavailable.",
-    };
+  let product = null;
+  try {
+    product = await getProduct(params.slug);
+  } catch (err) {
+    throw err;
   }
 
   const siteUrl = resolvePublicSiteUrl();
-  const canonicalUrl = `${siteUrl}/products/${product.slug}`;
-  const title = `${product.name} | NEXUSTHEME`;
-  const description = product.shortDescription || product.description || "NEXUSTHEME digital product.";
-
-  return {
-    title,
-    description,
-    alternates: {
-      canonical: canonicalUrl,
-    },
-    openGraph: {
-      title,
-      description,
-      url: canonicalUrl,
-      type: "website",
-      siteName: "NEXUSTHEME",
-    },
-    twitter: {
-      card: "summary_large_image",
-      title,
-      description,
-    },
-  };
+  return buildProductMetadata({ product, siteUrl });
 }
 
 export default async function PublicProductDetailPage({ params }: ProductPageProps) {
@@ -67,38 +59,7 @@ export default async function PublicProductDetailPage({ params }: ProductPagePro
   }
 
   const siteUrl = resolvePublicSiteUrl();
-
-  // Truthful Product JSON-LD structured data:
-  // - Minor units converted to major units (USD 1200 -> 12, VND 299000 -> 299000)
-  // - Only emit Offer when an active, non-zero price exists
-  // - NO invented availability (e.g. InStock removed)
-  // - NO fabricated ratings or reviews
-  const validOffers = (product.variants || [])
-    .map((v: any) => {
-      const price = v.prices?.[0];
-      if (!price || price.amount === undefined || price.amount === null || price.amount <= 0) {
-        return null;
-      }
-      return {
-        "@type": "Offer",
-        price: toMajorUnit(price.amount, price.currency),
-        priceCurrency: price.currency,
-        url: `${siteUrl}/products/${product.slug}`,
-      };
-    })
-    .filter(Boolean);
-
-  const productSchema = {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: product.name,
-    description: product.shortDescription || product.description || undefined,
-    brand: {
-      "@type": "Brand",
-      name: product.brand || "NEXUSTHEME",
-    },
-    ...(validOffers.length > 0 ? { offers: validOffers } : {}),
-  };
+  const productSchema = buildProductJsonLd({ product, siteUrl });
 
   return (
     <main className="max-w-5xl mx-auto py-12 px-6 font-sans">

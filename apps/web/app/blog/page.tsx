@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Badge, Card } from "@nexus/ui";
 import { resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
 
+export const dynamic = "force-dynamic";
+
 export async function generateMetadata(): Promise<Metadata> {
   const siteUrl = resolvePublicSiteUrl();
   return {

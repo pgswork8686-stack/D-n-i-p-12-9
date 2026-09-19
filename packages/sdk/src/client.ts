@@ -77,6 +77,60 @@ import {
 } from "@nexus/contracts";
 
 
+export class NexusApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.name = "NexusApiError";
+    this.status = status;
+    this.code = code;
+    Object.setPrototypeOf(this, NexusApiError.prototype);
+  }
+}
+
+async function handleCmsError(
+  res: Response,
+  fallbackPrefix: string,
+): Promise<never> {
+  const status = res.status;
+  let safeMessage = "";
+
+  try {
+    const json = await res.json();
+    if (json && typeof json === "object") {
+      if (typeof json.message === "string") {
+        safeMessage = json.message;
+      } else if (Array.isArray(json.message) && json.message.length > 0) {
+        safeMessage = json.message.join(", ");
+      } else if (typeof json.error === "string") {
+        safeMessage = json.error;
+      }
+    }
+  } catch {
+    // Non-JSON upstream response (e.g. proxy 502/504 HTML), do not leak raw body
+  }
+
+  if (!safeMessage) {
+    if (status === 401) {
+      safeMessage = "Authentication required. Please sign in again.";
+    } else if (status === 403) {
+      safeMessage = "Access denied. You do not have sufficient permissions.";
+    } else if (status === 404) {
+      safeMessage = "The requested content resource was not found.";
+    } else if (status === 409) {
+      safeMessage = "Concurrent update conflict. Please refresh and try again.";
+    } else if (status >= 500) {
+      safeMessage = "Content service is temporarily unavailable. Please try again later.";
+    } else {
+      safeMessage = `${fallbackPrefix} (HTTP ${status})`;
+    }
+  }
+
+  throw new NexusApiError(status, safeMessage);
+}
+
 export interface NexusClientConfig {
   baseUrl: string;
   token?: string;
@@ -1288,8 +1342,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`List admin content posts failed (${res.status}): ${err}`);
+      await handleCmsError(res, "List admin content posts failed");
     }
     return (await res.json()) as PaginatedResponse<AdminContentPostDto>;
   }
@@ -1300,8 +1353,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Get admin content post failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Get admin content post failed");
     }
     return (await res.json()) as AdminContentPostDto;
   }
@@ -1315,8 +1367,7 @@ export class NexusApiClient {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Create content post failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Create content post failed");
     }
     return (await res.json()) as AdminContentPostDto;
   }
@@ -1331,8 +1382,7 @@ export class NexusApiClient {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Update content post failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Update content post failed");
     }
     return (await res.json()) as AdminContentPostDto;
   }
@@ -1350,8 +1400,7 @@ export class NexusApiClient {
       },
     );
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Transition content post failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Transition content post failed");
     }
     return (await res.json()) as AdminContentPostDto;
   }
@@ -1362,10 +1411,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(
-        `List admin content categories failed (${res.status}): ${err}`,
-      );
+      await handleCmsError(res, "List admin content categories failed");
     }
     return (await res.json()) as ContentCategoryDto[];
   }
@@ -1379,8 +1425,7 @@ export class NexusApiClient {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Create content category failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Create content category failed");
     }
     return (await res.json()) as ContentCategoryDto;
   }
@@ -1398,8 +1443,7 @@ export class NexusApiClient {
       },
     );
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Update content category failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Update content category failed");
     }
     return (await res.json()) as ContentCategoryDto;
   }
@@ -1420,8 +1464,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`List public content posts failed (${res.status}): ${err}`);
+      await handleCmsError(res, "List public content posts failed");
     }
     return (await res.json()) as PaginatedResponse<PublicContentListItemDto>;
   }
@@ -1432,8 +1475,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Get public content post failed (${res.status}): ${err}`);
+      await handleCmsError(res, "Get public content post failed");
     }
     return (await res.json()) as PublicContentPostDto;
   }
@@ -1444,10 +1486,7 @@ export class NexusApiClient {
       headers: this.buildHeaders(),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(
-        `List public content categories failed (${res.status}): ${err}`,
-      );
+      await handleCmsError(res, "List public content categories failed");
     }
     return (await res.json()) as ContentCategoryDto[];
   }

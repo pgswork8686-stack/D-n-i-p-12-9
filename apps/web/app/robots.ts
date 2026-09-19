@@ -1,9 +1,10 @@
 import { MetadataRoute } from "next";
-import { buildRobotsPolicy } from "@nexus/utils";
+import { buildRobotsPolicy, resolvePublicSiteUrl } from "@nexus/utils";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+export const dynamic = "force-dynamic";
 
 export default function robots(): MetadataRoute.Robots {
-  return buildRobotsPolicy({ siteUrl: SITE_URL });
+  const siteUrl = resolvePublicSiteUrl();
+  return buildRobotsPolicy({ siteUrl });
 }
 

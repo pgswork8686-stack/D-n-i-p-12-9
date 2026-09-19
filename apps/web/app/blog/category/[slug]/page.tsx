@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Badge } from "@nexus/ui";
 import { resolvePublicSiteUrl, resolveApiUrl } from "@nexus/utils";
 
+export const dynamic = "force-dynamic";
+
 interface CategoryPageProps {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ page?: string }>;
@@ -11,35 +13,46 @@ interface CategoryPageProps {
 
 async function getCategoryData(slug: string, page: number = 1) {
   const apiUrl = resolveApiUrl();
+  let catsRes: Response;
+  let postsRes: Response;
   try {
-    const [catsRes, postsRes] = await Promise.all([
+    [catsRes, postsRes] = await Promise.all([
       fetch(`${apiUrl}/v1/content/categories`, { cache: "no-store" }),
       fetch(`${apiUrl}/v1/content/posts?categorySlug=${encodeURIComponent(slug)}&page=${page}&limit=12`, {
         cache: "no-store",
       }),
     ]);
-
-    const categories = catsRes.ok ? await catsRes.json() : [];
-    const currentCategory = Array.isArray(categories)
-      ? categories.find((c: any) => c.slug === slug)
-      : null;
-
-    const postsData = postsRes.ok ? await postsRes.json() : { items: [], total: 0 };
-
-    return {
-      category: currentCategory,
-      posts: postsData.items || [],
-      total: postsData.total || 0,
-      totalPages: postsData.totalPages || 1,
-    };
   } catch {
-    return {
-      category: null,
-      posts: [],
-      total: 0,
-      totalPages: 1,
-    };
+    throw new Error("Unable to connect to content category service.");
   }
+
+  if (!catsRes.ok || !postsRes.ok) {
+    if (catsRes.status === 404) {
+      return {
+        category: null,
+        posts: [],
+        total: 0,
+        totalPages: 1,
+      };
+    }
+    throw new Error(
+      `Content category service error (${catsRes.status} / ${postsRes.status})`,
+    );
+  }
+
+  const categories = await catsRes.json();
+  const currentCategory = Array.isArray(categories)
+    ? categories.find((c: any) => c.slug === slug)
+    : null;
+
+  const postsData = await postsRes.json();
+
+  return {
+    category: currentCategory,
+    posts: postsData.items || [],
+    total: postsData.total || 0,
+    totalPages: postsData.totalPages || 1,
+  };
 }
 
 export async function generateMetadata({

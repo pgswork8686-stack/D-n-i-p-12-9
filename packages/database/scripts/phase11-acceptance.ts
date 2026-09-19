@@ -17,6 +17,10 @@ import {
   buildSitemapEntries,
   buildRobotsPolicy,
   toMajorUnit,
+  buildProductJsonLd,
+  buildArticleJsonLd,
+  resolvePublicSiteUrl,
+  resolveApiUrl,
 } from "@nexus/utils";
 
 const TEST_PORT = process.env.API_PORT || "4007";
@@ -1065,17 +1069,139 @@ async function runPhase11Acceptance() {
   }
   console.log(`✓ Gate 61 passed: Verified 0 database imports across ${frontendFiles.length} frontend source files`);
 
-  console.log("\n[Gate 62] Truthful Product Money Conversion & InStock invariant...");
-  if (toMajorUnit(1200, "USD") !== 12) {
-    throw new Error(`Gate 62 failed: toMajorUnit(1200, "USD") expected 12, got ${toMajorUnit(1200, "USD")}`);
+  console.log("\n[Gate 62] Truthful Product JSON-LD builder & stock invariant...");
+  const sampleProduct = {
+    name: "Acceptance Test Theme",
+    slug: "acceptance-test-theme",
+    shortDescription: "A high-performance theme.",
+    brand: null,
+    variants: [
+      {
+        sku: "NXS-USD",
+        prices: [{ amount: 1200, currency: "USD" }],
+      },
+      {
+        sku: "NXS-VND",
+        prices: [{ amount: 299000, currency: "VND" }],
+      },
+      {
+        sku: "NXS-EMPTY",
+        prices: [],
+      },
+      {
+        sku: "NXS-ZERO",
+        prices: [{ amount: 0, currency: "USD" }],
+      },
+    ],
+  };
+
+  const productLd = buildProductJsonLd({
+    product: sampleProduct,
+    siteUrl: "https://nexustheme.dev",
+  });
+
+  if (productLd["@type"] !== "Product" || productLd.name !== "Acceptance Test Theme") {
+    throw new Error("Gate 62 failed: Schema.org Product type or name mismatch");
   }
-  if (toMajorUnit(250000, "VND") !== 250000) {
-    throw new Error(`Gate 62 failed: toMajorUnit(250000, "VND") expected 250000, got ${toMajorUnit(250000, "VND")}`);
+
+  // Assert exactly 2 valid offers (USD 12 and VND 299000), excluding empty/zero prices
+  if (!Array.isArray(productLd.offers) || productLd.offers.length !== 2) {
+    throw new Error(
+      `Gate 62 failed: Expected 2 valid offers (excluding zero/empty), got ${productLd.offers?.length}`,
+    );
   }
-  console.log("✓ Gate 62 passed: Truthful money conversion and product stock invariants confirmed");
+
+  const usdOffer = productLd.offers.find((o: any) => o.priceCurrency === "USD");
+  const vndOffer = productLd.offers.find((o: any) => o.priceCurrency === "VND");
+
+  if (!usdOffer || usdOffer.price !== 12) {
+    throw new Error(`Gate 62 failed: USD minor currency 1200 expected major 12, got ${usdOffer?.price}`);
+  }
+  if (!vndOffer || vndOffer.price !== 299000) {
+    throw new Error(`Gate 62 failed: VND minor currency 299000 expected 299000, got ${vndOffer?.price}`);
+  }
+
+  // Assert NO availability (InStock) emitted anywhere
+  if (JSON.stringify(productLd).includes("InStock") || productLd.offers.some((o: any) => o.availability)) {
+    throw new Error("Gate 62 failed: Availability (InStock) was falsely emitted in Product JSON-LD");
+  }
+
+  // Assert NO brand invented when product.brand is null
+  if (productLd.brand !== undefined) {
+    throw new Error(`Gate 62 failed: Brand was fabricated when product.brand is null: ${JSON.stringify(productLd.brand)}`);
+  }
+
+  // Assert brand emitted when explicitly provided
+  const brandedLd = buildProductJsonLd({
+    product: { ...sampleProduct, brand: "Official Brand" },
+    siteUrl: "https://nexustheme.dev",
+  });
+  if (brandedLd.brand?.name !== "Official Brand") {
+    throw new Error("Gate 62 failed: Brand was not emitted when product.brand was provided");
+  }
+  console.log("✓ Gate 62 passed: Truthful product JSON-LD builder confirmed (USD major 12, VND 299000, zero InStock, zero fake offers, brand truthfulness)");
+
+  console.log("\n[Gate 63] Authoritative URL origin resolvers enforce HTTPS and fail closed in production...");
+  if (resolvePublicSiteUrl("https://nexustheme.dev", { isProduction: true }) !== "https://nexustheme.dev") {
+    throw new Error("Gate 63 failed: Valid HTTPS production origin was not normalized");
+  }
+  let siteBlocked = false;
+  try {
+    resolvePublicSiteUrl("http://localhost:3000", { isProduction: true });
+  } catch {
+    siteBlocked = true;
+  }
+  if (!siteBlocked) {
+    throw new Error("Gate 63 failed: resolvePublicSiteUrl allowed localhost in production");
+  }
+
+  if (resolveApiUrl("https://api.nexustheme.dev", { isProduction: true }) !== "https://api.nexustheme.dev") {
+    throw new Error("Gate 63 failed: Valid HTTPS API origin was not normalized");
+  }
+  let apiBlocked = false;
+  try {
+    resolveApiUrl("http://api.domain.com", { isProduction: true });
+  } catch {
+    apiBlocked = true;
+  }
+  if (!apiBlocked) {
+    throw new Error("Gate 63 failed: resolveApiUrl allowed HTTP in production");
+  }
+  console.log("✓ Gate 63 passed: resolvePublicSiteUrl & resolveApiUrl enforce HTTPS and strictly reject localhost/HTTP in production");
+
+  console.log("\n[Gate 64] Truthful Article JSON-LD and author attribution invariant...");
+  const unauthoredArticle = {
+    title: "Acceptance Test Article",
+    slug: "acceptance-test-article",
+    author: null,
+  };
+  const articleLd = buildArticleJsonLd({
+    post: unauthoredArticle,
+    siteUrl: "https://nexustheme.dev",
+  });
+  if (articleLd.author !== undefined) {
+    throw new Error("Gate 64 failed: Author was fabricated in Article JSON-LD when post.author is null");
+  }
+  if (JSON.stringify(articleLd).includes("Editorial Team")) {
+    throw new Error("Gate 64 failed: Fabricated 'Editorial Team' found in Article JSON-LD");
+  }
+
+  const authoredArticle = {
+    title: "Acceptance Test Article 2",
+    slug: "acceptance-test-article-2",
+    author: { profile: { displayName: "Author Jane" } },
+  };
+  const authoredLd = buildArticleJsonLd({
+    post: authoredArticle,
+    siteUrl: "https://nexustheme.dev",
+  });
+  if (authoredLd.author?.name !== "Author Jane") {
+    throw new Error("Gate 64 failed: Author display name was not preserved in Article JSON-LD");
+  }
+  console.log("✓ Gate 64 passed: Article JSON-LD strictly omits author when unmodeled and preserves truthful author when present");
 
   console.log("\n==================================================");
-  console.log("ALL 62 GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 64 GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

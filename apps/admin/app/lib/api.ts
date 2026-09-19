@@ -1,13 +1,22 @@
 import { NexusApiClient } from "@nexus/sdk";
+import { resolveApiUrl } from "@nexus/utils";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+export function getApiUrl(): string {
+  return resolveApiUrl();
+}
 
 export function getApiClient(token?: string | null): NexusApiClient {
   return new NexusApiClient({
-    baseUrl: API_URL,
+    baseUrl: resolveApiUrl(),
     token: token || undefined,
   });
 }
 
-export { API_URL };
+export const API_URL = (() => {
+  try {
+    return resolveApiUrl();
+  } catch {
+    return "";
+  }
+})();
+

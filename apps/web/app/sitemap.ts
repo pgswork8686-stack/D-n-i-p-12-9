@@ -1,13 +1,19 @@
 import { MetadataRoute } from "next";
-import { buildSitemapEntries } from "@nexus/utils";
+import {
+  buildSitemapEntries,
+  resolvePublicSiteUrl,
+  resolveApiUrl,
+} from "@nexus/utils";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+export const dynamic = "force-dynamic";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const siteUrl = resolvePublicSiteUrl();
+  const apiUrl = resolveApiUrl();
   return buildSitemapEntries({
-    siteUrl: SITE_URL,
-    apiUrl: API_URL,
+    siteUrl,
+    apiUrl,
   });
 }
+
 
