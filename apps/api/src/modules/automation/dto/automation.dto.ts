@@ -68,6 +68,10 @@ export class QueryAutomationJobsDto {
 export class AutomationCallbackCompleteDto {
   @IsOptional()
   resultJson?: any;
+
+  @IsOptional()
+  @IsString()
+  providerMessageId?: string;
 }
 
 export class AutomationCallbackFailDto {

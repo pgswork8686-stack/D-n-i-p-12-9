@@ -27,7 +27,11 @@ export class InternalAutomationController {
     @Param("id") id: string,
     @Body() dto: AutomationCallbackCompleteDto,
   ): Promise<any> {
-    return this.automationService.completeJob(id, dto.resultJson);
+    return this.automationService.completeJob(
+      id,
+      dto.resultJson,
+      dto.providerMessageId,
+    );
   }
 
   @Post("jobs/:id/fail")

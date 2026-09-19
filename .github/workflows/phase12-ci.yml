@@ -44,7 +44,7 @@ jobs:
       TEST_PAYMENT_WEBHOOK_SECRET: ci-test-payment-secret
       LICENSE_KEY_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       SEED_DEV_USERS: 'true'
-      N8N_HMAC_SECRET: test-n8n-hmac-secret-for-phase12-testing-minimum-32-chars
+      AUTOMATION_SERVICE_SECRET: test-automation-secret-minimum-32-chars-long
       N8N_WEBHOOK_BASE_URL: http://localhost:5678
       INTERNAL_HMAC_MAX_SKEW_SECONDS: '300'
 

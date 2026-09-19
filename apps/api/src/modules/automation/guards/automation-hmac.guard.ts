@@ -4,26 +4,61 @@ import {
   ExecutionContext,
   UnauthorizedException,
   ConflictException,
+  ServiceUnavailableException,
+  OnModuleDestroy,
+  Optional,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import Redis from "ioredis";
 import { verifyAutomationSignature } from "@nexus/utils";
 
-// In-memory cache for replay protection: tracks request IDs with expiry timestamps
-const seenRequestIds = new Map<string, number>();
+@Injectable()
+export class AutomationHmacGuard implements CanActivate, OnModuleDestroy {
+  private redisClient?: Redis;
 
-// Periodic cleanup of expired request IDs (older than 10 minutes)
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 10 * 60 * 1000;
-  for (const [reqId, ts] of seenRequestIds.entries()) {
-    if (now - ts > maxAge) {
-      seenRequestIds.delete(reqId);
+  constructor(
+    @Optional() private readonly configService?: ConfigService,
+    @Optional() redisClient?: Redis,
+  ) {
+    if (redisClient) {
+      this.redisClient = redisClient;
+    } else {
+      const redisUrl =
+        this.configService?.get<string>("REDIS_URL") ||
+        process.env.REDIS_URL ||
+        "redis://localhost:6379";
+      this.redisClient = new Redis(redisUrl, {
+        maxRetriesPerRequest: 1,
+        connectTimeout: 2000,
+      });
     }
   }
-}, 60 * 1000).unref();
 
-@Injectable()
-export class AutomationHmacGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  private getRedis(): Redis {
+    if (!this.redisClient) {
+      const redisUrl =
+        this.configService?.get<string>("REDIS_URL") ||
+        process.env.REDIS_URL ||
+        "redis://localhost:6379";
+      this.redisClient = new Redis(redisUrl, {
+        maxRetriesPerRequest: 1,
+        connectTimeout: 2000,
+      });
+    }
+    return this.redisClient;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.redisClient) {
+      try {
+        await this.redisClient.quit();
+      } catch {
+        // ignore disconnect errors
+      }
+    }
+  }
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest();
     const serviceName =
       req.headers["x-nexus-service"] || req.headers["x-service-name"];
@@ -33,6 +68,10 @@ export class AutomationHmacGuard implements CanActivate {
 
     if (!serviceName) {
       throw new UnauthorizedException("Missing X-Nexus-Service header");
+    }
+
+    if (serviceName !== "n8n") {
+      throw new UnauthorizedException("Invalid service identity: expected n8n");
     }
 
     if (!timestamp) {
@@ -45,13 +84,6 @@ export class AutomationHmacGuard implements CanActivate {
 
     if (!signature) {
       throw new UnauthorizedException("Missing X-Nexus-Signature header");
-    }
-
-    // Replay attack prevention: duplicate request IDs within skew window are strictly rejected
-    if (seenRequestIds.has(requestId)) {
-      throw new ConflictException(
-        "Replay attack detected: duplicate request ID",
-      );
     }
 
     const secret = process.env.AUTOMATION_SERVICE_SECRET;
@@ -69,7 +101,8 @@ export class AutomationHmacGuard implements CanActivate {
         lower === "placeholder" ||
         lower === "changeme" ||
         lower === "secret" ||
-        lower.includes("placeholder")
+        lower.includes("placeholder") ||
+        secret.length < 32
       ) {
         throw new UnauthorizedException(
           "Insecure automation service secret configured in production",
@@ -81,6 +114,7 @@ export class AutomationHmacGuard implements CanActivate {
     const url = (req.originalUrl || req.url || "").split("?")[0];
 
     const result = verifyAutomationSignature({
+      service: serviceName,
       method: req.method,
       path: url,
       timestamp,
@@ -97,8 +131,26 @@ export class AutomationHmacGuard implements CanActivate {
       );
     }
 
-    // Record request ID to prevent replays
-    seenRequestIds.set(requestId, Date.now());
+    // Distributed replay protection via Redis:
+    // Atomic SET NX PX 600000 key: automation:hmac:replay:<service>:<requestId>
+    // Fail-closed 503 if Redis is down, 409 if duplicate requestId.
+    try {
+      const redis = this.getRedis();
+      const replayKey = `automation:hmac:replay:${serviceName}:${requestId}`;
+      const setResult = await redis.set(replayKey, "1", "PX", 600000, "NX");
+      if (!setResult) {
+        throw new ConflictException(
+          "Replay attack detected: duplicate request ID",
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof ConflictException) {
+        throw err;
+      }
+      throw new ServiceUnavailableException(
+        "Redis replay protection unavailable",
+      );
+    }
 
     // Attach verified service info to request
     req.automationService = {

@@ -1,5 +1,5 @@
 import { processOutboxEvents } from "./outbox-processor";
-import { prisma, OutboxEventStatus } from "@nexus/database";
+import { prisma, enqueueOrderPaidEmailJob } from "@nexus/database";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
 
 jest.mock("./entitlement-issuer", () => ({
@@ -14,6 +14,7 @@ jest.mock("@nexus/database", () => {
       PROCESSED: "PROCESSED",
       FAILED: "FAILED",
     },
+    enqueueOrderPaidEmailJob: jest.fn().mockResolvedValue(null),
     prisma: {
       $queryRaw: jest.fn(),
       outboxEvent: {
@@ -246,5 +247,35 @@ describe("OutboxProcessor", () => {
       }),
     });
     expect(issueEntitlementsForOrder).not.toHaveBeenCalled();
+  });
+
+  it("retries outbox event when enqueueOrderPaidEmailJob fails", async () => {
+    (enqueueOrderPaidEmailJob as jest.Mock).mockRejectedValueOnce(new Error("Redis connection dropped"));
+
+    const mockEvents = [
+      {
+        id: "evt-email-err",
+        eventType: "ORDER_PAID",
+        aggregateType: "Order",
+        aggregateId: "order-123",
+        status: "PROCESSING",
+        retryCount: 0,
+        payload: { orderId: "order-123" },
+      },
+    ];
+
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-email-err" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue(mockEvents);
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+    const result = await processOutboxEvents({ workerId: "worker-1" });
+
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith({
+      where: { id: "evt-email-err", status: "PROCESSING", lockOwner: "worker-1" },
+      data: expect.objectContaining({
+        status: "PENDING",
+        error: expect.stringContaining("Redis connection dropped"),
+      }),
+    });
   });
 });

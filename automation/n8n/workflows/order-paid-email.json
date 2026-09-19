@@ -16,6 +16,16 @@
     },
     {
       "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\n\nconst service = headers['x-nexus-service'] || headers['X-Nexus-Service'];\nif (service !== 'worker') {\n  throw new Error('Unauthorized: Expected X-Nexus-Service: worker');\n}\n\nconst timestamp = headers['x-nexus-timestamp'] || headers['X-Nexus-Timestamp'];\nif (!timestamp) {\n  throw new Error('Unauthorized: Missing X-Nexus-Timestamp');\n}\n\nconst now = Date.now();\nconst parsedTs = Number(timestamp);\nif (isNaN(parsedTs) || Math.abs(now - parsedTs) > 5 * 60 * 1000) {\n  throw new Error('Unauthorized: Timestamp skew exceeded 5 minutes');\n}\n\nconst requestId = headers['x-nexus-request-id'] || headers['X-Nexus-Request-Id'];\nif (!requestId) {\n  throw new Error('Unauthorized: Missing X-Nexus-Request-Id');\n}\n\nconst signature = headers['x-nexus-signature'] || headers['X-Nexus-Signature'];\nif (!signature) {\n  throw new Error('Unauthorized: Missing X-Nexus-Signature');\n}\n\nconst path = '/webhook/order-paid-email';\nconst rawBody = typeof body === 'string' ? body : JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = [service, 'POST', path, String(timestamp), requestId, bodyHash].join('\\n');\nconst expectedSig = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nif (signature !== expectedSig) {\n  throw new Error('Unauthorized: Invalid HMAC signature from worker');\n}\n\nreturn [$input.first()];"
+      },
+      "id": "verify-dispatch-node",
+      "name": "Verify Nexus Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "https://api.resend.com/emails",
         "authentication": "genericCredentialType",
@@ -38,17 +48,17 @@
       "name": "Send Order Receipt Email",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [450, 300]
+      "position": [600, 300]
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst jobId = $('Webhook Trigger').first().json.body.jobId;\nconst emailResult = $input.first().json;\n\nconst body = {\n  resultJson: {\n    sent: true,\n    emailProviderId: emailResult.id || 'simulated'\n  }\n};\n\nconst timestamp = Date.now().toString();\nconst requestId = 'cb-ord-' + jobId + '-' + timestamp;\nconst path = '/v1/internal/automation/jobs/' + jobId + '/complete';\nconst rawBody = JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = ['POST', path, timestamp, requestId, bodyHash].join('\\n');\nconst signature = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nreturn [{\n  json: {\n    jobId,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-Nexus-Service': 'n8n',\n      'X-Nexus-Timestamp': timestamp,\n      'X-Nexus-Request-Id': requestId,\n      'X-Nexus-Signature': signature\n    }\n  }\n}];"
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst jobId = $('Webhook Trigger').first().json.body.jobId;\nconst emailResult = $input.first().json;\nconst providerMessageId = emailResult.id || 'simulated';\n\nconst body = {\n  providerMessageId,\n  resultJson: {\n    sent: true,\n    providerMessageId\n  }\n};\n\nconst service = 'n8n';\nconst timestamp = Date.now().toString();\nconst requestId = 'cb-ord-' + jobId + '-' + timestamp;\nconst path = '/v1/internal/automation/jobs/' + jobId + '/complete';\nconst rawBody = JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = [service, 'POST', path, timestamp, requestId, bodyHash].join('\\n');\nconst signature = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nreturn [{\n  json: {\n    jobId,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-Nexus-Service': service,\n      'X-Nexus-Timestamp': timestamp,\n      'X-Nexus-Request-Id': requestId,\n      'X-Nexus-Signature': signature,\n      'X-Nexus-Signature-Version': 'v1'\n    }\n  }\n}];"
       },
       "id": "sign-callback-node",
       "name": "Sign Callback Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [700, 300]
+      "position": [800, 300]
     },
     {
       "parameters": {
@@ -76,6 +86,10 @@
             {
               "name": "X-Nexus-Signature",
               "value": "={{ $json.headers['X-Nexus-Signature'] }}"
+            },
+            {
+              "name": "X-Nexus-Signature-Version",
+              "value": "={{ $json.headers['X-Nexus-Signature-Version'] }}"
             }
           ]
         },
@@ -88,11 +102,22 @@
       "name": "Nexus Callback (Complete Job)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [950, 300]
+      "position": [1000, 300]
     }
   ],
   "connections": {
     "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Verify Nexus Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Nexus Dispatch": {
       "main": [
         [
           {

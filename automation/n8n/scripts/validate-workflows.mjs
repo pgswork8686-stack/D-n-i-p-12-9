@@ -107,6 +107,33 @@ for (const file of files) {
   } else {
     console.log('  ✓ Zero hardcoded localhost/loopback endpoints');
   }
+
+  // 6. Inbound Dispatch Verification Check
+  const triggerNode = workflow.nodes.find(n => n.type === 'n8n-nodes-base.webhook');
+  if (triggerNode) {
+    const triggerConnections = workflow.connections?.[triggerNode.name]?.main?.[0] || [];
+    const firstTarget = triggerConnections[0]?.node;
+    if (firstTarget !== 'Verify Nexus Dispatch') {
+      console.error(`  ❌ Webhook trigger "${triggerNode.name}" does not connect directly to "Verify Nexus Dispatch" (connected to: "${firstTarget}")`);
+      hasErrors = true;
+    } else {
+      console.log('  ✓ Webhook trigger connects directly to "Verify Nexus Dispatch"');
+    }
+
+    const verifyNode = workflow.nodes.find(n => n.name === 'Verify Nexus Dispatch');
+    if (!verifyNode || !verifyNode.parameters?.jsCode) {
+      console.error('  ❌ Missing or invalid "Verify Nexus Dispatch" code node');
+      hasErrors = true;
+    } else {
+      const code = verifyNode.parameters.jsCode;
+      if (!code.includes('worker') || !code.includes('AUTOMATION_SERVICE_SECRET') || !code.includes('crypto.createHmac')) {
+        console.error('  ❌ "Verify Nexus Dispatch" node must verify worker service identity and HMAC signature');
+        hasErrors = true;
+      } else {
+        console.log('  ✓ "Verify Nexus Dispatch" node validates worker service identity and HMAC signature');
+      }
+    }
+  }
 }
 
 console.log('\n==========================================');

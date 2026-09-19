@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 
 export interface SignPayloadOptions {
+  service: string;
   method: string;
   path: string;
   timestamp: string | number;
@@ -36,6 +37,7 @@ export function computeSha256(data?: string | Buffer | object): string {
 }
 
 export function buildCanonicalString(
+  service: string,
   method: string,
   path: string,
   timestamp: string | number,
@@ -43,6 +45,7 @@ export function buildCanonicalString(
   bodyHash: string,
 ): string {
   return [
+    service,
     method.toUpperCase(),
     path,
     String(timestamp),
@@ -52,12 +55,16 @@ export function buildCanonicalString(
 }
 
 export function signAutomationPayload(options: SignPayloadOptions): string {
-  const { method, path, timestamp, requestId, body, secret } = options;
+  const { service, method, path, timestamp, requestId, body, secret } = options;
+  if (!service) {
+    throw new Error("Cannot sign payload: service is required");
+  }
   if (!secret) {
     throw new Error("Cannot sign payload: secret is required");
   }
   const bodyHash = computeSha256(body);
   const canonical = buildCanonicalString(
+    service,
     method,
     path,
     timestamp,
@@ -71,6 +78,7 @@ export function verifyAutomationSignature(
   options: VerifySignatureOptions,
 ): VerifySignatureResult {
   const {
+    service,
     method,
     path,
     timestamp,
@@ -81,6 +89,10 @@ export function verifyAutomationSignature(
     maxSkewMs = 5 * 60 * 1000, // 5 minutes
     now = Date.now(),
   } = options;
+
+  if (!service || service.trim() === "") {
+    return { valid: false, reason: "Missing service name" };
+  }
 
   if (!secret || secret.trim() === "") {
     return { valid: false, reason: "Missing service secret" };
@@ -110,6 +122,7 @@ export function verifyAutomationSignature(
   let expectedSignature: string;
   try {
     expectedSignature = signAutomationPayload({
+      service,
       method,
       path,
       timestamp,

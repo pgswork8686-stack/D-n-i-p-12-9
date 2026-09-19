@@ -28,6 +28,21 @@ describe("AutomationService", () => {
 
     service = module.get<AutomationService>(AutomationService);
     auditService = module.get(AuditService);
+
+    // Default $transaction mock passes prisma through
+    jest
+      .spyOn(prisma, "$transaction")
+      .mockImplementation(async (callback: any) => {
+        if (typeof callback === "function") {
+          return callback(prisma);
+        }
+        return callback;
+      });
+
+    // Default $executeRaw / $queryRaw mocks
+    jest.spyOn(prisma, "$queryRaw").mockResolvedValue([]);
+    jest.spyOn(prisma, "$executeRaw").mockResolvedValue(1);
+
     jest.clearAllMocks();
   });
 
@@ -62,6 +77,7 @@ describe("AutomationService", () => {
     it("transitions RUNNING job to SUCCEEDED on completeJob", async () => {
       const runningJob = {
         id: "job-2",
+        type: AutomationJobType.ORDER_PAID_EMAIL,
         status: AutomationJobStatus.RUNNING,
       };
 
@@ -74,9 +90,12 @@ describe("AutomationService", () => {
           ...runningJob,
           status: AutomationJobStatus.SUCCEEDED,
         } as any);
+      jest
+        .spyOn(prisma.automationDelivery, "updateMany")
+        .mockResolvedValue({ count: 1 } as any);
 
       const result = await service.completeJob("job-2", { done: true });
-      expect(result.status).toBe(AutomationJobStatus.SUCCEEDED);
+      expect(result!.status).toBe(AutomationJobStatus.SUCCEEDED);
       expect(updateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: "job-2" },
@@ -87,15 +106,32 @@ describe("AutomationService", () => {
       );
     });
 
-    it("rejects completeJob from terminal CANCELLED state", async () => {
-      const cancelledJob = {
-        id: "job-3",
-        status: AutomationJobStatus.CANCELLED,
+    it("rejects generic completeJob for CMS_AI_DRAFT type", async () => {
+      const aiJob = {
+        id: "job-ai-complete",
+        type: AutomationJobType.CMS_AI_DRAFT,
+        status: AutomationJobStatus.RUNNING,
       };
 
       jest
         .spyOn(prisma.automationJob, "findUnique")
-        .mockResolvedValue(cancelledJob as any);
+        .mockResolvedValue(aiJob as any);
+
+      await expect(service.completeJob("job-ai-complete")).rejects.toThrow(
+        /CMS_AI_DRAFT jobs cannot be completed via generic endpoint/,
+      );
+    });
+
+    it("rejects completeJob from non-RUNNING state (CAS)", async () => {
+      const pendingJob = {
+        id: "job-3",
+        type: AutomationJobType.ORDER_PAID_EMAIL,
+        status: AutomationJobStatus.PENDING,
+      };
+
+      jest
+        .spyOn(prisma.automationJob, "findUnique")
+        .mockResolvedValue(pendingJob as any);
 
       await expect(service.completeJob("job-3")).rejects.toThrow(
         BadRequestException,
@@ -105,6 +141,7 @@ describe("AutomationService", () => {
     it("schedules retry when error is retryable and attempts < maxAttempts", async () => {
       const job = {
         id: "job-4",
+        type: AutomationJobType.ORDER_PAID_EMAIL,
         status: AutomationJobStatus.RUNNING,
         attemptCount: 1,
         maxAttempts: 3,
@@ -138,9 +175,10 @@ describe("AutomationService", () => {
       );
     });
 
-    it("transitions to FAILED when maxAttempts reached", async () => {
+    it("transitions to FAILED when maxAttempts reached and updates delivery", async () => {
       const job = {
         id: "job-5",
+        type: AutomationJobType.ORDER_PAID_EMAIL,
         status: AutomationJobStatus.RUNNING,
         attemptCount: 3,
         maxAttempts: 3,
@@ -155,6 +193,9 @@ describe("AutomationService", () => {
           ...job,
           status: AutomationJobStatus.FAILED,
         } as any);
+      const deliverySpy = jest
+        .spyOn(prisma.automationDelivery, "updateMany")
+        .mockResolvedValue({ count: 1 } as any);
 
       const res = await service.failJob("job-5", {
         errorCode: "TIMEOUT",
@@ -163,6 +204,12 @@ describe("AutomationService", () => {
       });
 
       expect(res.status).toBe(AutomationJobStatus.FAILED);
+      expect(deliverySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { jobId: "job-5" },
+          data: { status: "FAILED" },
+        }),
+      );
       expect(updateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: "job-5" },
@@ -195,7 +242,8 @@ describe("AutomationService", () => {
       const res = await service.retryJob("job-6", "admin-1");
       expect(res.status).toBe(AutomationJobStatus.PENDING);
       expect(res.attemptCount).toBe(0);
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "AUTOMATION_JOB_RETRIED",
           entityId: "job-6",
@@ -206,6 +254,7 @@ describe("AutomationService", () => {
     it("rejects manual retry for non-FAILED job", async () => {
       const runningJob = {
         id: "job-7",
+        type: AutomationJobType.CMS_AI_DRAFT,
         status: AutomationJobStatus.RUNNING,
       };
 
@@ -237,7 +286,8 @@ describe("AutomationService", () => {
 
       const res = await service.cancelJob("job-8", "admin-1");
       expect(res.status).toBe(AutomationJobStatus.CANCELLED);
-      expect(auditService.logAction).toHaveBeenCalledWith(
+      expect(auditService.logActionWithClient).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           action: "AUTOMATION_JOB_CANCELLED",
         }),
@@ -268,25 +318,14 @@ describe("AutomationService", () => {
 
       jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(job as any);
       jest.spyOn(prisma.contentPost, "findUnique").mockResolvedValue(null);
-
-      const fakeTx = {
-        contentPost: {
-          create: jest.fn().mockImplementation(({ data }) => ({
-            id: "post-ai-1",
-            ...data,
-          })),
-        },
-        automationJob: {
-          update: jest.fn().mockImplementation(({ data }) => ({
-            ...job,
-            ...data,
-          })),
-        },
-      };
-
-      jest
-        .spyOn(prisma, "$transaction")
-        .mockImplementation(async (callback: any) => callback(fakeTx));
+      jest.spyOn(prisma.contentPost, "create").mockImplementation(({ data }: any) => ({
+        id: "post-ai-1",
+        ...data,
+      }));
+      jest.spyOn(prisma.automationJob, "update").mockImplementation(({ data }: any) => ({
+        ...job,
+        ...data,
+      }));
 
       const aiOutput = {
         title: "Building Modern Web Apps",
@@ -304,18 +343,32 @@ describe("AutomationService", () => {
       expect(res.post.content).not.toContain("<script>");
       expect(res.post.content).not.toContain("<iframe>");
       expect(res.post.content).toContain("<p>Safe content</p>");
-      expect(res.job.status).toBe(AutomationJobStatus.SUCCEEDED);
+      expect(res.job!.status).toBe(AutomationJobStatus.SUCCEEDED);
+    });
+
+    it("rejects applyAiDraftResult when job is not in RUNNING status", async () => {
+      const pendingAiJob = {
+        id: "job-ai-pending",
+        type: AutomationJobType.CMS_AI_DRAFT,
+        status: AutomationJobStatus.PENDING,
+        createdBy: "admin-1",
+      };
+
+      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(pendingAiJob as any);
+
+      await expect(
+        service.applyAiDraftResult("job-ai-pending", {
+          title: "Title",
+          excerpt: "Excerpt",
+          content: "<p>Content</p>",
+          seoTitle: "SEO",
+          seoDescription: "Desc",
+          suggestedSlug: "slug",
+        }),
+      ).rejects.toThrow(/job must be in RUNNING status/);
     });
 
     it("rejects oversized content (> 100KB)", async () => {
-      const job = {
-        id: "job-ai-2",
-        type: AutomationJobType.CMS_AI_DRAFT,
-        status: AutomationJobStatus.RUNNING,
-      };
-
-      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(job as any);
-
       const hugeContent = "A".repeat(105000); // 105KB
 
       await expect(
@@ -342,31 +395,25 @@ describe("AutomationService", () => {
 
       jest.spyOn(prisma.order, "findUnique").mockResolvedValue(order as any);
       jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(null);
-
-      const fakeTx = {
-        automationJob: {
-          create: jest.fn().mockImplementation(({ data }) => ({
-            id: "job-email-1",
-            ...data,
-          })),
-        },
-        automationDelivery: {
-          create: jest.fn().mockImplementation(({ data }) => ({
-            id: "delivery-1",
-            ...data,
-          })),
-        },
-      };
-
-      jest
-        .spyOn(prisma, "$transaction")
-        .mockImplementation(async (callback: any) => callback(fakeTx));
+      jest.spyOn(prisma.automationJob, "create").mockImplementation(({ data }: any) => ({
+        id: "job-email-1",
+        ...data,
+      }));
+      jest.spyOn(prisma.automationDelivery, "create").mockImplementation(({ data }: any) => ({
+        id: "delivery-1",
+        ...data,
+      }));
+      jest.spyOn(prisma.automationJob, "update").mockImplementation(({ data }: any) => ({
+        id: "job-email-1",
+        type: AutomationJobType.ORDER_PAID_EMAIL,
+        ...data,
+      }));
 
       const job = await service.processOrderPaidNotification("order-123");
 
       expect(job.type).toBe(AutomationJobType.ORDER_PAID_EMAIL);
       expect((job.payloadJson as any)?.recipientEmail).toBe("customer@example.com");
-      expect(fakeTx.automationDelivery.create).toHaveBeenCalledWith(
+      expect(prisma.automationDelivery.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             recipientEmail: "customer@example.com",
@@ -387,25 +434,19 @@ describe("AutomationService", () => {
 
       jest.spyOn(prisma.internalLicense, "findUnique").mockResolvedValue(license as any);
       jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(null);
-
-      const fakeTx = {
-        automationJob: {
-          create: jest.fn().mockImplementation(({ data }) => ({
-            id: "job-lic-email-1",
-            ...data,
-          })),
-        },
-        automationDelivery: {
-          create: jest.fn().mockImplementation(({ data }) => ({
-            id: "delivery-lic-1",
-            ...data,
-          })),
-        },
-      };
-
-      jest
-        .spyOn(prisma, "$transaction")
-        .mockImplementation(async (callback: any) => callback(fakeTx));
+      jest.spyOn(prisma.automationJob, "create").mockImplementation(({ data }: any) => ({
+        id: "job-lic-email-1",
+        ...data,
+      }));
+      jest.spyOn(prisma.automationDelivery, "create").mockImplementation(({ data }: any) => ({
+        id: "delivery-lic-1",
+        ...data,
+      }));
+      jest.spyOn(prisma.automationJob, "update").mockImplementation(({ data }: any) => ({
+        id: "job-lic-email-1",
+        type: AutomationJobType.LICENSE_PROVISIONED_EMAIL,
+        ...data,
+      }));
 
       const job = await service.processLicenseProvisionedNotification("lic-456");
 

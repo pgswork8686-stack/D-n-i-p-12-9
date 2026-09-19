@@ -98,13 +98,15 @@ async function runAcceptance() {
   const products = productsData.items || [];
   if (products.length === 0) throw new Error("No products found in catalog");
 
-  const productSummary = products[0];
-  const detailRes = await fetch(
-    `${API_BASE}/products/${productSummary.slug}?currency=USD`,
-  );
-  if (!detailRes.ok)
-    throw new Error(`Fetch product detail failed: ${detailRes.status}`);
-  const targetProduct: any = await detailRes.json();
+  let targetProduct: any;
+  const nexusDetailRes = await fetch(`${API_BASE}/products/nexus-plugin-pro?currency=USD`);
+  if (nexusDetailRes.ok) {
+    targetProduct = await nexusDetailRes.json();
+  } else {
+    const detailRes = await fetch(`${API_BASE}/products/${products[0].slug}?currency=USD`);
+    if (!detailRes.ok) throw new Error(`Fetch product detail failed: ${detailRes.status}`);
+    targetProduct = await detailRes.json();
+  }
   if (!targetProduct.variants || targetProduct.variants.length === 0) {
     throw new Error("Target product has no variants");
   }

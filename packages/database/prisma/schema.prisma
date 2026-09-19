@@ -995,19 +995,27 @@ model AutomationJob {
   @@map("automation_jobs")
 }
 
-model AutomationDelivery {
-  id             String         @id @default(uuid())
-  jobId          String?        @map("job_id")
-  recipientEmail String         @map("recipient_email")
-  template       String
-  idempotencyKey String         @unique @map("idempotency_key")
-  status         String         @default("PENDING")
-  payloadJson    Json?          @map("payload_json")
-  sentAt         DateTime?      @map("sent_at")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
+enum AutomationDeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
 
-  job            AutomationJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+model AutomationDelivery {
+  id                String                   @id @default(uuid())
+  jobId             String?                  @map("job_id")
+  recipientEmail    String                   @map("recipient_email")
+  template          String
+  idempotencyKey    String                   @unique @map("idempotency_key")
+  status            AutomationDeliveryStatus @default(PENDING)
+  payloadJson       Json?                    @map("payload_json")
+  providerMessageId String?                  @map("provider_message_id")
+  sentAt            DateTime?                @map("sent_at")
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  job               AutomationJob?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   @@index([jobId])
   @@index([status])

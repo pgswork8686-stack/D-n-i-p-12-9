@@ -1,4 +1,9 @@
-import { AutomationJobStatus, AutomationJobType, Prisma } from "@prisma/client";
+import {
+  AutomationJobStatus,
+  AutomationJobType,
+  AutomationDeliveryStatus,
+  Prisma,
+} from "@prisma/client";
 import { prisma } from "../client";
 
 export const AUTOMATION_JOB_TRANSITION_MATRIX: Record<
@@ -145,46 +150,81 @@ export async function enqueueOrderPaidEmailJob(
     return null;
   }
 
+  const recipientEmail = order.user.email;
   const idempotencyKey = `order-paid-email:${orderId}`;
-  const existing = await client.automationJob.findUnique({
-    where: { idempotencyKey },
-  });
-  if (existing) {
-    return existing;
+  const deliveryIdempotencyKey = `order-paid-delivery:${orderId}`;
+  const providerIdempotencyKey = `email:order-paid:${orderId}`;
+
+  try {
+    const execute = async (tx: Prisma.TransactionClient) => {
+      const existing = await tx.automationJob.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) {
+        return existing;
+      }
+
+      const job = await tx.automationJob.create({
+        data: {
+          type: AutomationJobType.ORDER_PAID_EMAIL,
+          status: AutomationJobStatus.PENDING,
+          idempotencyKey,
+          sourceType: "Order",
+          sourceId: orderId,
+          payloadJson: {
+            orderId,
+            recipientEmail,
+            currency: order.currency,
+            totalAmount: order.totalAmount,
+            providerIdempotencyKey,
+          },
+        },
+      });
+
+      const delivery = await tx.automationDelivery.create({
+        data: {
+          jobId: job.id,
+          recipientEmail,
+          template: "order_receipt",
+          idempotencyKey: deliveryIdempotencyKey,
+          status: AutomationDeliveryStatus.PENDING,
+          payloadJson: {
+            orderId,
+            currency: order.currency,
+            totalAmount: order.totalAmount,
+            providerIdempotencyKey,
+          },
+        },
+      });
+
+      return await tx.automationJob.update({
+        where: { id: job.id },
+        data: {
+          payloadJson: {
+            orderId,
+            recipientEmail,
+            currency: order.currency,
+            totalAmount: order.totalAmount,
+            deliveryId: delivery.id,
+            providerIdempotencyKey,
+          },
+        },
+      });
+    };
+
+    if ("$transaction" in client && typeof (client as any).$transaction === "function") {
+      return await (client as any).$transaction(execute);
+    }
+    return await execute(client as Prisma.TransactionClient);
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      const existing = await client.automationJob.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) return existing;
+    }
+    throw err;
   }
-
-  const job = await client.automationJob.create({
-    data: {
-      type: AutomationJobType.ORDER_PAID_EMAIL,
-      status: AutomationJobStatus.PENDING,
-      idempotencyKey,
-      sourceType: "Order",
-      sourceId: orderId,
-      payloadJson: {
-        orderId,
-        recipientEmail: order.user.email,
-        currency: order.currency,
-        totalAmount: order.totalAmount,
-      },
-    },
-  });
-
-  await client.automationDelivery.create({
-    data: {
-      jobId: job.id,
-      recipientEmail: order.user.email,
-      template: "order_receipt",
-      idempotencyKey: `order-paid-delivery:${orderId}`,
-      status: "PENDING",
-      payloadJson: {
-        orderId,
-        currency: order.currency,
-        totalAmount: order.totalAmount,
-      },
-    },
-  });
-
-  return job;
 }
 
 /**
@@ -208,46 +248,80 @@ export async function enqueueLicenseProvisionedEmailJob(
     return null;
   }
 
+  const recipientEmail = license.entitlement.user.email;
   const idempotencyKey = `license-provisioned-email:${licenseId}`;
-  const existing = await client.automationJob.findUnique({
-    where: { idempotencyKey },
-  });
-  if (existing) {
-    return existing;
-  }
-
+  const deliveryIdempotencyKey = `license-provisioned-delivery:${licenseId}`;
+  const providerIdempotencyKey = `email:license-provisioned:${licenseId}`;
   const maskedKey = `NXS-****-****-${license.keyLast4 || "9999"}`;
 
-  const job = await client.automationJob.create({
-    data: {
-      type: AutomationJobType.LICENSE_PROVISIONED_EMAIL,
-      status: AutomationJobStatus.PENDING,
-      idempotencyKey,
-      sourceType: "License",
-      sourceId: licenseId,
-      payloadJson: {
-        licenseId,
-        recipientEmail: license.entitlement.user.email,
-        maskedKey,
-        portalUrl: "/licenses",
-      },
-    },
-  });
+  try {
+    const execute = async (tx: Prisma.TransactionClient) => {
+      const existing = await tx.automationJob.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) {
+        return existing;
+      }
 
-  await client.automationDelivery.create({
-    data: {
-      jobId: job.id,
-      recipientEmail: license.entitlement.user.email,
-      template: "license_ready",
-      idempotencyKey: `license-provisioned-delivery:${licenseId}`,
-      status: "PENDING",
-      payloadJson: {
-        licenseId,
-        maskedKey,
-        portalUrl: "/licenses",
-      },
-    },
-  });
+      const job = await tx.automationJob.create({
+        data: {
+          type: AutomationJobType.LICENSE_PROVISIONED_EMAIL,
+          status: AutomationJobStatus.PENDING,
+          idempotencyKey,
+          sourceType: "License",
+          sourceId: licenseId,
+          payloadJson: {
+            licenseId,
+            recipientEmail,
+            maskedKey,
+            portalUrl: "/licenses",
+            providerIdempotencyKey,
+          },
+        },
+      });
 
-  return job;
+      const delivery = await tx.automationDelivery.create({
+        data: {
+          jobId: job.id,
+          recipientEmail,
+          template: "license_ready",
+          idempotencyKey: deliveryIdempotencyKey,
+          status: AutomationDeliveryStatus.PENDING,
+          payloadJson: {
+            licenseId,
+            maskedKey,
+            portalUrl: "/licenses",
+            providerIdempotencyKey,
+          },
+        },
+      });
+
+      return await tx.automationJob.update({
+        where: { id: job.id },
+        data: {
+          payloadJson: {
+            licenseId,
+            recipientEmail,
+            maskedKey,
+            portalUrl: "/licenses",
+            deliveryId: delivery.id,
+            providerIdempotencyKey,
+          },
+        },
+      });
+    };
+
+    if ("$transaction" in client && typeof (client as any).$transaction === "function") {
+      return await (client as any).$transaction(execute);
+    }
+    return await execute(client as Prisma.TransactionClient);
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      const existing = await client.automationJob.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) return existing;
+    }
+    throw err;
+  }
 }

@@ -11,6 +11,12 @@ export type AutomationJobType =
   | "LICENSE_PROVISIONED_EMAIL"
   | "EXTERNAL_ALLOCATION_EMAIL";
 
+export type AutomationDeliveryStatus =
+  | "PENDING"
+  | "SENDING"
+  | "SENT"
+  | "FAILED";
+
 export interface AutomationJobDto {
   id: string;
   type: AutomationJobType;
@@ -53,7 +59,22 @@ export interface AiDraftOutputContract {
 
 export interface AutomationCallbackCompleteDto {
   jobId: string;
-  resultJson: any;
+  resultJson?: any;
+  providerMessageId?: string;
+}
+
+export interface AutomationDeliveryDto {
+  id: string;
+  jobId?: string | null;
+  recipientEmail: string;
+  template: string;
+  idempotencyKey: string;
+  status: AutomationDeliveryStatus;
+  payloadJson?: any;
+  providerMessageId?: string | null;
+  sentAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AutomationCallbackFailDto {
