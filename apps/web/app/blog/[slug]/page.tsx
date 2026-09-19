@@ -12,30 +12,14 @@ import {
 
 export const dynamic = "force-dynamic";
 
+import { fetchArticleBySlug } from "../../lib/storefront-fetch";
+
 interface ArticlePageProps {
   params: Promise<{ slug: string }>;
 }
 
 async function getArticle(slug: string) {
-  const apiUrl = resolveApiUrl();
-  let res: Response;
-  try {
-    res = await fetch(`${apiUrl}/v1/content/posts/${encodeURIComponent(slug)}`, {
-      cache: "no-store",
-    });
-  } catch {
-    throw new Error("Unable to connect to content service.");
-  }
-
-  if (res.status === 404) {
-    return null;
-  }
-
-  if (!res.ok) {
-    throw new Error(`Content service returned error: ${res.status}`);
-  }
-
-  return await res.json();
+  return fetchArticleBySlug(slug);
 }
 
 export async function generateMetadata({

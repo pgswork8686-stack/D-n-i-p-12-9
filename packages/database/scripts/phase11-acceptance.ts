@@ -1200,8 +1200,37 @@ async function runPhase11Acceptance() {
   }
   console.log("✓ Gate 64 passed: Article JSON-LD strictly omits author when unmodeled and preserves truthful author when present");
 
+  console.log("\n[Gate 65] Static Admin URL Guard — Zero independent localhost API fallbacks in apps/admin runtime...");
+  const adminAppDir = path.resolve(__dirname, "../../../apps/admin/app");
+  function scanAdminFiles(dir: string): string[] {
+    const files: string[] = [];
+    if (!fs.existsSync(dir)) return files;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "__tests__" && entry.name !== "node_modules") {
+          files.push(...scanAdminFiles(full));
+        }
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        files.push(full);
+      }
+    }
+    return files;
+  }
+  const adminFiles = scanAdminFiles(adminAppDir);
+  for (const file of adminFiles) {
+    const content = fs.readFileSync(file, "utf8");
+    if (
+      content.includes('NEXT_PUBLIC_API_URL || "http://localhost:4000"') ||
+      content.includes("NEXT_PUBLIC_API_URL || 'http://localhost:4000'")
+    ) {
+      throw new Error(`Gate 65 failed: Independent localhost fallback detected in ${file}`);
+    }
+  }
+  console.log(`✓ Gate 65 passed: Static Admin URL Guard verified 0 independent API fallbacks across ${adminFiles.length} runtime files`);
+
   console.log("\n==================================================");
-  console.log("ALL 64 GATES PASSED SUCCESSFULLY!");
+  console.log("ALL 65 GATES PASSED SUCCESSFULLY!");
   console.log("==================================================");
 }
 

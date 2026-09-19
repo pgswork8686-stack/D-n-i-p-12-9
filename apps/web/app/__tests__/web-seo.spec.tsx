@@ -6,6 +6,7 @@ import {
   resolvePublicSiteUrl,
   resolveApiUrl,
 } from "@nexus/utils";
+import { fetchProductBySlug, fetchArticleBySlug } from "../lib/storefront-fetch";
 
 describe("Web Storefront SEO & Fetch Semantics", () => {
   const PROD_SITE = "https://nexustheme.dev";
@@ -172,17 +173,29 @@ describe("Web Storefront SEO & Fetch Semantics", () => {
 
       const mockFetchNetworkErr = jest.fn().mockRejectedValue(new Error("ECONNREFUSED"));
 
-      // 404 semantic test
-      const res404 = await mockFetch404("https://api.domain.com/products/missing");
-      expect(res404.status).toBe(404);
+      // Direct invocation of production fetchProductBySlug helper
+      const product404 = await fetchProductBySlug("non-existent-product", mockFetch404 as any);
+      expect(product404).toBeNull();
 
-      // 500 semantic test
-      const res500 = await mockFetch500("https://api.domain.com/products/error");
-      expect(res500.status).toBe(500);
-      expect(res500.ok).toBe(false);
+      await expect(
+        fetchProductBySlug("failing-product", mockFetch500 as any),
+      ).rejects.toThrow(/Product catalog service returned error: 500/);
 
-      // Network semantic test
-      await expect(mockFetchNetworkErr("https://api.domain.com/products/net")).rejects.toThrow("ECONNREFUSED");
+      await expect(
+        fetchProductBySlug("network-error-product", mockFetchNetworkErr as any),
+      ).rejects.toThrow(/Unable to connect to product catalog service/);
+
+      // Direct invocation of production fetchArticleBySlug helper
+      const article404 = await fetchArticleBySlug("non-existent-article", mockFetch404 as any);
+      expect(article404).toBeNull();
+
+      await expect(
+        fetchArticleBySlug("failing-article", mockFetch500 as any),
+      ).rejects.toThrow(/Content service returned error: 500/);
+
+      await expect(
+        fetchArticleBySlug("network-error-article", mockFetchNetworkErr as any),
+      ).rejects.toThrow(/Unable to connect to content service/);
     });
   });
 

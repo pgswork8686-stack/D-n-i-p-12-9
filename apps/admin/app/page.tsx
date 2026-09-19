@@ -4,8 +4,8 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
 import { useAuth, isDevAuthToolsEnabled } from "./context/auth-context";
+import { getApiUrl } from "./lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
 const PORTAL_URL =
   process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
@@ -24,7 +24,18 @@ export default function AdminHomePage() {
   });
 
   useEffect(() => {
-    fetch(`${API_URL}/health`)
+    let apiUrl: string;
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setIsHealthy(false);
+      setApiHealth(
+        "Admin API configuration unavailable: Production requires a valid HTTPS API URL.",
+      );
+      return;
+    }
+
+    fetch(`${apiUrl}/health`)
       .then((res) => res.json())
       .then((data) => {
         setIsHealthy(data.status === "ok");
@@ -45,7 +56,18 @@ export default function AdminHomePage() {
       return;
     }
 
-    fetch(`${API_URL}/admin/roles`, {
+    let apiUrl: string;
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setAdminAccess({
+        allowed: false,
+        statusText: "Admin API configuration unavailable",
+      });
+      return;
+    }
+
+    fetch(`${apiUrl}/admin/roles`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -215,7 +237,13 @@ export default function AdminHomePage() {
 
         <Card
           title="Backend API Health"
-          subtitle={`Live probe to ${API_URL}/health`}
+          subtitle={(() => {
+            try {
+              return `Live probe to ${getApiUrl()}/health`;
+            } catch {
+              return "Live probe to /health (configuration unavailable)";
+            }
+          })()}
         >
           <pre className="bg-gray-900 text-emerald-400 p-4 rounded-xl text-xs overflow-x-auto h-52">
             {apiHealth}

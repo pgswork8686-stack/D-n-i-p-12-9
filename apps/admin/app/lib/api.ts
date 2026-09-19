@@ -7,16 +7,8 @@ export function getApiUrl(): string {
 
 export function getApiClient(token?: string | null): NexusApiClient {
   return new NexusApiClient({
-    baseUrl: resolveApiUrl(),
+    baseUrl: getApiUrl(),
     token: token || undefined,
   });
 }
-
-export const API_URL = (() => {
-  try {
-    return resolveApiUrl();
-  } catch {
-    return "";
-  }
-})();
 

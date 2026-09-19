@@ -1,3 +1,7 @@
+import * as fs from "fs";
+import * as path from "path";
+import { resolveApiUrl } from "@nexus/utils";
+import { getApiUrl } from "../lib/api";
 import {
   handleAuthSessionHydration,
   performPasswordLogin,
@@ -211,5 +215,61 @@ describe("Admin Authentication Lifecycle & Security", () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe("Supabase client is not configured for authentication.");
     expect(mockHydrate).not.toHaveBeenCalled();
+  });
+
+  it("9. AuthProvider hydration lifecycle: restores session on mount and registers auth listener once", async () => {
+    let listenerRegistered = 0;
+    const mockSession = { access_token: "sb-admin-access-token" };
+    const client = {
+      auth: {
+        getSession: jest.fn().mockResolvedValue({ data: { session: mockSession }, error: null }),
+        onAuthStateChange: jest.fn().mockImplementation(() => {
+          listenerRegistered++;
+          return { data: { subscription: { unsubscribe: jest.fn() } } };
+        }),
+      },
+    };
+
+    const session = await client.auth.getSession();
+    expect(session.data.session?.access_token).toBe("sb-admin-access-token");
+
+    const onToken = jest.fn();
+    const onSignOut = jest.fn();
+    createSupabaseAuthListener(client as any, onToken, onSignOut);
+    expect(client.auth.onAuthStateChange).toHaveBeenCalledTimes(1);
+    expect(listenerRegistered).toBe(1);
+  });
+
+  it("10. Production API origin resolver & static admin source guard", () => {
+    // 1. Production API URL resolution
+    expect(resolveApiUrl("https://api.nexustheme.dev", { isProduction: true })).toBe("https://api.nexustheme.dev");
+    expect(() => resolveApiUrl("http://localhost:4000", { isProduction: true })).toThrow(/must use HTTPS/);
+    expect(() => resolveApiUrl("http://api.domain.com", { isProduction: true })).toThrow(/must use HTTPS/);
+    expect(() => resolveApiUrl("", { isProduction: true })).toThrow(/Production requires a configured API URL/);
+
+    // 2. Static source guard: apps/admin production source has ZERO independent localhost fallbacks
+    const adminAppDir = path.resolve(__dirname, "..");
+    function scanFiles(dir: string): string[] {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      let files: string[] = [];
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "__tests__" && entry.name !== "node_modules") {
+            files = files.concat(scanFiles(full));
+          }
+        } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+          files.push(full);
+        }
+      }
+      return files;
+    }
+    const adminFiles = scanFiles(adminAppDir);
+    expect(adminFiles.length).toBeGreaterThan(5);
+    for (const file of adminFiles) {
+      const content = fs.readFileSync(file, "utf8");
+      expect(content).not.toContain('NEXT_PUBLIC_API_URL || "http://localhost:4000"');
+      expect(content).not.toContain("NEXT_PUBLIC_API_URL || 'http://localhost:4000'");
+    }
   });
 });

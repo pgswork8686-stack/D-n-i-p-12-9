@@ -341,8 +341,8 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Session retrieval and reconciliation are mode-checked the same way**: `getPaymentSession()` returns `null` (never fabricating a URL) and `queryPaymentStatus()` returns `null` (never a false status) whenever the retrieved Stripe object's `livemode` does not match `expectedLivemode`. Because `reconcilePayment()` treats a `null` provider status as "no provider status available", a test-mode Session — even one reporting `payment_status: "paid"` — can never transition a production Payment; the outcome is `transitioned: false`, fail-safe.
 - **Mock mode remains the only non-production shortcut**: all of the above checks are skipped when `config.isMock` is true, which is itself impossible in production (`STRIPE_MOCK_CLIENT=true` still fails closed at startup). This keeps the entire Phase 4–73 acceptance suite, which runs Stripe in mock mode, unaffected by the live-mode boundary.
 
-### Phase 10 — Customer Portal Architecture & Security
-**Status**: IMPLEMENTED (PR #13 OPEN, Pending ChatGPT Final Review. NOT MERGED. Phase 11 NOT STARTED.)
+### Phase 10: Customer Portal (Completed)
+**Status**: MERGED (PR #13, Approved HEAD: `6f3c19e87ad614c1d2ecc5a24cb1d322a8541d0e`, Merge Commit: `e8a4bd9f1ee85390b6cd8e319f8cd0212c113b6b`. Customer Portal: MERGED ON MAIN.)
 
 - **Strict Client-Only Architecture**: `apps/portal` is a Next.js client application consuming `@nexus/sdk` and NestJS API via HTTP. It has zero access to Prisma, PostgreSQL, Redis, or internal microservices.
 - **Zero Client Payment Authority**: Browser redirects and page navigation (e.g. `/payment/result?orderId=...`) have zero authority to mark orders `PAID` or create entitlements. Order status updates are driven purely by backend-verified webhooks or authoritative reconciliation. Payment retry triggers `POST /v1/orders/:id/payment-session` to create an authoritative provider session with server-calculated amounts and currencies.
@@ -364,7 +364,7 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Acceptance Suite Expanded to 60 Gates**: `packages/database/scripts/phase10-acceptance.ts` expanded to 60 gates, adding validation for production login fields, dev preset omission, real auth hydration, connectivity error preservation, zero `storageKey` exposure, signed download URL gating, `EXTERNAL_MANAGED` filtering & actions, relative payment return URLs, read-only payment result safety, and plaintext-free owner domain deactivation with cross-user 404 anti-enumeration.
 
 ### Phase 11: CMS & SEO Publishing Platform
-**Status**: IMPLEMENTED / UNDER REVIEW (PR #14 OPEN, Pending ChatGPT Final Review Round 3. NOT MERGED. Phase 12 NOT STARTED.)
+**Status**: IMPLEMENTED / UNDER REVIEW (PR #14 OPEN, Branch: `feature/phase-11-cms-seo`, Pending ChatGPT Final Review Round 4. NOT MERGED. Phase 12 NOT STARTED.)
 - **CMS Database Domain & Additive Migration**: Added `ContentCategory` and `ContentPost` models with enums `ContentStatus` (`IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`) and `ContentType` (`ARTICLE`, `PAGE`). Relation between `User` and `ContentPost` via `authorId`. Migration `20260918000000_20260918_phase11_cms_seo` applied additively without touching commerce, license, entitlement, or payment tables.
 - **Authoritative State Machine & Lifecycle Transitions**: Implemented state machine engine in `@nexus/database` (`isValidContentTransition`) enforcing transition matrix:
   - `IDEA` -> `DRAFT`
@@ -374,33 +374,37 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
   - `SCHEDULED` -> `PUBLISHED`, `DRAFT`, `ARCHIVED`
   - `PUBLISHED` -> `ARCHIVED`
   - `ARCHIVED` -> `DRAFT` (reactivation)
-  Transition to `SCHEDULED` strictly enforces future `scheduledAt` timestamp; direct jump from `DRAFT` to `PUBLISHED` without review is strictly blocked.
+  - Same-state transitions (e.g. `PUBLISHED` -> `PUBLISHED`) strictly rejected with HTTP 400 Bad Request.
+  - State transitions execute with optimistic CAS locking (`updateMany({ where: { id, status: currentStatus }, ... })`) rejecting concurrent modifications with HTTP 409 Conflict.
+  - Manual creation restricted strictly to `DRAFT` and `IDEA`. Direct manual creation of `PUBLISHED`, `SCHEDULED`, `REVIEW`, `AI_DRAFT`, or `ARCHIVED` is rejected with HTTP 400.
+  - Manual `scheduledAt` timestamp rejected on initial post creation; scheduling is strictly restricted to workflow transition `REVIEW` -> `SCHEDULED`.
 - **Worker Scheduled Publishing (`publishDueScheduledContent`)**: Background worker atomically transitions `SCHEDULED` posts with `scheduledAt <= NOW()` to `PUBLISHED` using PostgreSQL `FOR UPDATE SKIP LOCKED` to prevent concurrent worker race conditions. Automatically records `CONTENT_AUTO_PUBLISHED` audit log.
-- **Shared Utils & Sanitization (`@nexus/utils`)**:
+- **Shared Utils & Enterprise-Grade HTML Sanitization (`@nexus/utils`)**:
   - `slugify`: Vietnamese diacritics removal and URL normalization with reserved slug protection (`admin`, `blog`, `cart`, `robots`, `sitemap`, etc.).
-  - `sanitizeContentHtml`: Strips `<script>`, `<iframe>`, inline `on*` event handlers, and dangerous URI schemes (`javascript:`, `data:`).
-  - `isValidCanonicalUrl`: Validates standard safe HTTP/HTTPS URL structures.
+  - `sanitizeContentHtml`: Standardized on parser-based `sanitize-html@2.14.0` with strict element allowlist (`p, br, strong, b, em, i, u, s, blockquote, ul, ol, li, h1-h6, code, pre, a, img, table, thead, tbody, tr, th, td, hr`), allowed attributes (`href, target, rel, src, alt, width, height, colspan, rowspan`), and safe protocols (`http, https, mailto`). Disallows protocol-relative URLs (`//evil.com`), inline `style` tags, event handlers (`onerror`, `onload`, `onclick`), `<iframe>`, `<script>`, `<svg>`, `<object>`, `<embed>`.
+  - `isValidCanonicalUrl` & `isValidImageUrl`: Validates standard safe HTTP/HTTPS URL structures.
   - `safeJsonLd`: Serializes structured data escaping `<` to `\u003c` preventing script breakout vulnerabilities.
+  - `resolvePublicSiteUrl` & `resolveApiUrl`: Authoritative fail-closed origin resolvers. In production (`NODE_ENV === "production"`), requires valid configured HTTPS origin, strictly rejects `localhost`, loopback IPs (`127.0.0.1`, `::1`), embedded credentials, and protocol-relative schemes. Fails closed with descriptive, non-leaking errors if unconfigured.
 - **Public Storefront & Anti-Enumeration (`apps/web`)**:
-  - `/blog`: Public index with category filters and pagination, returning strictly `PUBLISHED` posts.
-  - `/blog/[slug]`: Article page with Server-Rendered metadata, canonical link, and `Article` Schema.org JSON-LD. Non-published slugs return clean HTTP 404 to eliminate enumeration risks.
+  - `/blog`: Public index with category filters and pagination, returning strictly `PUBLISHED` posts with `contentType: ARTICLE` (excluding `PAGE`).
+  - `/blog/[slug]`: Server-rendered article page with dynamic metadata, canonical links, and truthful Schema.org `Article` JSON-LD (emits author only if `author.profile.displayName` exists; never fabricates `"NEXUSTHEME Editorial Team"`). Non-published slugs return clean HTTP 404 to eliminate enumeration risks.
   - `/blog/category/[slug]`: Category archive route with dynamic metadata and post filtering.
-  - Dynamic `robots.txt` (`/robots.ts`) and `sitemap.xml` (`/sitemap.ts`) including static routes, published products, and published blog posts.
-  - Enhanced `/products/[slug]` with `Product` Schema.org JSON-LD structured data.
+  - Dynamic `robots.txt` (`/robots.ts`) and bounded dynamic `sitemap.xml` (`/sitemap.ts`, 10,000 URLs max) protecting private commerce and management routes (`/cart`, `/checkout`, `/orders/`, `/account`, `/api/`, `/admin/`, `/portal/`).
+  - `/products/[slug]`: Server/Client split with `product-variant-selector.tsx` as Client Component and `page.tsx` as async Server Component. Emits truthful Schema.org `Product` JSON-LD with `toMajorUnit` decimal conversions (USD 1200 minor -> 12.00 major; VND 299000 integer), zero fake availability (`InStock` removed), zero zero-price variant offers, and emits `Brand` only when `product.brand` exists.
+  - HTTP fetch semantics: 404 returns `null` leading to Next.js `notFound()`, while 500/network errors throw controlled errors caught by storefront error boundary (`apps/web/app/error.tsx`).
 - **Admin CMS Operations (`apps/admin`)**:
-  - `/content`: List articles with status filtering (`ALL`, `IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`), search, and pagination.
-  - `/content/new`: Form to create articles with slug preview, category selection, and SEO metadata.
-  - `/content/[id]`: Editor with authoritative lifecycle transition buttons and schedule date picker.
-  - `/content/categories`: Taxonomy manager with post counters and SEO customization.
+  - Full Supabase auth lifecycle: synchronous listener, deferred hydration (`setTimeout(..., 0)`), session restoration, `TOKEN_REFRESHED` handling.
+  - Fail-closed error handling: 401 local `signOut` with session purge; 5xx network connectivity banner preserving session.
+  - Real `/login` page with Supabase credentials; dev-auth bypass tools strictly suppressed in production (`NODE_ENV === "production"`).
+  - `/content`, `/content/new`, `/content/[id]`, `/content/categories` refactored to use typed `@nexus/sdk` methods.
+  - All Admin pages use shared `getApiUrl()` from `apps/admin/app/lib/api.ts` with zero independent localhost fallbacks.
   - Mirrored `/admin/content` route aliases for operational consistency.
 - **Security & RBAC Enforcement**:
   - Guarded all write and admin read routes with `AuthGuard` and `PermissionsGuard`.
   - Roles `content_editor`, `admin`, and `super_admin` have content permissions (`content.read`, `content.write`, `content.publish`); customer tokens receive clean 403 Forbidden.
   - Frontend apps access content solely via NestJS API endpoints; zero direct database or raw Prisma access.
   - Comprehensive audit logging: `CONTENT_CREATED`, `CONTENT_UPDATED`, `CONTENT_STATUS_CHANGED`, `CONTENT_PUBLISHED`, `CONTENT_ARCHIVED`, `CONTENT_AUTO_PUBLISHED`.
-- **45-Gate Acceptance Test Suite (`phase11-acceptance.ts`)**: Built comprehensive 45-gate end-to-end verification suite covering category taxonomy, Vietnamese slug generation, collision resolution, sanitization, reading time, SEO metadata, full transition state machine, worker scheduled publishing, public anti-enumeration, RBAC isolation, audit trails, and sitemap/robots validation.
-
-
+- **65-Gate Acceptance Test Suite (`phase11-acceptance.ts`)**: Built comprehensive 65-gate end-to-end verification suite covering category taxonomy, Vietnamese slug generation, collision resolution, parser-based HTML sanitization, reading time, SEO metadata, full transition state machine, worker scheduled publishing, public anti-enumeration, RBAC isolation, audit trails, sitemap/robots validation, category filtering/exclusion, pagination disjointness, worker race condition claims, API CAS concurrency, initial status restrictions, scheduledAt creation rejection, image URL validation, real sitemap/robots integration, static architecture guard (zero Prisma in frontend), truthful product JSON-LD builder, authoritative URL resolvers, truthful article JSON-LD author invariant, and static admin URL origin guard.
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

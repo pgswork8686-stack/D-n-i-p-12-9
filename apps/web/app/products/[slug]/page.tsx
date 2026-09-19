@@ -12,6 +12,8 @@ import {
 } from "@nexus/utils";
 import { ProductVariantSelector } from "./product-variant-selector";
 
+import { fetchProductBySlug } from "../../lib/storefront-fetch";
+
 export const dynamic = "force-dynamic";
 
 interface ProductPageProps {
@@ -19,25 +21,7 @@ interface ProductPageProps {
 }
 
 async function getProduct(slug: string): Promise<any | null> {
-  const apiUrl = resolveApiUrl();
-  let res: Response;
-  try {
-    res = await fetch(`${apiUrl}/products/${encodeURIComponent(slug)}`, {
-      cache: "no-store",
-    });
-  } catch {
-    throw new Error("Unable to connect to product catalog service.");
-  }
-
-  if (res.status === 404) {
-    return null;
-  }
-
-  if (!res.ok) {
-    throw new Error(`Product catalog service returned error: ${res.status}`);
-  }
-
-  return await res.json();
+  return fetchProductBySlug(slug);
 }
 
 export async function generateMetadata({ params }: ProductPageProps): Promise<Metadata> {

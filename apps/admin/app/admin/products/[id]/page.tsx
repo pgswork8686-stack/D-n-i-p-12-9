@@ -4,8 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { getApiUrl } from "../../../lib/api";
 
 const isDevAuthToolsEnabled =
   process.env.NODE_ENV !== "production" &&
@@ -41,8 +40,17 @@ export default function ProductDetailPage() {
       return;
     }
 
+    let apiUrl = "";
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setError("Admin API configuration unavailable");
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    fetch(`${API_URL}/admin/products/${id}`, {
+    fetch(`${apiUrl}/admin/products/${id}`, {
       headers: {
         Authorization: `Bearer ${authToken}`,
       },
@@ -72,7 +80,8 @@ export default function ProductDetailPage() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await fetch(`${API_URL}/admin/products/${id}`, {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/admin/products/${id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -96,7 +105,8 @@ export default function ProductDetailPage() {
     setAddingVariant(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/admin/products/${id}/variants`, {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/admin/products/${id}/variants`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -125,7 +135,8 @@ export default function ProductDetailPage() {
     setAddingPrice(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/admin/variants/${targetVariantId}/prices`, {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/admin/variants/${targetVariantId}/prices`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

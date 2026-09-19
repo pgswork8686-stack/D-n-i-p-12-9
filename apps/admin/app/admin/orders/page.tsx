@@ -4,8 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
 import { formatMoney } from "@nexus/utils";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { getApiUrl } from "../../lib/api";
 
 const isDevAuthToolsEnabled =
   process.env.NODE_ENV !== "production" &&
@@ -27,8 +26,18 @@ export default function AdminOrdersPage() {
       return;
     }
 
+    let apiUrl = "";
+    try {
+      apiUrl = getApiUrl();
+    } catch {
+      setError("Admin API configuration unavailable");
+      setLoading(false);
+      setOrders([]);
+      return;
+    }
+
     setLoading(true);
-    fetch(`${API_URL}/admin/orders`, {
+    fetch(`${apiUrl}/admin/orders`, {
       headers: {
         Authorization: `Bearer ${authToken}`,
       },
