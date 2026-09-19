@@ -1,0 +1,131 @@
+{
+  "name": "NEXUSTHEME — License Provisioned Email Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "license-provisioned-email",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.RESEND_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"from\": \"{{ $env.TRANSACTIONAL_FROM_EMAIL }}\",\n  \"to\": \"{{ $('Webhook Trigger').first().json.body.payload.recipientEmail }}\",\n  \"subject\": \"Your license is ready!\",\n  \"html\": \"<p>Your license key ({{ $('Webhook Trigger').first().json.body.payload.maskedKey }}) has been provisioned.</p><p>View and manage your licenses in your <a href='{{ $env.PORTAL_BASE_URL || 'https://app.domain.com' }}/licenses'>Customer Portal</a>.</p>\"\n}",
+        "options": {}
+      },
+      "id": "send-email-node",
+      "name": "Send License Ready Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst jobId = $('Webhook Trigger').first().json.body.jobId;\nconst emailResult = $input.first().json;\n\nconst body = {\n  resultJson: {\n    sent: true,\n    emailProviderId: emailResult.id || 'simulated'\n  }\n};\n\nconst timestamp = Date.now().toString();\nconst requestId = 'cb-lic-' + jobId + '-' + timestamp;\nconst path = '/v1/internal/automation/jobs/' + jobId + '/complete';\nconst rawBody = JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = ['POST', path, timestamp, requestId, bodyHash].join('\\n');\nconst signature = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nreturn [{\n  json: {\n    jobId,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-Nexus-Service': 'n8n',\n      'X-Nexus-Timestamp': timestamp,\n      'X-Nexus-Request-Id': requestId,\n      'X-Nexus-Signature': signature\n    }\n  }\n}];"
+      },
+      "id": "sign-callback-node",
+      "name": "Sign Callback Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_API_BASE_URL }}/v1/internal/automation/jobs/{{ $json.jobId }}/complete",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Nexus-Service",
+              "value": "={{ $json.headers['X-Nexus-Service'] }}"
+            },
+            {
+              "name": "X-Nexus-Timestamp",
+              "value": "={{ $json.headers['X-Nexus-Timestamp'] }}"
+            },
+            {
+              "name": "X-Nexus-Request-Id",
+              "value": "={{ $json.headers['X-Nexus-Request-Id'] }}"
+            },
+            {
+              "name": "X-Nexus-Signature",
+              "value": "={{ $json.headers['X-Nexus-Signature'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "callback-node",
+      "name": "Nexus Callback (Complete Job)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [950, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send License Ready Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send License Ready Email": {
+      "main": [
+        [
+          {
+            "node": "Sign Callback Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign Callback Payload": {
+      "main": [
+        [
+          {
+            "node": "Nexus Callback (Complete Job)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}

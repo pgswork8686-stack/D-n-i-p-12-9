@@ -11,6 +11,7 @@ import {
   reconcileInternalLicenses,
 } from "./license-provisioner";
 import { publishDueScheduledContent } from "./content-scheduler";
+import { dispatchPendingAutomationJobs } from "./automation-dispatcher";
 
 
 // Load root .env file
@@ -103,6 +104,9 @@ const runPollingTick = async () => {
 
     // 6. Authoritative publishing of scheduled content posts whose scheduledAt <= NOW()
     await publishDueScheduledContent({ workerId });
+
+    // 7. Authoritative claiming and dispatching of pending automation jobs to n8n
+    await dispatchPendingAutomationJobs({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({

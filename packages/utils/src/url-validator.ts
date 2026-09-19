@@ -45,7 +45,7 @@ export interface UrlResolverOptions {
   isProduction?: boolean;
 }
 
-function validateTrustedOrigin(
+export function validateTrustedOrigin(
   rawUrl: string,
   contextName: string,
   isProduction: boolean,
