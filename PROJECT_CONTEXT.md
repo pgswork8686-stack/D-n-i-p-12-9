@@ -291,6 +291,7 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 13. Phase 13 — Affiliate & Membership (Tiered access, recurring entitlements, referral tracking)
 14. Phase 14 — Hosting Integration (cPanel/DirectAdmin/Cloudflare automation)
 15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
+16. Anti-Piracy Track (Phase 16–19) — Thiết kế kiến trúc đã chốt, chưa triển khai (xem chi tiết tại docs/architecture/phase-16-19-anti-piracy.md).
 
 ## Phase 9 — Production Payment Gateway Architecture
 - **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events.
@@ -364,7 +365,7 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **Acceptance Suite Expanded to 60 Gates**: `packages/database/scripts/phase10-acceptance.ts` expanded to 60 gates, adding validation for production login fields, dev preset omission, real auth hydration, connectivity error preservation, zero `storageKey` exposure, signed download URL gating, `EXTERNAL_MANAGED` filtering & actions, relative payment return URLs, read-only payment result safety, and plaintext-free owner domain deactivation with cross-user 404 anti-enumeration.
 
 ### Phase 11: CMS & SEO Publishing Platform
-**Status**: IMPLEMENTED / UNDER REVIEW (PR #14 OPEN, Branch: `feature/phase-11-cms-seo`, Pending ChatGPT Final Review Round 4. NOT MERGED. Phase 12 NOT STARTED.)
+**Status**: MERGED (PR #14, Merge Commit: `b304567`).
 - **CMS Database Domain & Additive Migration**: Added `ContentCategory` and `ContentPost` models with enums `ContentStatus` (`IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`) and `ContentType` (`ARTICLE`, `PAGE`). Relation between `User` and `ContentPost` via `authorId`. Migration `20260918000000_20260918_phase11_cms_seo` applied additively without touching commerce, license, entitlement, or payment tables.
 - **Authoritative State Machine & Lifecycle Transitions**: Implemented state machine engine in `@nexus/database` (`isValidContentTransition`) enforcing transition matrix:
   - `IDEA` -> `DRAFT`
@@ -405,6 +406,9 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
   - Frontend apps access content solely via NestJS API endpoints; zero direct database or raw Prisma access.
   - Comprehensive audit logging: `CONTENT_CREATED`, `CONTENT_UPDATED`, `CONTENT_STATUS_CHANGED`, `CONTENT_PUBLISHED`, `CONTENT_ARCHIVED`, `CONTENT_AUTO_PUBLISHED`.
 - **65-Gate Acceptance Test Suite (`phase11-acceptance.ts`)**: Built comprehensive 65-gate end-to-end verification suite covering category taxonomy, Vietnamese slug generation, collision resolution, parser-based HTML sanitization, reading time, SEO metadata, full transition state machine, worker scheduled publishing, public anti-enumeration, RBAC isolation, audit trails, sitemap/robots validation, category filtering/exclusion, pagination disjointness, worker race condition claims, API CAS concurrency, initial status restrictions, scheduledAt creation rejection, image URL validation, real sitemap/robots integration, static architecture guard (zero Prisma in frontend), truthful product JSON-LD builder, authoritative URL resolvers, truthful article JSON-LD author invariant, and static admin URL origin guard.
+
+### Phase 12: n8n Automation & Operational Notifications
+**Status**: IMPLEMENTED trên nhánh `feature/phase-12-n8n-automation`, chưa merge vào main (PR #15).
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

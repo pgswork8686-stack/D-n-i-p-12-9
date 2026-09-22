@@ -1,4 +1,4 @@
-import { resolvePublicSiteUrl, resolveApiUrl } from "./url-validator";
+import { resolvePublicSiteUrl, resolveApiUrl, resolveCorsOrigins } from "./url-validator";
 
 describe("Authoritative URL Origin Resolvers", () => {
   const originalEnv = process.env;
@@ -154,6 +154,151 @@ describe("Authoritative URL Origin Resolvers", () => {
       expect(() => resolveApiUrl("bad-api-url", { isProduction: true })).toThrow(
         /Invalid API URL format/,
       );
+    });
+  });
+
+  describe("resolveCorsOrigins", () => {
+    it("production: missing WEB_URL -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          { portalUrl: "https://portal.example.com", adminUrl: "https://admin.example.com" },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production requires configured URLs for CORS: missing \[WEB_URL\]/);
+    });
+
+    it("production: missing PORTAL_URL -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          { webUrl: "https://example.com", adminUrl: "https://admin.example.com" },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production requires configured URLs for CORS: missing \[PORTAL_URL\]/);
+    });
+
+    it("production: missing ADMIN_URL -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          { webUrl: "https://example.com", portalUrl: "https://portal.example.com" },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production requires configured URLs for CORS: missing \[ADMIN_URL\]/);
+    });
+
+    it("production: missing all URLs -> throws reporting all missing variables", () => {
+      expect(() => resolveCorsOrigins({}, { isProduction: true })).toThrow(
+        /missing \[WEB_URL, PORTAL_URL, ADMIN_URL\]/,
+      );
+    });
+
+    it("production: non-HTTPS WEB_URL -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          {
+            webUrl: "http://example.com",
+            portalUrl: "https://portal.example.com",
+            adminUrl: "https://admin.example.com",
+          },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production WEB_URL must use HTTPS/);
+    });
+
+    it("production: localhost in allowlist -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          {
+            webUrl: "https://localhost:3000",
+            portalUrl: "https://portal.example.com",
+            adminUrl: "https://admin.example.com",
+          },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production WEB_URL cannot target localhost\/loopback address/);
+    });
+
+    it("production: 127.0.0.1 in allowlist -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          {
+            webUrl: "https://example.com",
+            portalUrl: "https://127.0.0.1:3001",
+            adminUrl: "https://admin.example.com",
+          },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production PORTAL_URL cannot target localhost\/loopback address/);
+    });
+
+    it("production: ::1 loopback in allowlist -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          {
+            webUrl: "https://example.com",
+            portalUrl: "https://portal.example.com",
+            adminUrl: "https://[::1]:3002",
+          },
+          { isProduction: true },
+        ),
+      ).toThrow(/Production ADMIN_URL cannot target localhost\/loopback address/);
+    });
+
+    it("production: URL with embedded credentials -> throws fail-closed error", () => {
+      expect(() =>
+        resolveCorsOrigins(
+          {
+            webUrl: "https://user:pass@example.com",
+            portalUrl: "https://portal.example.com",
+            adminUrl: "https://admin.example.com",
+          },
+          { isProduction: true },
+        ),
+      ).toThrow(/WEB_URL cannot contain embedded credentials/);
+    });
+
+    it("production: valid HTTPS origins -> returns strictly the 3 origins without localhost", () => {
+      const origins = resolveCorsOrigins(
+        {
+          webUrl: "https://nexustheme.dev/path?query=1",
+          portalUrl: "https://portal.nexustheme.dev/",
+          adminUrl: "https://admin.nexustheme.dev",
+        },
+        { isProduction: true },
+      );
+
+      expect(origins).toEqual([
+        "https://nexustheme.dev",
+        "https://portal.nexustheme.dev",
+        "https://admin.nexustheme.dev",
+      ]);
+      expect(origins.some((o) => o.includes("localhost"))).toBe(false);
+      expect(origins.some((o) => o.includes("127.0.0.1"))).toBe(false);
+    });
+
+    it("non-production: missing URLs -> defaults to localhost ports and includes localhost allowlist", () => {
+      const origins = resolveCorsOrigins({}, { isProduction: false });
+
+      expect(origins).toContain("http://localhost:3000");
+      expect(origins).toContain("http://localhost:3001");
+      expect(origins).toContain("http://localhost:3002");
+    });
+
+    it("non-production: custom dev URLs -> includes both custom origins and localhost defaults", () => {
+      const origins = resolveCorsOrigins(
+        {
+          webUrl: "http://mydev.local:3000",
+          portalUrl: "http://mydev.local:3001",
+          adminUrl: "http://mydev.local:3002",
+        },
+        { isProduction: false },
+      );
+
+      expect(origins).toContain("http://mydev.local:3000");
+      expect(origins).toContain("http://mydev.local:3001");
+      expect(origins).toContain("http://mydev.local:3002");
+      expect(origins).toContain("http://localhost:3000");
+      expect(origins).toContain("http://localhost:3001");
+      expect(origins).toContain("http://localhost:3002");
     });
   });
 });

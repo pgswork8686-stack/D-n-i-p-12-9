@@ -45,7 +45,7 @@ export interface UrlResolverOptions {
   isProduction?: boolean;
 }
 
-function validateTrustedOrigin(
+export function validateTrustedOrigin(
   rawUrl: string,
   contextName: string,
   isProduction: boolean,
@@ -170,3 +170,68 @@ export function resolveApiUrl(
   return validateTrustedOrigin(rawUrl, "API URL", false);
 }
 
+export interface CorsOriginUrls {
+  webUrl?: string;
+  portalUrl?: string;
+  adminUrl?: string;
+}
+
+/**
+ * Resolves CORS allowed origins.
+ *
+ * In production (NODE_ENV === "production"):
+ * - Fail-closed: WEB_URL, PORTAL_URL, and ADMIN_URL are all strictly required.
+ * - Every URL must use HTTPS, cannot target loopback/localhost, and cannot contain embedded credentials.
+ * - Returns strictly the verified, normalized origins of [WEB_URL, PORTAL_URL, ADMIN_URL] with zero default localhost origins.
+ *
+ * In non-production (development / test):
+ * - Defaults missing URLs to http://localhost:3000 (WEB_URL), http://localhost:3001 (PORTAL_URL), http://localhost:3002 (ADMIN_URL).
+ * - Preserves standard localhost origins [http://localhost:3000, http://localhost:3001, http://localhost:3002] in the allowlist.
+ */
+export function resolveCorsOrigins(
+  urls: CorsOriginUrls,
+  options?: UrlResolverOptions,
+): string[] {
+  const isProd =
+    options?.isProduction !== undefined
+      ? options.isProduction
+      : process.env.NODE_ENV === "production";
+
+  if (isProd) {
+    const missing: string[] = [];
+    if (!urls.webUrl || !urls.webUrl.trim()) missing.push("WEB_URL");
+    if (!urls.portalUrl || !urls.portalUrl.trim()) missing.push("PORTAL_URL");
+    if (!urls.adminUrl || !urls.adminUrl.trim()) missing.push("ADMIN_URL");
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Production requires configured URLs for CORS: missing [${missing.join(", ")}].`,
+      );
+    }
+
+    const webOrigin = validateTrustedOrigin(urls.webUrl!.trim(), "WEB_URL", true);
+    const portalOrigin = validateTrustedOrigin(urls.portalUrl!.trim(), "PORTAL_URL", true);
+    const adminOrigin = validateTrustedOrigin(urls.adminUrl!.trim(), "ADMIN_URL", true);
+
+    return Array.from(new Set([webOrigin, portalOrigin, adminOrigin]));
+  }
+
+  const webUrl = (urls.webUrl && urls.webUrl.trim()) || "http://localhost:3000";
+  const portalUrl = (urls.portalUrl && urls.portalUrl.trim()) || "http://localhost:3001";
+  const adminUrl = (urls.adminUrl && urls.adminUrl.trim()) || "http://localhost:3002";
+
+  const webOrigin = validateTrustedOrigin(webUrl, "WEB_URL", false);
+  const portalOrigin = validateTrustedOrigin(portalUrl, "PORTAL_URL", false);
+  const adminOrigin = validateTrustedOrigin(adminUrl, "ADMIN_URL", false);
+
+  return Array.from(
+    new Set([
+      webOrigin,
+      portalOrigin,
+      adminOrigin,
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "http://localhost:3002",
+    ]),
+  );
+}
