@@ -424,3 +424,46 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **License Provisioning Notification Lifecycle**: `LICENSE_PROVISIONED_EMAIL` is fully wired into worker provisioning (`enqueueLicenseProvisionedEmailJob`) with masked key payloads (`NXS-****-****-XXXX`, never plaintext). A background reconciliation task (`reconcileMissingLicenseProvisionedEmailJobs`) periodically checks for and recovers missing license notification jobs.
 - **74-Gate Acceptance Suite (Real Assertions Only)**: 74 end-to-end assertions covering secret policy, whitespace padding rejection, Redis-outage 503, multi-guard replay, timing-safe HMAC, provider idempotency, delivery PENDING/SENDING/SENT/FAILED lifecycle, stale job terminalization, disabled type pre-claim filtering, license notification provisioning and reconciliation, AI draft request idempotency & conflict rejection, advisory lock concurrency, and slug collision handling.
 - **Real n8n Runtime Smoke in CI**: `.github/workflows/phase12-ci.yml` runs `pnpm n8n:smoke` right after `pnpm n8n:validate` (no `continue-on-error`), spinning up n8n and executing all 3 workflows against mock providers in containerized CI.
+
+## Security baseline
+- HTTPS, Cloudflare WAF, RBAC, MFA cho admin
+- Rate limiting
+- Signed webhooks + idempotency
+- CSRF nếu cookie auth
+- Refresh token rotation
+- Secrets không commit Git
+- DB private
+- R2 signed URL
+- Upload validation
+- Audit logs
+- Backup + restore test
+- Không log password/access token/provider secret/payment secret
+
+## Review rubric
+```text
+STATUS: PASS / NEED FIX / BLOCKER
+
+BLOCKER: sai kiến trúc, mất dữ liệu, lỗ hổng nghiêm trọng
+HIGH: business logic/security/test quan trọng
+MEDIUM: consistency/maintainability/DX
+LOW: cleanup/cosmetic
+```
+
+Checklist review:
+1. Đúng domain boundary?
+2. Business logic nằm backend?
+3. Có bypass entitlement/payment/auth?
+4. Webhook/idempotency an toàn?
+5. Frontend/n8n có ghi DB trực tiếp?
+6. Có public secret/private URL?
+7. Có test happy path + failure path?
+8. Migration an toàn?
+9. Error handling/logging đủ?
+10. Bám đúng PROJECT_CONTEXT.md?
+
+## Milestone đầu tiên
+Không ưu tiên homepage.
+
+Milestone 01: **foundation + product/admin + một vertical slice Elementor chạy end-to-end trên test data**.
+
+Chỉ mở rộng sau khi milestone này PASS review.
