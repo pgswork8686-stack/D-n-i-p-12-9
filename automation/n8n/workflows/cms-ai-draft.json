@@ -8,57 +8,70 @@
         "responseMode": "onReceived",
         "options": {}
       },
+      "webhookId": "nexustheme",
       "id": "webhook-node",
       "name": "Webhook Trigger",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [200, 300]
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\n\nconst service = headers['x-nexus-service'] || headers['X-Nexus-Service'];\nif (service !== 'worker') {\n  throw new Error('Unauthorized: Expected X-Nexus-Service: worker');\n}\n\nconst timestamp = headers['x-nexus-timestamp'] || headers['X-Nexus-Timestamp'];\nif (!timestamp) {\n  throw new Error('Unauthorized: Missing X-Nexus-Timestamp');\n}\n\nconst now = Date.now();\nconst parsedTs = Number(timestamp);\nif (isNaN(parsedTs) || Math.abs(now - parsedTs) > 5 * 60 * 1000) {\n  throw new Error('Unauthorized: Timestamp skew exceeded 5 minutes');\n}\n\nconst requestId = headers['x-nexus-request-id'] || headers['X-Nexus-Request-Id'];\nif (!requestId) {\n  throw new Error('Unauthorized: Missing X-Nexus-Request-Id');\n}\n\nconst signature = headers['x-nexus-signature'] || headers['X-Nexus-Signature'];\nif (!signature) {\n  throw new Error('Unauthorized: Missing X-Nexus-Signature');\n}\n\nconst path = '/webhook/cms-ai-draft';\nconst rawBody = typeof body === 'string' ? body : JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = [service, 'POST', path, String(timestamp), requestId, bodyHash].join('\\n');\nconst expectedSig = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nif (signature !== expectedSig) {\n  throw new Error('Unauthorized: Invalid HMAC signature from worker');\n}\n\nreturn [$input.first()];"
+        "jsCode": "const crypto = require('crypto');\nconst net = require('net');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst headers = $input.first().json.headers || {};\nconst body = $input.first().json.body || {};\nconst lc = (o, n) => { for (const k of Object.keys(o || {})) { if (k.toLowerCase() === n) return o[k]; } return undefined; };\n\nconst service = lc(headers, 'x-nexus-service');\nif (service !== 'worker') {\n  throw new Error('Unauthorized: Expected X-Nexus-Service: worker');\n}\n\nconst timestamp = lc(headers, 'x-nexus-timestamp');\nif (!timestamp) {\n  throw new Error('Unauthorized: Missing X-Nexus-Timestamp');\n}\n\nconst now = Date.now();\nconst parsedTs = Number(timestamp);\nif (!Number.isFinite(parsedTs) || Math.abs(now - parsedTs) > 5 * 60 * 1000) {\n  throw new Error('Unauthorized: Timestamp skew exceeded 5 minutes');\n}\n\nconst requestId = lc(headers, 'x-nexus-request-id');\nif (!requestId) {\n  throw new Error('Unauthorized: Missing X-Nexus-Request-Id');\n}\n\nconst signature = lc(headers, 'x-nexus-signature');\nif (!signature) {\n  throw new Error('Unauthorized: Missing X-Nexus-Signature');\n}\nif (!/^[0-9a-fA-F]{64}$/.test(String(signature))) {\n  throw new Error('Unauthorized: Signature is not valid 64-char hex');\n}\n\nconst payload = typeof body === 'string' ? JSON.parse(body) : body;\nif (!payload || !payload.jobId) {\n  throw new Error('Unauthorized: Missing jobId');\n}\nif (payload.type !== 'CMS_AI_DRAFT') {\n  throw new Error('Unauthorized: Wrong job type for this workflow: ' + payload.type);\n}\n\nconst path = '/webhook/cms-ai-draft';\nconst rawBody = typeof body === 'string' ? body : JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = [service, 'POST', path, String(timestamp), requestId, bodyHash].join('\\n');\nconst expectedSig = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\n// Timing-safe comparison (never ordinary string equality for HMAC).\nconst sigBuf = Buffer.from(String(signature), 'hex');\nconst expBuf = Buffer.from(expectedSig, 'hex');\nif (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {\n  throw new Error('Unauthorized: Invalid HMAC signature from worker');\n}\n\n// Ingress replay protection BEFORE any provider call (fail-closed).\n// Atomic Redis claim over RESP: SET key 1 NX PX 600000\n// NX => only the FIRST request for a requestId can claim the key.\n// A duplicate gets a nil reply (duplicate) and MUST be rejected.\nconst redisHost = $env.N8N_REPLAY_REDIS_HOST || '127.0.0.1';\nconst redisPort = Number($env.N8N_REPLAY_REDIS_PORT || 6379);\nconst redisPassword = $env.N8N_REPLAY_REDIS_PASSWORD || '';\nconst CRLF = '\\r\\n';\nconst replayKey = 'nexus:n8n:dispatch-replay:' + requestId;\nconst claim = await new Promise((resolve, reject) => {\n  const socket = net.createConnection({ host: redisHost, port: redisPort });\n  let buf = '';\n  const fail = (e) => { try { socket.destroy(); } catch (_) {} reject(new Error('Replay protection unavailable (fail-closed): ' + e.message)); };\n  socket.setTimeout(3000);\n  socket.on('timeout', () => fail(new Error('Redis timeout')));\n  socket.on('error', fail);\n  socket.on('connect', () => {\n    const enc = (s) => '$' + Buffer.byteLength(s) + CRLF + s + CRLF;\n    if (redisPassword) {\n      socket.write('*2' + CRLF + '$4' + CRLF + 'AUTH' + CRLF + enc(redisPassword));\n    }\n    socket.write('*6' + CRLF + '$3' + CRLF + 'SET' + CRLF + enc(replayKey) + enc('1') + enc('NX') + enc('PX') + enc('600000'));\n  });\n  socket.on('data', (d) => {\n    buf += d.toString();\n    // Wait for a complete RESP line, then classify the LAST reply\n    // (so a pipelined AUTH '+OK' can never be mistaken for the SET result).\n    if (!buf.endsWith(CRLF)) return;\n    const lines = buf.split(CRLF).filter((l) => l.length > 0);\n    const last = lines[lines.length - 1];\n    if (!last) return;\n    if (last === '+OK') { try { socket.destroy(); } catch (_) {} resolve('claimed'); return; }\n    if (last === '$-1' || last === '_') { try { socket.destroy(); } catch (_) {} resolve('duplicate'); return; }\n    if (last.charAt(0) === '-') { try { socket.destroy(); } catch (_) {} reject(new Error('Replay protection rejected (fail-closed): ' + last)); return; }\n    return;\n  });\n});\nif (claim === 'duplicate') {\n  throw new Error('Unauthorized: Replay detected for requestId ' + requestId);\n}\n\nreturn [$input.first()];"
       },
       "id": "verify-dispatch-node",
       "name": "Verify Nexus Dispatch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [400, 300]
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook Trigger').first().json.body || {};\nconst p = body.payload || {};\nconst briefText = p.brief || p.topic || 'Generate an article.';\nconst language = p.language || 'en';\nconst prompt = 'You are an expert SEO content writer. Write a complete blog article in ' + language + ' based on the following brief. Respond ONLY with a JSON object having keys: title, excerpt, content (HTML), seoTitle, seoDescription, suggestedSlug.' + '\\n\\nBrief: ' + briefText;\nreturn [{ json: { requestBody: {\n  model: $env.AI_CONTENT_MODEL || 'gpt-4o',\n  response_format: { type: 'json_object' },\n  messages: [ { role: 'user', content: prompt } ]\n} } }];"
+      },
+      "id": "prepare-ai-request-node",
+      "name": "Prepare AI Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.openai.com/v1/chat/completions",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "Bearer {{ $env.OPENAI_API_KEY }}"
-            }
-          ]
-        },
+        "url": "={{ ($env.OPENAI_API_BASE_URL || 'https://api.openai.com') + '/v1/chat/completions' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "model",
-              "value": "gpt-4o"
-            },
-            {
-              "name": "response_format",
-              "value": "{\"type\":\"json_object\"}"
-            }
-          ]
-        },
-        "options": {}
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "nexustheme-openai",
+          "name": "NEXUSTHEME OpenAI"
+        }
       },
       "id": "ai-generate-node",
       "name": "Generate Structured Article",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [600, 300]
+      "position": [
+        700,
+        300
+      ],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -68,12 +81,15 @@
       "name": "Sign Callback Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [800, 300]
+      "position": [
+        900,
+        300
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.NEXUS_API_BASE_URL }}/v1/internal/automation/content-ai-draft-result",
+        "url": "={{ $env.NEXUS_API_BASE_URL + '/v1/internal/automation/content-ai-draft-result' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -112,7 +128,70 @@
       "name": "Nexus Callback (Save AI Draft)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1000, 300]
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.AUTOMATION_SERVICE_SECRET;\nconst jobId = $('Webhook Trigger').first().json.body.jobId;\nconst errItem = $input.first().json || {};\nconst providerErr = errItem.error || errItem;\nconst status = Number(providerErr.httpCode || providerErr.statusCode || providerErr.status || 0);\nlet errorCode = 'AI_TIMEOUT';\nif (status === 429) { errorCode = 'AI_HTTP_429'; }\nelse if (status >= 500) { errorCode = 'AI_HTTP_5XX'; }\nelse if (status >= 400) { errorCode = 'AI_HTTP_' + status; }\nconst errorMessage = ('Provider call failed' + (status ? ' [HTTP ' + status + ']' : '')).slice(0, 1000);\nconst retryable = status === 429 || status >= 500 || status === 0;\n\nconst body = { errorCode, errorMessage, retryable };\nconst service = 'n8n';\nconst timestamp = Date.now().toString();\nconst requestId = 'cb-fail-' + jobId + '-' + timestamp;\nconst callbackPath = '/v1/internal/automation/jobs/' + jobId + '/fail';\nconst rawBody = JSON.stringify(body);\nconst bodyHash = crypto.createHash('sha256').update(rawBody).digest('hex');\nconst canonical = [service, 'POST', callbackPath, timestamp, requestId, bodyHash].join('\\n');\nconst signature = crypto.createHmac('sha256', secret).update(canonical).digest('hex');\n\nreturn [{\n  json: {\n    jobId,\n    callbackPath,\n    body,\n    headers: {\n      'Content-Type': 'application/json',\n      'X-Nexus-Service': service,\n      'X-Nexus-Timestamp': timestamp,\n      'X-Nexus-Request-Id': requestId,\n      'X-Nexus-Signature': signature,\n      'X-Nexus-Signature-Version': 'v1'\n    }\n  }\n}];"
+      },
+      "id": "sign-fail-callback-node",
+      "name": "Sign Fail Callback Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXUS_API_BASE_URL + $json.callbackPath }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Nexus-Service",
+              "value": "={{ $json.headers['X-Nexus-Service'] }}"
+            },
+            {
+              "name": "X-Nexus-Timestamp",
+              "value": "={{ $json.headers['X-Nexus-Timestamp'] }}"
+            },
+            {
+              "name": "X-Nexus-Request-Id",
+              "value": "={{ $json.headers['X-Nexus-Request-Id'] }}"
+            },
+            {
+              "name": "X-Nexus-Signature",
+              "value": "={{ $json.headers['X-Nexus-Signature'] }}"
+            },
+            {
+              "name": "X-Nexus-Signature-Version",
+              "value": "={{ $json.headers['X-Nexus-Signature-Version'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "fail-callback-node",
+      "name": "Nexus Callback (Fail Job)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1100,
+        520
+      ]
     }
   ],
   "connections": {
@@ -131,6 +210,17 @@
       "main": [
         [
           {
+            "node": "Prepare AI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Request": {
+      "main": [
+        [
+          {
             "node": "Generate Structured Article",
             "type": "main",
             "index": 0
@@ -143,6 +233,13 @@
         [
           {
             "node": "Sign Callback Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sign Fail Callback Payload",
             "type": "main",
             "index": 0
           }
@@ -159,8 +256,24 @@
           }
         ]
       ]
+    },
+    "Sign Fail Callback Payload": {
+      "main": [
+        [
+          {
+            "node": "Nexus Callback (Fail Job)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": false,
-  "settings": {}
+  "settings": {
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": false
+  },
+  "id": "nexustheme-cms-ai-draft"
 }

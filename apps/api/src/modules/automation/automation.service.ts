@@ -32,7 +32,11 @@ export class AutomationService {
 
   /**
    * Helper to row-lock a job FOR UPDATE in PostgreSQL.
-   * Falls back to findUnique in test environments where raw queries are not mocked.
+   * FAIL-CLOSED (Phase 12 Round 3): a raw lock failure in any real
+   * (non-test) environment THROWS — we never silently downgrade to an
+   * unlocked findUnique, which would break linearization.
+   * The findUnique fallback exists ONLY for explicitly mocked unit-test
+   * environments (NODE_ENV === "test").
    */
   private async lockJobForUpdate(
     tx: Prisma.TransactionClient,
@@ -46,7 +50,15 @@ export class AutomationService {
     resultJson: any;
     createdBy?: string | null;
   }> {
-    if (typeof tx.$queryRaw === "function") {
+    const isTestEnv = process.env.NODE_ENV === "test";
+
+    if (typeof tx.$queryRaw !== "function") {
+      if (!isTestEnv) {
+        throw new Error(
+          "AutomationJob lock unavailable: transaction client has no $queryRaw (fail-closed)",
+        );
+      }
+    } else {
       try {
         const lockedRows = await tx.$queryRaw<any[]>`
           SELECT * FROM automation_jobs WHERE id = ${id} FOR UPDATE;
@@ -63,8 +75,18 @@ export class AutomationService {
             createdBy: row.created_by ?? row.createdBy,
           };
         }
+        // Real PostgreSQL must always return the locked row here. An empty
+        // result means the job does not exist.
+        if (!isTestEnv) {
+          throw new NotFoundException(`Automation job '${id}' not found`);
+        }
+        // test-only: mocked $queryRaw returned no rows — fall through to
+        // the mocked findUnique path below.
       } catch (err) {
+        // Fail-closed: any genuine PostgreSQL lock failure propagates.
         if (err instanceof NotFoundException) throw err;
+        if (!isTestEnv) throw err;
+        // test-only: fall through to mocked findUnique fallback
       }
     }
 
@@ -97,6 +119,14 @@ export class AutomationService {
     scheduledAt?: Date;
     maxAttempts?: number;
   }) {
+    // Phase12 V1 (§23): EXTERNAL_ALLOCATION_EMAIL is explicitly unsupported.
+    // Fail closed at creation: no workflow exists for this type and unknown
+    // types must never be dispatched.
+    if (params.type === AutomationJobType.EXTERNAL_ALLOCATION_EMAIL) {
+      throw new BadRequestException(
+        "EXTERNAL_ALLOCATION_EMAIL is unsupported in Phase12 V1: no committed n8n workflow exists",
+      );
+    }
     try {
       const existing = await prisma.automationJob.findUnique({
         where: { idempotencyKey: params.idempotencyKey },
@@ -391,12 +421,17 @@ export class AutomationService {
    */
   async createAiDraftRequest(adminUserId: string, dto: CreateAiDraftRequestDto) {
     return prisma.$transaction(async (tx) => {
+      // Fail-closed advisory rate-limit lock (Phase 12 Round 3, §10/§11):
+      // the advisory lock, count and create share ONE transaction boundary.
+      // A real PostgreSQL lock failure must abort the transaction — never
+      // continue, which would make the max-3 cost control raceable.
+      // Only mocked unit environments (NODE_ENV === "test") may skip it.
       if (typeof tx.$executeRaw === "function") {
-        try {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-draft-rate-limit:' || ${adminUserId}));`;
-        } catch {
-          // ignore advisory lock error if mock driver
-        }
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-draft-rate-limit:' || ${adminUserId}));`;
+      } else if (process.env.NODE_ENV !== "test") {
+        throw new Error(
+          "AI draft rate-limit advisory lock unavailable: transaction client has no $executeRaw (fail-closed)",
+        );
       }
 
       const activeCount = await tx.automationJob.count({
@@ -455,96 +490,149 @@ export class AutomationService {
 
     const sanitizedContent = sanitizeContentHtml(result.content);
 
-    return prisma.$transaction(async (tx) => {
-      const job = await this.lockJobForUpdate(tx, jobId);
-
-      if (job.type !== AutomationJobType.CMS_AI_DRAFT) {
-        throw new BadRequestException(
-          `Job type mismatch: expected CMS_AI_DRAFT, received ${job.type}`,
+    // Bounded retry at the TRANSACTION boundary (Phase 12 Round 3, §9/§41/§42).
+    // A failed statement aborts a PostgreSQL transaction, so a unique-conflict
+    // on ContentPost.slug can only be recovered by retrying the whole
+    // transaction. Unrelated P2002s and exhausted retries propagate so the
+    // AutomationJob is never left partially completed.
+    const MAX_SLUG_TX_RETRIES = 5;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await prisma.$transaction((tx) =>
+          this.applyAiDraftResultTx(tx, jobId, result, sanitizedContent),
         );
+      } catch (err: any) {
+        const target = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(",")
+          : String(err?.meta?.target ?? "");
+        const isSlugConflict = err?.code === "P2002" && target.includes("slug");
+        if (isSlugConflict && attempt < MAX_SLUG_TX_RETRIES) {
+          continue;
+        }
+        throw err;
       }
+    }
+  }
 
-      if (job.status === AutomationJobStatus.SUCCEEDED) {
-        const resJson = typeof job.resultJson === "string" ? JSON.parse(job.resultJson) : job.resultJson;
-        const existingPostId = resJson?.postId;
-        if (existingPostId) {
-          const existingPost = await tx.contentPost.findUnique({
-            where: { id: existingPostId },
+  /**
+   * Transactional body for applyAiDraftResult. Runs under a FOR UPDATE row
+   * lock on the automation job plus a slug-allocation advisory lock.
+   */
+  private async applyAiDraftResultTx(
+    tx: Prisma.TransactionClient,
+    jobId: string,
+    result: AiDraftOutputDto,
+    sanitizedContent: string,
+  ) {
+    const job = await this.lockJobForUpdate(tx, jobId);
+
+    if (job.type !== AutomationJobType.CMS_AI_DRAFT) {
+      throw new BadRequestException(
+        `Job type mismatch: expected CMS_AI_DRAFT, received ${job.type}`,
+      );
+    }
+
+    if (job.status === AutomationJobStatus.SUCCEEDED) {
+      const resJson =
+        typeof job.resultJson === "string"
+          ? JSON.parse(job.resultJson)
+          : job.resultJson;
+      const existingPostId = resJson?.postId;
+      if (existingPostId) {
+        const existingPost = await tx.contentPost.findUnique({
+          where: { id: existingPostId },
+        });
+        if (existingPost) {
+          const mappedJob = await tx.automationJob.findUnique({
+            where: { id: jobId },
           });
-          if (existingPost) {
-            const mappedJob = await tx.automationJob.findUnique({ where: { id: jobId } });
-            return { post: existingPost, job: mappedJob };
-          }
+          return { post: existingPost, job: mappedJob };
         }
       }
+    }
 
-      if (job.status !== AutomationJobStatus.RUNNING) {
-        throw new BadRequestException(
-          `Cannot apply AI draft result: job must be in RUNNING status (current: ${job.status})`,
-        );
+    if (job.status !== AutomationJobStatus.RUNNING) {
+      throw new BadRequestException(
+        `Cannot apply AI draft result: job must be in RUNNING status (current: ${job.status})`,
+      );
+    }
+
+    // Serialize slug allocation across DIFFERENT AI jobs (a row lock on
+    // automation_jobs only serializes callbacks for the SAME job). This
+    // makes the pre-check below authoritative, so the insert path does not
+    // have to recover from an aborted transaction.
+    // Fail-closed in every real environment.
+    if (typeof tx.$executeRaw === "function") {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('content-post-slug-allocation'));`;
+    } else if (process.env.NODE_ENV !== "test") {
+      throw new Error(
+        "ContentPost slug allocation lock unavailable: transaction client has no $executeRaw (fail-closed)",
+      );
+    }
+
+    let baseSlug = slugify(result.suggestedSlug || result.title);
+    if (isReservedSlug(baseSlug)) {
+      baseSlug = `${baseSlug}-article`;
+    }
+
+    // Bounded candidate search. If every candidate is taken, fall back to a
+    // random suffix; the authority for correctness is the unique constraint
+    // (a P2002 retries the WHOLE transaction via the outer loop below).
+    let candidateSlug = baseSlug;
+    let collisionCount = 0;
+    const MAX_SLUG_ATTEMPTS = 100;
+    while (
+      await tx.contentPost.findUnique({ where: { slug: candidateSlug } })
+    ) {
+      collisionCount++;
+      if (collisionCount > MAX_SLUG_ATTEMPTS) {
+        candidateSlug = `${baseSlug}-${crypto.randomBytes(4).toString("hex")}`;
+        break;
       }
+      candidateSlug = `${baseSlug}-${collisionCount}`;
+    }
 
-      let baseSlug = slugify(result.suggestedSlug || result.title);
-      if (isReservedSlug(baseSlug)) {
-        baseSlug = `${baseSlug}-article`;
-      }
-
-      let candidateSlug = baseSlug;
-      let collisionCount = 1;
-      const MAX_SLUG_ATTEMPTS = 100;
-      while (
-        await tx.contentPost.findUnique({ where: { slug: candidateSlug } })
-      ) {
-        if (collisionCount > MAX_SLUG_ATTEMPTS) {
-          candidateSlug = `${baseSlug}-${crypto.randomBytes(4).toString("hex")}`;
-          break;
-        }
-        candidateSlug = `${baseSlug}-${collisionCount}`;
-        collisionCount++;
-      }
-
-      const createdPost = await tx.contentPost.create({
-        data: {
-          title: result.title,
-          slug: candidateSlug,
-          excerpt: result.excerpt,
-          content: sanitizedContent,
-          seoTitle: result.seoTitle,
-          seoDescription: result.seoDescription,
-          status: ContentStatus.AI_DRAFT,
-          authorId: job.createdBy,
-        },
-      });
-
-      const updatedJob = await tx.automationJob.update({
-        where: { id: jobId },
-        data: {
-          status: AutomationJobStatus.SUCCEEDED,
-          resultJson: {
-            postId: createdPost.id,
-            slug: createdPost.slug,
-          },
-          completedAt: new Date(),
-          leaseUntil: null,
-          lastErrorCode: null,
-          lastErrorMessage: null,
-        },
-      });
-
-      await this.auditService.logActionWithClient(tx, {
-        action: "CONTENT_CREATED",
-        entity: "ContentPost",
-        entityId: createdPost.id,
-        actorId: job.createdBy,
-        details: {
-          status: ContentStatus.AI_DRAFT,
-          source: "CMS_AI_DRAFT",
-          jobId,
-        },
-      });
-
-      return { post: createdPost, job: updatedJob };
+    const createdPost = await tx.contentPost.create({
+      data: {
+        title: result.title,
+        slug: candidateSlug,
+        excerpt: result.excerpt,
+        content: sanitizedContent,
+        seoTitle: result.seoTitle,
+        seoDescription: result.seoDescription,
+        status: ContentStatus.AI_DRAFT,
+        authorId: job.createdBy,
+      },
     });
+
+    const updatedJob = await tx.automationJob.update({
+      where: { id: jobId },
+      data: {
+        status: AutomationJobStatus.SUCCEEDED,
+        resultJson: {
+          postId: createdPost.id,
+          slug: createdPost.slug,
+        },
+        completedAt: new Date(),
+        leaseUntil: null,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+      },
+    });
+
+    await this.auditService.logActionWithClient(tx, {
+      action: "CONTENT_CREATED",
+      entity: "ContentPost",
+      entityId: createdPost.id,
+      actorId: job.createdBy,
+      details: {
+        status: ContentStatus.AI_DRAFT,
+        source: "CMS_AI_DRAFT",
+        jobId,
+      },
+    });
+
+    return { post: createdPost, job: updatedJob };
   }
 
   /**

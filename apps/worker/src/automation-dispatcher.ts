@@ -4,14 +4,43 @@ import {
   ClaimedAutomationJob,
   AutomationJobStatus,
   AutomationDeliveryStatus,
+  AutomationJobType,
 } from "@nexus/database";
-import { signAutomationPayload, validateTrustedOrigin } from "@nexus/utils";
+import {
+  signAutomationPayload,
+  validateTrustedOrigin,
+  resolveAutomationServiceSecret,
+} from "@nexus/utils";
+
+// Re-export for backwards compatibility; the authoritative implementation
+// lives in @nexus/utils so worker and API share the exact same policy.
+export { resolveAutomationServiceSecret };
 
 export interface AutomationDispatcherOptions {
   batchSize?: number;
   workerId?: string;
   leaseMinutes?: number;
 }
+
+/**
+ * Phase12 V1 supported automation job types with committed n8n workflows.
+ * EXTERNAL_ALLOCATION_EMAIL is intentionally UNSUPPORTED in Phase12 V1:
+ * there is no committed workflow, so jobs of this type are never routed
+ * (fail-closed) and enqueueing/dispatching it is rejected.
+ */
+export const SUPPORTED_AUTOMATION_JOB_TYPES: ReadonlySet<string> = new Set([
+  AutomationJobType.CMS_AI_DRAFT,
+  AutomationJobType.ORDER_PAID_EMAIL,
+  AutomationJobType.LICENSE_PROVISIONED_EMAIL,
+]);
+
+const WEBHOOK_PATH_BY_JOB_TYPE: Record<string, string> = {
+  [AutomationJobType.CMS_AI_DRAFT]: "/webhook/cms-ai-draft",
+  [AutomationJobType.ORDER_PAID_EMAIL]: "/webhook/order-paid-email",
+  [AutomationJobType.LICENSE_PROVISIONED_EMAIL]:
+    "/webhook/license-provisioned-email",
+};
+
 
 export function sanitizeErrorMessage(msg?: string): string {
   if (!msg) return "Unknown error";
@@ -21,42 +50,20 @@ export function sanitizeErrorMessage(msg?: string): string {
     .substring(0, 1000);
 }
 
-export function resolveAutomationServiceSecret(): string {
-  const secret = process.env.AUTOMATION_SERVICE_SECRET;
-  const isProduction = process.env.NODE_ENV === "production";
-
-  if (!secret || secret.trim() === "") {
-    if (isProduction) {
-      throw new Error(
-        "Missing required AUTOMATION_SERVICE_SECRET in production",
-      );
-    }
-    return "";
-  }
-
-  if (isProduction) {
-    const lower = secret.toLowerCase();
-    if (
-      lower === "placeholder" ||
-      lower === "changeme" ||
-      lower === "secret" ||
-      lower.includes("placeholder") ||
-      secret.length < 32
-    ) {
-      throw new Error(
-        "Insecure AUTOMATION_SERVICE_SECRET in production: minimum 32 chars required and cannot be a placeholder",
-      );
-    }
-  }
-
-  return secret.trim();
-}
-
 /**
  * Resolves the target n8n webhook URL for a given job type.
- * Supports multi-route dispatch per job type or base URL route mapping.
+ * STRICT route mapping: unknown/unsupported job types (including the
+ * intentionally unsupported EXTERNAL_ALLOCATION_EMAIL) are rejected with a
+ * controlled configuration error — never silently fallen back to a base URL.
  */
 export function resolveWebhookUrlForJobType(jobType: string): string | null {
+  const webhookPath = WEBHOOK_PATH_BY_JOB_TYPE[jobType];
+  if (!webhookPath) {
+    throw new Error(
+      `Unsupported automation job type '${jobType}': no n8n route mapping is configured for this type in Phase12 V1`,
+    );
+  }
+
   let specificUrl: string | undefined;
   if (jobType === "CMS_AI_DRAFT") {
     specificUrl = process.env.N8N_CMS_AI_DRAFT_WEBHOOK_URL;
@@ -73,15 +80,7 @@ export function resolveWebhookUrlForJobType(jobType: string): string | null {
   let candidateUrl = specificUrl;
   if (!candidateUrl && baseUrl) {
     const trimmedBase = baseUrl.trim().replace(/\/+$/, "");
-    if (jobType === "CMS_AI_DRAFT") {
-      candidateUrl = `${trimmedBase}/webhook/cms-ai-draft`;
-    } else if (jobType === "ORDER_PAID_EMAIL") {
-      candidateUrl = `${trimmedBase}/webhook/order-paid-email`;
-    } else if (jobType === "LICENSE_PROVISIONED_EMAIL") {
-      candidateUrl = `${trimmedBase}/webhook/license-provisioned-email`;
-    } else {
-      candidateUrl = baseUrl;
-    }
+    candidateUrl = `${trimmedBase}${webhookPath}`;
   }
 
   if (!candidateUrl || candidateUrl.trim() === "") {
@@ -240,6 +239,27 @@ export async function dispatchPendingAutomationJobs(
     return { claimedCount: 0, dispatchedCount: 0 };
   }
 
+  // Pre-claim route validation (Phase 12 Round 3, §22): validate configured
+  // routes for all supported, enabled job types BEFORE claiming anything.
+  // A job type may be intentionally disabled via N8N_DISABLED_JOB_TYPES
+  // (comma-separated); disabled types are excluded from processing entirely.
+  const routeCheck = validateAutomationRoutes();
+  if (!routeCheck.valid) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        service: "worker",
+        event: "automation_routes_invalid",
+        missingRoutes: routeCheck.missing,
+        disabledTypes: routeCheck.disabled,
+        action: "skipping_claim_cycle",
+      }),
+    );
+    return { claimedCount: 0, dispatchedCount: 0 };
+  }
+
+  const disabledTypes = new Set(routeCheck.disabled);
+
   const claimedJobs = await claimDueAutomationJobs({
     limit: batchSize,
     workerId,
@@ -250,25 +270,35 @@ export async function dispatchPendingAutomationJobs(
     return { claimedCount: 0, dispatchedCount: 0 };
   }
 
+  // Defense in depth: never dispatch a disabled or unsupported type even if
+  // it somehow got claimed (enqueue-side guard is the primary control).
+  const dispatchableJobs = claimedJobs.filter(
+    (j) =>
+      !disabledTypes.has(j.type) && SUPPORTED_AUTOMATION_JOB_TYPES.has(j.type),
+  );
+
   console.log(
     JSON.stringify({
       level: "info",
       service: "worker",
       event: "automation_jobs_claimed",
       workerId,
-      count: claimedJobs.length,
-      jobIds: claimedJobs.map((j) => j.id),
+      count: dispatchableJobs.length,
+      jobIds: dispatchableJobs.map((j) => j.id),
       timestamp: new Date().toISOString(),
     }),
   );
 
   let dispatchedCount = 0;
 
-  for (const job of claimedJobs) {
+  for (const job of dispatchableJobs) {
     let webhookUrl: string | null = null;
     try {
       webhookUrl = resolveWebhookUrlForJobType(job.type);
     } catch (urlErr: any) {
+      // Controlled unsupported-route configuration error (§24): settle the
+      // claimed job coherently instead of leaving it stranded in RUNNING
+      // until lease expiry.
       console.error(
         JSON.stringify({
           level: "error",
@@ -279,6 +309,8 @@ export async function dispatchPendingAutomationJobs(
           error: urlErr.message,
         }),
       );
+      await failClaimedJobForRouteConfiguration(job, urlErr.message);
+      continue;
     }
 
     if (!webhookUrl) {
@@ -318,6 +350,9 @@ export async function dispatchPendingAutomationJobs(
             lastErrorMessage: sanitizedError,
           },
         });
+        // Delivery lifecycle (§26): a retryable dispatch failure returns the
+        // delivery to PENDING. Never leave it SENDING.
+        await settleDeliveryAfterDispatchFailure(job, false);
       } else {
         await prisma.automationJob.update({
           where: { id: job.id },
@@ -329,6 +364,9 @@ export async function dispatchPendingAutomationJobs(
             lastErrorMessage: sanitizedError,
           },
         });
+        // Delivery lifecycle (§27): terminal dispatch failure marks the
+        // delivery FAILED alongside the job.
+        await settleDeliveryAfterDispatchFailure(job, true);
       }
 
       console.warn(
@@ -347,4 +385,110 @@ export async function dispatchPendingAutomationJobs(
   }
 
   return { claimedCount: claimedJobs.length, dispatchedCount };
+}
+
+/**
+ * Route-configuration failure on an already-claimed job (§21/§25): settle
+ * job FAILED + delivery FAILED with error metadata, instead of leaving the
+ * freshly claimed job stranded in RUNNING until lease expiry.
+ */
+export async function failClaimedJobForRouteConfiguration(
+  job: ClaimedAutomationJob,
+  reason: string,
+): Promise<void> {
+  const sanitizedError = sanitizeErrorMessage(reason);
+  try {
+    await prisma.automationDelivery.updateMany({
+      where: { jobId: job.id },
+      data: { status: AutomationDeliveryStatus.FAILED },
+    });
+  } catch {
+    // delivery record might not exist for some job types
+  }
+  await prisma.automationJob.update({
+    where: { id: job.id },
+    data: {
+      status: AutomationJobStatus.FAILED,
+      completedAt: new Date(),
+      leaseUntil: null,
+      lastErrorCode: "ROUTE_UNCONFIGURED",
+      lastErrorMessage: sanitizedError,
+    },
+  });
+}
+
+/**
+ * Delivery lifecycle settlement after a failed dispatch attempt (§26/§27):
+ *  - retryable failure  -> delivery returns to PENDING (never left SENDING)
+ *  - terminal failure   -> delivery marked FAILED
+ */
+export async function settleDeliveryAfterDispatchFailure(
+  job: ClaimedAutomationJob,
+  terminal: boolean,
+): Promise<void> {
+  const deliveryId = (job.payloadJson as any)?.deliveryId;
+  if (!deliveryId) {
+    return;
+  }
+  try {
+    await prisma.automationDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: terminal
+          ? AutomationDeliveryStatus.FAILED
+          : AutomationDeliveryStatus.PENDING,
+      },
+    });
+  } catch {
+    // delivery record might not exist for some job types
+  }
+}
+
+export interface AutomationRouteValidationResult {
+  valid: boolean;
+  /** Supported + enabled job types whose n8n route cannot be resolved. */
+  missing: string[];
+  /** Job types explicitly disabled via N8N_DISABLED_JOB_TYPES. */
+  disabled: string[];
+}
+
+/**
+ * Reads explicitly disabled automation job types (§22).
+ * N8N_DISABLED_JOB_TYPES is a comma-separated list, e.g. "ORDER_PAID_EMAIL".
+ */
+export function getDisabledAutomationJobTypes(): Set<string> {
+  const raw = process.env.N8N_DISABLED_JOB_TYPES || "";
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean),
+  );
+}
+
+/**
+ * Pre-claim validation (§5/§22): every supported job type that is not
+ * explicitly disabled must have a resolvable n8n webhook route.
+ * Misconfiguration is reported BEFORE any claim so nothing can be stranded
+ * in RUNNING because of a configuration error discovered after the claim.
+ */
+export function validateAutomationRoutes(): AutomationRouteValidationResult {
+  const disabled = getDisabledAutomationJobTypes();
+  const missing: string[] = [];
+  for (const type of SUPPORTED_AUTOMATION_JOB_TYPES) {
+    if (disabled.has(type)) continue;
+    try {
+      const url = resolveWebhookUrlForJobType(type);
+      if (!url) {
+        missing.push(type);
+      }
+    } catch {
+      missing.push(type);
+    }
+  }
+  return {
+    valid: missing.length === 0,
+    missing,
+    disabled: Array.from(disabled),
+  };
 }

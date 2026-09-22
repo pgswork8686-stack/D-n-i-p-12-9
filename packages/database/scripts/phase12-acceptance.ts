@@ -15,6 +15,7 @@ import {
 import {
   signAutomationPayload,
   verifyAutomationSignature,
+  resolveAutomationServiceSecret,
   slugify,
   isReservedSlug,
   sanitizeContentHtml,
@@ -1378,28 +1379,38 @@ async function runPhase12Acceptance() {
     console.log("✓ Gate 49 passed: Phase 11 CMS workflow preserved\n");
 
     // ----------------------------------------------------
-    // [Gate 50] Monorepo regression invariants verified
+    // [Gate 50] EXTERNAL_ALLOCATION_EMAIL unsupported → fails closed
     // ----------------------------------------------------
-    console.log("[Gate 50] Monorepo regression invariants verified...");
-    const allOrders = await prisma.order.findMany({ take: 10 });
-    for (const o of allOrders) {
-      if (typeof o.totalAmount !== "number" || o.totalAmount < 0) {
-        throw new Error(`Gate 50 failed: order ${o.id} has invalid totalAmount`);
+    console.log(
+      "[Gate 50] Unsupported EXTERNAL_ALLOCATION_EMAIL fails closed...",
+    );
+    {
+      const res50 = await fetch(`${API_BASE}/v1/admin/automation/jobs`, {
+        method: "POST",
+        headers: devAdminHeaders,
+        body: JSON.stringify({
+          type: "EXTERNAL_ALLOCATION_EMAIL",
+          idempotencyKey: `ext-alloc-${runId}`,
+          payloadJson: { foo: "bar" },
+        }),
+      });
+      if (res50.status !== 400 && res50.status !== 403 && res50.status !== 404) {
+        throw new Error(
+          `Gate 50 failed: unsupported EXTERNAL_ALLOCATION_EMAIL must be rejected, got ${res50.status}`,
+        );
+      }
+      const persistedExternal = await prisma.automationJob.findUnique({
+        where: { idempotencyKey: `ext-alloc-${runId}` },
+      });
+      if (persistedExternal) {
+        throw new Error(
+          "Gate 50 failed: unsupported EXTERNAL_ALLOCATION_EMAIL job must NOT be persisted",
+        );
       }
     }
-    const allEntitlements = await prisma.entitlement.findMany({ take: 10 });
-    for (const e of allEntitlements) {
-      if (!e.userId || !e.status) {
-        throw new Error(`Gate 50 failed: entitlement ${e.id} missing userId or status`);
-      }
-    }
-    const allLicenses = await prisma.internalLicense.findMany({ take: 10 });
-    for (const l of allLicenses) {
-      if (!l.keyCiphertext || !l.keyLast4 || l.keyLast4.length !== 4) {
-        throw new Error(`Gate 50 failed: license ${l.id} invalid structure`);
-      }
-    }
-    console.log("✓ Gate 50 passed: Core commerce, catalog, and entitlements intact\n");
+    console.log(
+      "✓ Gate 50 passed: unsupported external allocation automation fails closed (no job persisted)\n",
+    );
 
     // ----------------------------------------------------
     // [Gate 51] Stale RUNNING recovery (leaseUntil < NOW())
@@ -1529,23 +1540,63 @@ async function runPhase12Acceptance() {
     console.log("✓ Gate 54 passed: Rate limit strictly enforced (max 3 active jobs)\n");
 
     // ----------------------------------------------------
-    // [Gate 55] Production placeholder secret rejected
+    // [Gate 55] Production placeholder secret rejected (REAL resolver test)
     // ----------------------------------------------------
-    console.log("[Gate 55] Insecure placeholder secret rejected in production...");
-    const verifyPlaceholder = verifyAutomationSignature({
-      service: "n8n",
-      method: "POST",
-      path: "/test",
-      timestamp: Date.now().toString(),
-      requestId: "req-ph",
-      body: {},
-      secret: "",
-      signature: "sig",
-    });
-    if (verifyPlaceholder.valid) {
-      throw new Error("Gate 55 failed: empty/missing secret must be invalid");
+    console.log(
+      "[Gate 55] resolveAutomationServiceSecret() production policy...",
+    );
+    {
+      const secretCases: Array<{
+        name: string;
+        value?: string;
+        shouldPass: boolean;
+      }> = [
+        { name: "missing", value: undefined, shouldPass: false },
+        { name: "placeholder", value: "placeholder", shouldPass: false },
+        { name: "changeme", value: "changeme", shouldPass: false },
+        { name: "secret", value: "secret", shouldPass: false },
+        { name: "short (<32)", value: "too-short-secret", shouldPass: false },
+        {
+          name: "valid strong (>=32)",
+          value: "a".repeat(40),
+          shouldPass: true,
+        },
+      ];
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevSecret = process.env.AUTOMATION_SERVICE_SECRET;
+      process.env.NODE_ENV = "production";
+      try {
+        for (const tc of secretCases) {
+          delete process.env.AUTOMATION_SERVICE_SECRET;
+          if (tc.value !== undefined) {
+            process.env.AUTOMATION_SERVICE_SECRET = tc.value;
+          }
+          let accepted = false;
+          try {
+            const resolved = resolveAutomationServiceSecret();
+            accepted = typeof resolved === "string" && resolved.length >= 32;
+          } catch {
+            accepted = false;
+          }
+          if (accepted !== tc.shouldPass) {
+            throw new Error(
+              `Gate 55 failed: production secret '${tc.name}' must ${
+                tc.shouldPass ? "be ACCEPTED" : "be REJECTED"
+              }`,
+            );
+          }
+        }
+      } finally {
+        if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = prevNodeEnv;
+        if (prevSecret === undefined)
+          delete process.env.AUTOMATION_SERVICE_SECRET;
+        else process.env.AUTOMATION_SERVICE_SECRET = prevSecret;
+      }
     }
-    console.log("✓ Gate 55 passed: Insecure/missing secret rejected\n");
+    console.log(
+      "✓ Gate 55 passed: production secret resolver fails closed on missing/placeholder/changeme/secret/short, accepts strong secret\n",
+    );
 
     // ----------------------------------------------------
     // [Gate 56] Concurrent multi-job batch claim without collision

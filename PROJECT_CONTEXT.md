@@ -366,9 +366,6 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 ### Phase 11: CMS & SEO Publishing Platform
 **Status**: MERGED (PR #14 MERGED, Approved HEAD: `5ec0d43e3dcf58748ef01477e6f565cafaacc41e`, Merge Commit: `b304567eb460820d59a0b06f08e87b8631078cf5`, Merged At: `2026-09-19T03:00:04Z`, Acceptance: 65/65 Gates Green)
 
-### Phase 12: n8n Automation & AI Content Orchestration
-**Status**: IN PROGRESS (Branch: `feature/phase-12-n8n-automation`, Base: `b304567eb460820d59a0b06f08e87b8631078cf5`)
-
 - **CMS Database Domain & Additive Migration**: Added `ContentCategory` and `ContentPost` models with enums `ContentStatus` (`IDEA`, `DRAFT`, `AI_DRAFT`, `REVIEW`, `SCHEDULED`, `PUBLISHED`, `ARCHIVED`) and `ContentType` (`ARTICLE`, `PAGE`). Relation between `User` and `ContentPost` via `authorId`. Migration `20260918000000_20260918_phase11_cms_seo` applied additively without touching commerce, license, entitlement, or payment tables.
 - **Authoritative State Machine & Lifecycle Transitions**: Implemented state machine engine in `@nexus/database` (`isValidContentTransition`) enforcing transition matrix:
   - `IDEA` -> `DRAFT`
@@ -410,45 +407,21 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
   - Comprehensive audit logging: `CONTENT_CREATED`, `CONTENT_UPDATED`, `CONTENT_STATUS_CHANGED`, `CONTENT_PUBLISHED`, `CONTENT_ARCHIVED`, `CONTENT_AUTO_PUBLISHED`.
 - **65-Gate Acceptance Test Suite (`phase11-acceptance.ts`)**: Built comprehensive 65-gate end-to-end verification suite covering category taxonomy, Vietnamese slug generation, collision resolution, parser-based HTML sanitization, reading time, SEO metadata, full transition state machine, worker scheduled publishing, public anti-enumeration, RBAC isolation, audit trails, sitemap/robots validation, category filtering/exclusion, pagination disjointness, worker race condition claims, API CAS concurrency, initial status restrictions, scheduledAt creation rejection, image URL validation, real sitemap/robots integration, static architecture guard (zero Prisma in frontend), truthful product JSON-LD builder, authoritative URL resolvers, truthful article JSON-LD author invariant, and static admin URL origin guard.
 
-## Security baseline
-- HTTPS, Cloudflare WAF, RBAC, MFA cho admin
-- Rate limiting
-- Signed webhooks + idempotency
-- CSRF nếu cookie auth
-- Refresh token rotation
-- Secrets không commit Git
-- DB private
-- R2 signed URL
-- Upload validation
-- Audit logs
-- Backup + restore test
-- Không log password/access token/provider secret/payment secret
+- **n8n Pinned Runtime & Real Smoke**: Workflows validated against pinned `n8nio/n8n:2.40.0` (documented in `automation/n8n/README.md`); real container smoke (`pnpm n8n:smoke`) boots n8n 2.40.0, waits for `/healthz`, loads workflows, executes Code nodes with `NODE_FUNCTION_ALLOW_BUILTIN=crypto` (crypto only, never `*`), and exercises signed ingress against local mock providers with zero real OpenAI/Resend calls.
+### Phase 12: n8n Automation & AI Content Orchestration
+**Status**: IMPLEMENTED / UNDER REVIEW (PR #15 OPEN — NOT MERGED; Branch: `feature/phase-12-n8n-automation`; Reviewed HEAD: `dc9ce829733e59494f5e59c9012e0830be5c81cd`; Round 3 resolution pushed on top; Acceptance: 68/68 Gates Green — real assertions only, zero print-only gates; n8n runtime pinned: 2.40.0; Phase 13: NOT STARTED)
 
-## Review rubric
-```text
-STATUS: PASS / NEED FIX / BLOCKER
 
-BLOCKER: sai kiến trúc, mất dữ liệu, lỗ hổng nghiêm trọng
-HIGH: business logic/security/test quan trọng
-MEDIUM: consistency/maintainability/DX
-LOW: cleanup/cosmetic
-```
-
-Checklist review:
-1. Đúng domain boundary?
-2. Business logic nằm backend?
-3. Có bypass entitlement/payment/auth?
-4. Webhook/idempotency an toàn?
-5. Frontend/n8n có ghi DB trực tiếp?
-6. Có public secret/private URL?
-7. Có test happy path + failure path?
-8. Migration an toàn?
-9. Error handling/logging đủ?
-10. Bám đúng PROJECT_CONTEXT.md?
-
-## Milestone đầu tiên
-Không ưu tiên homepage.
-
-Milestone 01: **foundation + product/admin + một vertical slice Elementor chạy end-to-end trên test data**.
-
-Chỉ mở rộng sau khi milestone này PASS review.
+- **Strict Type-to-Route Mapping**: `resolveWebhookUrlForJobType()` maps `CMS_AI_DRAFT`, `ORDER_PAID_EMAIL`, and `LICENSE_PROVISIONED_EMAIL` to dedicated `N8N_*_WEBHOOK_URL` routes; unknown/unsupported types (including `EXTERNAL_ALLOCATION_EMAIL`, intentionally unsupported in Phase 12 V1) fail closed and are never dispatched to a base URL. Pre-claim route validation prevents claiming jobs without a usable secure target; `N8N_DISABLED_JOB_TYPES` models explicit opt-outs.
+- **Shared Secret Resolver (Fail-Closed)**: `resolveAutomationServiceSecret()` in `@nexus/utils` is the single policy for worker and API: production rejects missing/`placeholder`/`changeme`/`secret` and <32-char secrets; only 32+-char strong secrets are accepted; any unit fallback is strictly gated behind `NODE_ENV==="test"`.
+- **Distributed Replay Protection**: API callback guard and n8n ingress verification share `claimAutomationReplayKey()` (Redis `SET key 1 NX PX 600000`); Redis outage fails closed (503, zero business mutation); multi-instance proof runs two guard contexts on one Redis — guard A accepts, guard B receives 409.
+- **Timing-Safe HMAC & Ingress Verification**: every workflow is Webhook → Verify Nexus Dispatch → provider; the verifier enforces `X-Nexus-Service=worker`, fresh timestamp, `X-Nexus-Request-Id`, hex signature validation, `crypto.timingSafeEqual` (never `===`), per-workflow expected job type, and Redis replay claim BEFORE any provider call; wrong service / expired timestamp / bad or replayed signature reach zero providers.
+- **Provider Idempotency (Resend)**: backend-created notification payloads carry the authoritative `providerIdempotencyKey` (`email:order-paid:<orderId>`, `email:license-provisioned:<licenseId>`); n8n forwards it verbatim as `Idempotency-Key`; neither browser nor n8n can generate or override it; callback-loss + redispatch reuses the same key so logical customer emails stay at exactly one.
+- **n8n Credential Store & Env Policy**: OpenAI and Resend are referenced through n8n credential types only — zero literal API keys and no `Bearer {{ $env.* }}` construction in workflow JSON; `AUTOMATION_SERVICE_SECRET` remains a runtime-only HMAC secret; production execution-data retention documented (no plaintext license keys persisted anywhere).
+- **Provider Failure Callbacks**: all three workflows implement failure branches (429/5xx/timeout → sanitized `AI_HTTP_429`, `EMAIL_HTTP_5XX`, `PROVIDER_TIMEOUT` codes with safe messages, never raw provider bodies) that POST signed `/v1/internal/automation/jobs/:id/fail`, giving jobs controlled failure/retry classification instead of idling until lease expiry.
+- **Delivery Lifecycle**: typed `AutomationDeliveryStatus` (`PENDING`, `SENDING`, `SENT`, `FAILED`); retryable dispatch failure returns delivery to `PENDING`, terminal failure sets `FAILED` with error metadata, and only the provider-success callback sets `SENT` with `sentAt` and stored `providerMessageId`; a 2xx from the n8n webhook never marks SENT.
+- **Fail-Closed PostgreSQL Locks**: `lockJobForUpdate()` executes real `SELECT ... FOR UPDATE` and any production lock failure throws — no silent `findUnique` downgrade (fallback only when `NODE_ENV==="test"` with mocked `$queryRaw`); `pg_advisory_xact_lock` AI rate limiting fails closed so the max-3 concurrent AI job cost control cannot be raced.
+- **AI Callback Linearization**: `applyAiDraftResult` strictly requires `CMS_AI_DRAFT + RUNNING` (PENDING/FAILED/CANCELLED rejected, SUCCEEDED idempotent), locks the job row `FOR UPDATE` inside one transaction, resolves slugs with bounded P2002 collision retry (suffix increment, ≤100 attempts), and 20 concurrent callbacks produce exactly one `ContentPost`; the generic `/jobs/:id/complete` endpoint rejects `CMS_AI_DRAFT` outright.
+- **68-Gate Acceptance Suite (Real Assertions Only)**: real PostgreSQL/Redis/HTTP gates including production secret policy, Redis-outage 503 fail-closed, multi-guard distributed replay, valid signed ingress, invalid-HMAC zero provider calls, replay blocks second AI generation, Resend `Idempotency-Key` presence, callback-loss + redispatch single logical email, delivery PENDING/FAILED dispatch lifecycle, pre-claim route safety, cross-job same-slug race safety, and lock fail-closed behavior; former print-only/structural gates replaced with real ones (Gate 50 unsupported-type fail-closed, Gate 55 real production resolver policy).
+- **Static Workflow Validator**: `pnpm n8n:validate` parses the nodes+connections graph (not just strings): webhook→verify-before-provider reachability, per-workflow job-type checks, timing-safe HMAC marker, Redis replay protection, `Idempotency-Key` on both email workflows, credential-only auth, zero database nodes, zero localhost production URLs, zero connection strings, and mandatory failure callback presence.
+- **CI**: Phase 12 workflow runs static validation plus the mandatory real n8n 2.40.0 runtime smoke (no `continue-on-error`) alongside Postgres/Redis/MinIO services; CI never contacts real OpenAI or Resend — local mock provider endpoints only.

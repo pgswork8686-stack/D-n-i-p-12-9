@@ -19,36 +19,44 @@ import {
 export class CreateAiDraftRequestDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(500)
   topic!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(10000)
   brief!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(16)
   language!: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(200)
   targetKeyword?: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(50)
   tone?: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(50)
   desiredLength?: string;
 }
 
 export class QueryAutomationJobsDto {
   @IsOptional()
   @IsString()
+  @MaxLength(32)
   status?: AutomationJobStatus;
 
   @IsOptional()
   @IsString()
+  @MaxLength(64)
   type?: AutomationJobType;
 
   @IsOptional()
@@ -65,22 +73,42 @@ export class QueryAutomationJobsDto {
   limit?: number = 20;
 }
 
-export class AutomationCallbackCompleteDto {
+/**
+ * Narrow completion contract for notification jobs (§14): the generic
+ * complete endpoint MUST NOT accept arbitrary unbounded JSON from n8n.
+ */
+export class EmailCompletionResultDto {
   @IsOptional()
-  resultJson?: any;
+  @IsBoolean()
+  sent?: boolean;
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
+  providerMessageId?: string;
+}
+
+export class AutomationCallbackCompleteDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => EmailCompletionResultDto)
+  resultJson?: EmailCompletionResultDto;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
   providerMessageId?: string;
 }
 
 export class AutomationCallbackFailDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(64)
   errorCode!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(1000)
   errorMessage!: string;
 
   @IsOptional()
@@ -91,10 +119,12 @@ export class AutomationCallbackFailDto {
 export class AiDraftOutputDto implements AiDraftOutputContract {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(500)
   title!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2000)
   excerpt!: string;
 
   @IsString()
@@ -104,14 +134,17 @@ export class AiDraftOutputDto implements AiDraftOutputContract {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(500)
   seoTitle!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(1000)
   seoDescription!: string;
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   suggestedSlug!: string;
 }
 

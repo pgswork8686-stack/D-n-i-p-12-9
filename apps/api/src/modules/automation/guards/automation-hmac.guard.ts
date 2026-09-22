@@ -10,7 +10,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
-import { verifyAutomationSignature } from "@nexus/utils";
+import { verifyAutomationSignature, claimAutomationReplayKey } from "@nexus/utils";
 
 @Injectable()
 export class AutomationHmacGuard implements CanActivate, OnModuleDestroy {
@@ -131,14 +131,13 @@ export class AutomationHmacGuard implements CanActivate, OnModuleDestroy {
       );
     }
 
-    // Distributed replay protection via Redis:
+    // Distributed replay protection via Redis (shared helper):
     // Atomic SET NX PX 600000 key: automation:hmac:replay:<service>:<requestId>
     // Fail-closed 503 if Redis is down, 409 if duplicate requestId.
     try {
       const redis = this.getRedis();
-      const replayKey = `automation:hmac:replay:${serviceName}:${requestId}`;
-      const setResult = await redis.set(replayKey, "1", "PX", 600000, "NX");
-      if (!setResult) {
+      const claim = await claimAutomationReplayKey(redis, serviceName, requestId);
+      if (claim.outcome === "duplicate") {
         throw new ConflictException(
           "Replay attack detected: duplicate request ID",
         );
