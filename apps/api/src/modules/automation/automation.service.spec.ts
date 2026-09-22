@@ -43,6 +43,9 @@ describe("AutomationService", () => {
     // Default $executeRaw / $queryRaw mocks
     jest.spyOn(prisma, "$queryRaw").mockResolvedValue([]);
     jest.spyOn(prisma, "$executeRaw").mockResolvedValue(1);
+    jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(null);
+    jest.spyOn(prisma.automationJob, "findFirst").mockResolvedValue(null);
+    jest.spyOn(prisma.automationJob, "count").mockResolvedValue(0);
 
     jest.clearAllMocks();
   });
@@ -307,6 +310,7 @@ describe("AutomationService", () => {
 
   describe("AI Draft Orchestration & Content Authority", () => {
     it("enforces rate limit of max 3 active AI draft jobs per admin", async () => {
+      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(null);
       jest.spyOn(prisma.automationJob, "count").mockResolvedValue(3);
 
       await expect(
