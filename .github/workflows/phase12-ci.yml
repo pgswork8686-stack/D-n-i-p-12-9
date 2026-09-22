@@ -114,6 +114,9 @@ jobs:
       - name: Validate n8n workflows
         run: pnpm n8n:validate
 
+      - name: Real n8n runtime smoke
+        run: pnpm n8n:smoke
+
       - name: Lint
         run: pnpm lint
 

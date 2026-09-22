@@ -37,6 +37,7 @@ export interface ClaimAutomationJobsOptions {
   workerId?: string;
   leaseMinutes?: number;
   now?: Date;
+  allowedTypes?: AutomationJobType[];
 }
 
 export interface ClaimedAutomationJob {
@@ -51,6 +52,10 @@ export interface ClaimedAutomationJob {
 
 /**
  * Atomically claims pending or stale-running automation jobs using PostgreSQL 'FOR UPDATE SKIP LOCKED'.
+ * Enforces:
+ *  - Stale exhausted jobs (attempt_count >= max_attempts) are terminalized to FAILED before claiming.
+ *  - Only jobs with attempt_count < max_attempts can be claimed.
+ *  - If allowedTypes is provided, jobs of non-allowed types are excluded before claim.
  * Guarantees exactly-one processing among concurrent workers.
  */
 export async function claimDueAutomationJobs(
@@ -60,16 +65,63 @@ export async function claimDueAutomationJobs(
   const limit = options.limit ?? 10;
   const leaseMinutes = options.leaseMinutes ?? 5;
 
-  // Use raw SQL with FOR UPDATE SKIP LOCKED to prevent races
-  try {
-    const claimedRows = await client.$queryRaw<{ id: string }[]>`
+  const runClaimInTx = async (tx: Prisma.TransactionClient) => {
+    // Step A: Terminalize stale exhausted RUNNING jobs (attempt_count >= max_attempts)
+    const exhaustedRows = await tx.$queryRaw<{ id: string }[]>`
+      UPDATE automation_jobs
+      SET
+        status = 'FAILED'::"AutomationJobStatus",
+        completed_at = NOW(),
+        lease_until = NULL,
+        last_error_code = 'MAX_ATTEMPTS_EXHAUSTED',
+        last_error_message = 'Execution lease expired and maximum attempts exhausted',
+        updated_at = NOW()
+      WHERE status = 'RUNNING'::"AutomationJobStatus"
+        AND lease_until IS NOT NULL
+        AND lease_until < NOW()
+        AND attempt_count >= max_attempts
+      RETURNING id;
+    `;
+
+    if (exhaustedRows && exhaustedRows.length > 0) {
+      const exhaustedIds = exhaustedRows.map((r) => r.id);
+      await tx.automationDelivery.updateMany({
+        where: {
+          jobId: { in: exhaustedIds },
+          status: {
+            in: [
+              AutomationDeliveryStatus.PENDING,
+              AutomationDeliveryStatus.SENDING,
+            ],
+          },
+        },
+        data: { status: AutomationDeliveryStatus.FAILED },
+      });
+    }
+
+    // Step B: Build allowedTypes filter
+    let typeFilterSql = Prisma.empty;
+    if (options.allowedTypes !== undefined) {
+      if (options.allowedTypes.length === 0) {
+        typeFilterSql = Prisma.sql`AND 1=0`;
+      } else {
+        typeFilterSql = Prisma.sql`AND type IN (${Prisma.join(
+          options.allowedTypes.map((t) => Prisma.sql`${t}::"AutomationJobType"`),
+        )})`;
+      }
+    }
+
+    // Claim due jobs where attempt_count < max_attempts
+    const claimedRows = await tx.$queryRaw<{ id: string }[]>`
       WITH claimable AS (
         SELECT id
         FROM automation_jobs
-        WHERE (
-          (status = 'PENDING'::"AutomationJobStatus" AND (scheduled_at IS NULL OR scheduled_at <= NOW()))
-          OR (status = 'RUNNING'::"AutomationJobStatus" AND lease_until IS NOT NULL AND lease_until < NOW())
-        )
+        WHERE attempt_count < max_attempts
+          ${typeFilterSql}
+          AND (
+            (status = 'PENDING'::"AutomationJobStatus" AND (scheduled_at IS NULL OR scheduled_at <= NOW()))
+            OR (status = 'RUNNING'::"AutomationJobStatus" AND lease_until IS NOT NULL AND lease_until < NOW())
+          )
         ORDER BY created_at ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
@@ -91,15 +143,53 @@ export async function claimDueAutomationJobs(
     }
 
     const ids = claimedRows.map((r) => r.id);
-    const jobs = await client.automationJob.findMany({
+    const jobs = await tx.automationJob.findMany({
       where: { id: { in: ids } },
     });
 
     return jobs as unknown as ClaimedAutomationJob[];
+  };
+
+  try {
+    if ("$transaction" in client && typeof (client as any).$transaction === "function") {
+      return await (client as any).$transaction(runClaimInTx);
+    }
+    return await runClaimInTx(client as Prisma.TransactionClient);
   } catch (err: any) {
     if (process.env.NODE_ENV === "test") {
       // Test fallback when raw query fails (e.g. SQLite or mock)
-      const claimable = await client.automationJob.findMany({
+      // Step A: Terminalize exhausted stale jobs
+      const staleRunning = await client.automationJob.findMany({
+        where: {
+          status: AutomationJobStatus.RUNNING,
+          leaseUntil: { lt: new Date() },
+        },
+      });
+
+      const exhausted = staleRunning.filter((j) => j.attemptCount >= j.maxAttempts);
+      for (const j of exhausted) {
+        await client.automationJob.update({
+          where: { id: j.id },
+          data: {
+            status: AutomationJobStatus.FAILED,
+            completedAt: new Date(),
+            leaseUntil: null,
+            lastErrorCode: "MAX_ATTEMPTS_EXHAUSTED",
+            lastErrorMessage: "Execution lease expired and maximum attempts exhausted",
+          },
+        });
+        await client.automationDelivery.updateMany({
+          where: {
+            jobId: j.id,
+            status: { in: [AutomationDeliveryStatus.PENDING, AutomationDeliveryStatus.SENDING] },
+          },
+          data: { status: AutomationDeliveryStatus.FAILED },
+        });
+      }
+
+      // Step B: Claim
+      const allowedSet = options.allowedTypes ? new Set(options.allowedTypes) : null;
+      const allDue = await client.automationJob.findMany({
         where: {
           OR: [
             {
@@ -112,8 +202,16 @@ export async function claimDueAutomationJobs(
             },
           ],
         },
-        take: limit,
+        orderBy: { createdAt: "asc" },
       });
+
+      const claimable = allDue
+        .filter(
+          (j) =>
+            j.attemptCount < j.maxAttempts &&
+            (!allowedSet || allowedSet.has(j.type as AutomationJobType)),
+        )
+        .slice(0, limit);
 
       const claimed: ClaimedAutomationJob[] = [];
       for (const job of claimable) {

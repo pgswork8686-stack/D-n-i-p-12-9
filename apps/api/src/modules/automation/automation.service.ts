@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Logger,
 } from "@nestjs/common";
 import {
@@ -9,6 +10,7 @@ import {
   Prisma,
   AutomationJobStatus,
   AutomationJobType,
+  AutomationDeliveryStatus,
   ContentStatus,
 } from "@nexus/database";
 import {
@@ -23,6 +25,21 @@ import {
 } from "./dto/automation.dto";
 import { AuditService } from "../audit/audit.service";
 import * as crypto from "crypto";
+
+/**
+ * Computes a deterministic SHA-256 fingerprint of the normalized AI draft request.
+ */
+export function computeAiDraftFingerprint(dto: CreateAiDraftRequestDto): string {
+  const canonical = JSON.stringify({
+    topic: (dto.topic || "").trim(),
+    brief: (dto.brief || "").trim(),
+    language: (dto.language || "").trim().toLowerCase(),
+    targetKeyword: dto.targetKeyword ? dto.targetKeyword.trim() : null,
+    tone: dto.tone ? dto.tone.trim() : null,
+    desiredLength: dto.desiredLength ? dto.desiredLength.trim() : null,
+  });
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
 
 @Injectable()
 export class AutomationService {
@@ -308,6 +325,17 @@ export class AutomationService {
           job.attemptCount === 1 ? 30 : job.attemptCount === 2 ? 120 : 600;
         const scheduledAt = new Date(Date.now() + backoffSeconds * 1000);
 
+        // Reset any actively SENDING delivery back to PENDING for retry
+        await tx.automationDelivery.updateMany({
+          where: {
+            jobId: id,
+            status: AutomationDeliveryStatus.SENDING,
+          },
+          data: {
+            status: AutomationDeliveryStatus.PENDING,
+          },
+        });
+
         return tx.automationJob.update({
           where: { id },
           data: {
@@ -321,9 +349,17 @@ export class AutomationService {
       }
 
       await tx.automationDelivery.updateMany({
-        where: { jobId: id },
+        where: {
+          jobId: id,
+          status: {
+            in: [
+              AutomationDeliveryStatus.SENDING,
+              AutomationDeliveryStatus.PENDING,
+            ],
+          },
+        },
         data: {
-          status: "FAILED",
+          status: AutomationDeliveryStatus.FAILED,
         },
       });
 
@@ -417,9 +453,32 @@ export class AutomationService {
   }
 
   /**
-   * Admin CMS Action: Submit AI draft request with concurrency-safe advisory rate limiting.
+   * Admin CMS Action: Submit AI draft request with concurrency-safe advisory rate limiting and request idempotency.
    */
-  async createAiDraftRequest(adminUserId: string, dto: CreateAiDraftRequestDto) {
+  async createAiDraftRequest(
+    adminUserId: string,
+    dto: CreateAiDraftRequestDto,
+    clientKey?: string,
+  ) {
+    if (clientKey !== undefined) {
+      if (typeof clientKey !== "string" || clientKey.trim().length === 0 || clientKey.trim().length > 255) {
+        throw new BadRequestException(
+          "Idempotency key must be a non-empty string between 1 and 255 characters",
+        );
+      }
+    }
+
+    const trimmedKey = clientKey?.trim();
+    const idempotencyKey = trimmedKey
+      ? `cms-ai-draft:${adminUserId}:${trimmedKey}`
+      : `cms-ai-draft:${adminUserId}:${crypto.randomUUID()}`;
+
+    const requestFingerprint = computeAiDraftFingerprint(dto);
+    const payloadWithFingerprint = {
+      ...(dto as any),
+      requestFingerprint,
+    };
+
     return prisma.$transaction(async (tx) => {
       // Fail-closed advisory rate-limit lock (Phase 12 Round 3, §10/§11):
       // the advisory lock, count and create share ONE transaction boundary.
@@ -432,6 +491,21 @@ export class AutomationService {
         throw new Error(
           "AI draft rate-limit advisory lock unavailable: transaction client has no $executeRaw (fail-closed)",
         );
+      }
+
+      // Check for existing job with same idempotency key (idempotent replay)
+      const existing = await tx.automationJob.findUnique({
+        where: { idempotencyKey },
+      });
+
+      if (existing) {
+        const storedFingerprint = (existing.payloadJson as any)?.requestFingerprint;
+        if (storedFingerprint && storedFingerprint !== requestFingerprint) {
+          throw new ConflictException(
+            "Idempotency key reused with different request payload",
+          );
+        }
+        return existing;
       }
 
       const activeCount = await tx.automationJob.count({
@@ -450,27 +524,44 @@ export class AutomationService {
         );
       }
 
-      const idempotencyKey = `cms-ai-draft:${crypto.randomUUID()}`;
-      const job = await tx.automationJob.create({
-        data: {
-          type: AutomationJobType.CMS_AI_DRAFT,
-          status: AutomationJobStatus.PENDING,
-          idempotencyKey,
-          payloadJson: dto as unknown as Prisma.InputJsonValue,
-          createdBy: adminUserId,
-          maxAttempts: 3,
-        },
-      });
+      try {
+        const job = await tx.automationJob.create({
+          data: {
+            type: AutomationJobType.CMS_AI_DRAFT,
+            status: AutomationJobStatus.PENDING,
+            idempotencyKey,
+            payloadJson: payloadWithFingerprint as unknown as Prisma.InputJsonValue,
+            createdBy: adminUserId,
+            maxAttempts: 3,
+          },
+        });
 
-      await this.auditService.logActionWithClient(tx, {
-        action: "AI_DRAFT_REQUESTED",
-        entity: "AutomationJob",
-        entityId: job.id,
-        actorId: adminUserId,
-        details: { topic: dto.topic, language: dto.language },
-      });
+        await this.auditService.logActionWithClient(tx, {
+          action: "AI_DRAFT_REQUESTED",
+          entity: "AutomationJob",
+          entityId: job.id,
+          actorId: adminUserId,
+          details: { topic: dto.topic, language: dto.language },
+        });
 
-      return job;
+        return job;
+      } catch (err: any) {
+        if (err?.code === "P2002") {
+          const concurrentExisting = await tx.automationJob.findUnique({
+            where: { idempotencyKey },
+          });
+          if (concurrentExisting) {
+            const storedFingerprint = (concurrentExisting.payloadJson as any)?.requestFingerprint;
+            if (storedFingerprint && storedFingerprint !== requestFingerprint) {
+              throw new ConflictException(
+                "Idempotency key reused with different request payload",
+              );
+            }
+            return concurrentExisting;
+          }
+        }
+        throw err;
+      }
     });
   }
 

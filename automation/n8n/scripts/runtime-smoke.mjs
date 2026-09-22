@@ -43,6 +43,7 @@ const counts = {
   openai: [],
   nexusComplete: [],
   nexusFail: [],
+  nexusAiDraft: [],
 };
 
 function sha256Hex(data) {
@@ -89,13 +90,25 @@ function startMockServer() {
           counts.nexusFail.push({ path: req.url, body: raw });
           res.statusCode = 200;
           res.end("{}");
+        } else if (req.url.startsWith("/v1/internal/automation/content-ai-draft-result")) {
+          const h = req.headers;
+          const sigOk = (() => {
+            if (!h["x-nexus-signature"] || !h["x-nexus-timestamp"] || !h["x-nexus-request-id"]) return false;
+            const expected = sign("n8n", "POST", req.url, h["x-nexus-timestamp"], h["x-nexus-request-id"], raw);
+            const a = Buffer.from(h["x-nexus-signature"], "hex");
+            const b = Buffer.from(expected, "hex");
+            return a.length === b.length && crypto.timingSafeEqual(a, b);
+          })();
+          counts.nexusAiDraft.push({ path: req.url, sigOk, service: h["x-nexus-service"], body: raw });
+          res.statusCode = sigOk ? 200 : 401;
+          res.end(JSON.stringify({ sigOk }));
         } else {
           res.statusCode = 404;
           res.end("{}");
         }
       });
     });
-    mockServer.listen(MOCK_PORT, () => resolve());
+    mockServer.listen(MOCK_PORT, "0.0.0.0", () => resolve());
   });
 }
 
@@ -340,7 +353,133 @@ async function main() {
     }
     console.log(`PASS: invalid signature (HTTP ${res3.status}) and wrong service (HTTP ${res4.status}) reached provider ZERO times`);
 
-    console.log("=== N8N RUNTIME SMOKE: ALL CHECKS PASSED ===");
+    // ----------------------------------------------------
+    // Execute LICENSE_PROVISIONED_EMAIL workflow
+    // ----------------------------------------------------
+    console.log("\n--- Testing LICENSE_PROVISIONED_EMAIL workflow ---");
+    const licJobId = "smoke-lic-" + Date.now();
+    const licReqId = "smoke-lic-disp-" + Date.now();
+    const licId = "lic-smoke-" + Date.now();
+    const licPayloadObj = {
+      jobId: licJobId,
+      type: "LICENSE_PROVISIONED_EMAIL",
+      payload: {
+        licenseId: licId,
+        recipientEmail: "license-user@example.test",
+        maskedKey: "NXS-****-****-9999",
+        providerIdempotencyKey: `email:license-provisioned:${licId}`,
+      },
+    };
+    const resendCountBeforeLic = counts.resend.length;
+
+    const resLic1 = await fetchWithTimeout(`http://localhost:${N8N_PORT}/webhook/license-provisioned-email`, {
+      method: "POST",
+      headers: signedDispatchHeaders(licPayloadObj, licReqId, { path: "/webhook/license-provisioned-email" }),
+      body: JSON.stringify(licPayloadObj),
+    });
+    console.log(`LICENSE_PROVISIONED_EMAIL dispatch HTTP status: ${resLic1.status}`);
+
+    await waitFor(() => counts.resend.length >= resendCountBeforeLic + 1, 45000, "mock Resend call for license email");
+    const licEmailRecord = counts.resend[counts.resend.length - 1];
+    if (licEmailRecord.idempotencyKey !== `email:license-provisioned:${licId}`) {
+      throw new Error("Provider did not receive authoritative Idempotency-Key for license (got: " + licEmailRecord.idempotencyKey + ")");
+    }
+    // Verify body does not contain unmasked license key
+    if (licEmailRecord.body.includes("NXS-") && !licEmailRecord.body.includes("NXS-****-****-")) {
+      throw new Error("License email body leaked unmasked key!");
+    }
+    console.log("PASS: valid signed dispatch reached mock Resend for license email with authoritative Idempotency-Key and masked key");
+
+    await waitFor(() => counts.nexusComplete.some((c) => c.path.includes(licJobId) && c.sigOk), 45000, "signed complete callback for license email");
+    console.log("PASS: n8n -> Nexus callback arrived with valid HMAC signature for license email");
+
+    // Replay same requestId -> mock Resend count must not increase
+    const licResendCountAfterSuccess = counts.resend.length;
+    await fetchWithTimeout(`http://localhost:${N8N_PORT}/webhook/license-provisioned-email`, {
+      method: "POST",
+      headers: signedDispatchHeaders(licPayloadObj, licReqId, { path: "/webhook/license-provisioned-email" }),
+      body: JSON.stringify(licPayloadObj),
+    });
+    await new Promise((r) => setTimeout(r, 4000));
+    if (counts.resend.length !== licResendCountAfterSuccess) {
+      throw new Error(`License email replay reached provider! resend count=${counts.resend.length}`);
+    }
+    console.log("PASS: license email replay rejected; provider calls did not increase");
+
+    // ----------------------------------------------------
+    // Execute CMS_AI_DRAFT workflow
+    // ----------------------------------------------------
+    console.log("\n--- Testing CMS_AI_DRAFT workflow ---");
+    const aiJobId = "smoke-ai-" + Date.now();
+    const aiReqId = "smoke-ai-disp-" + Date.now();
+    const aiPayloadObj = {
+      jobId: aiJobId,
+      type: "CMS_AI_DRAFT",
+      payload: {
+        topic: "E-Commerce Trends",
+        brief: "Write an overview of digital commerce trends",
+        language: "en",
+      },
+    };
+    const openaiCountBefore = counts.openai.length;
+
+    // Invalid HMAC test on AI workflow: provider count must NOT increase
+    const badAiBody = { ...aiPayloadObj, jobId: aiJobId + "-bad" };
+    await fetchWithTimeout(`http://localhost:${N8N_PORT}/webhook/cms-ai-draft`, {
+      method: "POST",
+      headers: signedDispatchHeaders(badAiBody, "smoke-bad-ai-" + Date.now(), { path: "/webhook/cms-ai-draft", badSignature: true }),
+      body: JSON.stringify(badAiBody),
+    });
+    await new Promise((r) => setTimeout(r, 3000));
+    if (counts.openai.length !== openaiCountBefore) {
+      throw new Error("Invalid HMAC on AI workflow reached OpenAI mock!");
+    }
+    console.log("PASS: invalid HMAC on CMS_AI_DRAFT reached mock OpenAI ZERO times");
+
+    // Valid dispatch to CMS_AI_DRAFT
+    const resAi = await fetchWithTimeout(`http://localhost:${N8N_PORT}/webhook/cms-ai-draft`, {
+      method: "POST",
+      headers: signedDispatchHeaders(aiPayloadObj, aiReqId, { path: "/webhook/cms-ai-draft" }),
+      body: JSON.stringify(aiPayloadObj),
+    });
+    console.log(`CMS_AI_DRAFT dispatch HTTP status: ${resAi.status}`);
+
+    await waitFor(() => counts.openai.length >= openaiCountBefore + 1, 45000, "mock OpenAI call");
+    const aiRecord = counts.openai[counts.openai.length - 1];
+    const parsedAiReq = JSON.parse(aiRecord.body);
+    if (!parsedAiReq.model) {
+      throw new Error("OpenAI request missing model");
+    }
+    if (parsedAiReq.response_format?.type !== "json_object") {
+      throw new Error("OpenAI request missing response_format: json_object");
+    }
+    if (!Array.isArray(parsedAiReq.messages) || parsedAiReq.messages.length === 0) {
+      throw new Error("OpenAI request missing messages array");
+    }
+    const userPrompt = parsedAiReq.messages[0].content || "";
+    if (!userPrompt.includes("E-Commerce Trends") && !userPrompt.includes("Write an overview of digital commerce trends")) {
+      throw new Error("OpenAI user prompt missing brief/topic content");
+    }
+    console.log("PASS: valid signed dispatch reached mock OpenAI with model, response_format, messages, and brief content");
+
+    // Verify callback to /v1/internal/automation/content-ai-draft-result arrived with valid HMAC
+    await waitFor(() => counts.nexusAiDraft.some((c) => c.sigOk), 45000, "signed content-ai-draft-result callback");
+    console.log("PASS: n8n -> Nexus content-ai-draft-result callback arrived with valid HMAC signature");
+
+    // Replay same requestId -> mock OpenAI count must not increase
+    const openaiCountAfterSuccess = counts.openai.length;
+    await fetchWithTimeout(`http://localhost:${N8N_PORT}/webhook/cms-ai-draft`, {
+      method: "POST",
+      headers: signedDispatchHeaders(aiPayloadObj, aiReqId, { path: "/webhook/cms-ai-draft" }),
+      body: JSON.stringify(aiPayloadObj),
+    });
+    await new Promise((r) => setTimeout(r, 4000));
+    if (counts.openai.length !== openaiCountAfterSuccess) {
+      throw new Error(`CMS_AI_DRAFT replay reached provider! openai count=${counts.openai.length}`);
+    }
+    console.log("PASS: CMS_AI_DRAFT replay rejected; OpenAI mock calls did not increase");
+
+    console.log("\n=== N8N RUNTIME SMOKE: ALL 3 WORKFLOWS PASSED ===");
   } catch (err) {
     console.error("❌ SMOKE FAILED:", err.message);
     const logs = docker(["logs", "--tail=60", N8N_NAME], { tolerateFailure: true });

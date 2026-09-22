@@ -60,6 +60,9 @@ export class AdminAutomationController {
     @Req() req: any,
   ): Promise<any> {
     const actorId = req.user?.id || req.user?.sub;
-    return this.automationService.createAiDraftRequest(actorId, dto);
+    const clientKey =
+      (req.headers["idempotency-key"] as string | undefined) ||
+      (req.headers["x-idempotency-key"] as string | undefined);
+    return this.automationService.createAiDraftRequest(actorId, dto, clientKey);
   }
 }

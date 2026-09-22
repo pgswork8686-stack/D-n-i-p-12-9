@@ -1,11 +1,12 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
-import { AutomationService } from "./automation.service";
+import { BadRequestException, NotFoundException, ConflictException } from "@nestjs/common";
+import { AutomationService, computeAiDraftFingerprint } from "./automation.service";
 import { AuditService } from "../audit/audit.service";
 import {
   prisma,
   AutomationJobStatus,
   AutomationJobType,
+  AutomationDeliveryStatus,
   ContentStatus,
 } from "@nexus/database";
 
@@ -150,6 +151,9 @@ describe("AutomationService", () => {
       jest
         .spyOn(prisma.automationJob, "findUnique")
         .mockResolvedValue(job as any);
+      const deliverySpy = jest
+        .spyOn(prisma.automationDelivery, "updateMany")
+        .mockResolvedValue({ count: 1 } as any);
       const updateSpy = jest
         .spyOn(prisma.automationJob, "update")
         .mockResolvedValue({
@@ -164,6 +168,12 @@ describe("AutomationService", () => {
       });
 
       expect(res.status).toBe(AutomationJobStatus.PENDING);
+      expect(deliverySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { jobId: "job-4", status: AutomationDeliveryStatus.SENDING },
+          data: { status: AutomationDeliveryStatus.PENDING },
+        }),
+      );
       expect(updateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: "job-4" },
@@ -206,7 +216,7 @@ describe("AutomationService", () => {
       expect(res.status).toBe(AutomationJobStatus.FAILED);
       expect(deliverySpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { jobId: "job-5" },
+          where: expect.objectContaining({ jobId: "job-5" }),
           data: { status: "FAILED" },
         }),
       );
@@ -306,6 +316,113 @@ describe("AutomationService", () => {
           language: "en",
         }),
       ).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    it("rejects invalid client idempotency keys", async () => {
+      await expect(
+        service.createAiDraftRequest("admin-1", { topic: "Test", brief: "Brief", language: "en" }, "   "),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.createAiDraftRequest("admin-1", { topic: "Test", brief: "Brief", language: "en" }, "x".repeat(256)),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it("returns existing job on idempotent replay with matching payload", async () => {
+      const dto = { topic: "Idempotent AI", brief: "Brief text", language: "en" };
+      const expectedFingerprint = computeAiDraftFingerprint(dto);
+
+      const existingJob = {
+        id: "job-ai-existing",
+        type: AutomationJobType.CMS_AI_DRAFT,
+        status: AutomationJobStatus.PENDING,
+        idempotencyKey: "cms-ai-draft:admin-1:my-key-1",
+        payloadJson: {
+          ...dto,
+          requestFingerprint: expectedFingerprint,
+        },
+      };
+
+      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(existingJob as any);
+      const createSpy = jest.spyOn(prisma.automationJob, "create");
+
+      const result = await service.createAiDraftRequest("admin-1", dto, "my-key-1");
+
+      expect(result).toEqual(existingJob);
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it("throws 409 Conflict when idempotency key is reused with different payload", async () => {
+      const existingJob = {
+        id: "job-ai-existing",
+        type: AutomationJobType.CMS_AI_DRAFT,
+        status: AutomationJobStatus.PENDING,
+        idempotencyKey: "cms-ai-draft:admin-1:my-key-1",
+        payloadJson: {
+          topic: "Original Topic",
+          brief: "Original brief",
+          language: "en",
+          requestFingerprint: "original-fingerprint-hash-1234",
+        },
+      };
+
+      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(existingJob as any);
+
+      await expect(
+        service.createAiDraftRequest(
+          "admin-1",
+          { topic: "Different Topic", brief: "Different brief", language: "en" },
+          "my-key-1",
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it("scopes idempotency key per admin so different admins do not conflict", async () => {
+      const dto = { topic: "Shared Topic", brief: "Shared brief", language: "vi" };
+      jest.spyOn(prisma.automationJob, "count").mockResolvedValue(0);
+
+      let createdKey = "";
+      jest.spyOn(prisma.automationJob, "findUnique").mockResolvedValue(null);
+      jest.spyOn(prisma.automationJob, "create").mockImplementation(({ data }: any) => {
+        createdKey = data.idempotencyKey;
+        return { id: "job-scoped", ...data } as any;
+      });
+
+      await service.createAiDraftRequest("admin-A", dto, "common-client-key");
+      expect(createdKey).toBe("cms-ai-draft:admin-A:common-client-key");
+
+      await service.createAiDraftRequest("admin-B", dto, "common-client-key");
+      expect(createdKey).toBe("cms-ai-draft:admin-B:common-client-key");
+    });
+
+    it("handles concurrent P2002 race gracefully by resolving existing job", async () => {
+      const dto = { topic: "Race Topic", brief: "Race brief", language: "en" };
+      const expectedFingerprint = computeAiDraftFingerprint(dto);
+
+      const existingJob = {
+        id: "job-race-existing",
+        type: AutomationJobType.CMS_AI_DRAFT,
+        status: AutomationJobStatus.PENDING,
+        idempotencyKey: "cms-ai-draft:admin-1:race-key",
+        payloadJson: {
+          ...dto,
+          requestFingerprint: expectedFingerprint,
+        },
+      };
+
+      jest.spyOn(prisma.automationJob, "count").mockResolvedValue(0);
+      // First findUnique returns null (race condition)
+      jest
+        .spyOn(prisma.automationJob, "findUnique")
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existingJob as any);
+
+      const p2002Error: any = new Error("Unique constraint failed");
+      p2002Error.code = "P2002";
+      jest.spyOn(prisma.automationJob, "create").mockRejectedValue(p2002Error);
+
+      const result = await service.createAiDraftRequest("admin-1", dto, "race-key");
+      expect(result).toEqual(existingJob);
     });
 
     it("creates post in AI_DRAFT status only and sanitizes HTML", async () => {

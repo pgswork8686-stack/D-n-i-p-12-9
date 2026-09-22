@@ -259,11 +259,15 @@ export async function dispatchPendingAutomationJobs(
   }
 
   const disabledTypes = new Set(routeCheck.disabled);
+  const allowedTypes = Array.from(SUPPORTED_AUTOMATION_JOB_TYPES).filter(
+    (t) => !disabledTypes.has(t),
+  ) as AutomationJobType[];
 
   const claimedJobs = await claimDueAutomationJobs({
     limit: batchSize,
     workerId,
     leaseMinutes,
+    allowedTypes,
   });
 
   if (!claimedJobs || claimedJobs.length === 0) {

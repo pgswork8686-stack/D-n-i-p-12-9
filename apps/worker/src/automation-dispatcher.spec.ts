@@ -6,6 +6,7 @@ import {
   dispatchPendingAutomationJobs,
   sanitizeErrorMessage,
 } from "./automation-dispatcher";
+import * as dbModule from "@nexus/database";
 import {
   prisma,
   AutomationJobStatus,
@@ -13,6 +14,15 @@ import {
   AutomationDeliveryStatus,
 } from "@nexus/database";
 import { verifyAutomationSignature } from "@nexus/utils";
+
+jest.mock("@nexus/database", () => {
+  const actual = jest.requireActual("@nexus/database");
+  return {
+    __esModule: true,
+    ...actual,
+    claimDueAutomationJobs: jest.fn().mockResolvedValue([]),
+  };
+});
 
 describe("Automation Dispatcher", () => {
   const originalEnv = process.env;
@@ -85,13 +95,65 @@ describe("Automation Dispatcher", () => {
       );
     });
 
-    it("fails closed in production when secret is placeholder or too short", () => {
+    it("fails closed in production when secret is placeholder, changeme, secret, or too short after trim", () => {
       process.env.NODE_ENV = "production";
+
       process.env.AUTOMATION_SERVICE_SECRET = "placeholder";
+      expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
+
+      process.env.AUTOMATION_SERVICE_SECRET = "changeme";
+      expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
+
+      process.env.AUTOMATION_SERVICE_SECRET = "secret";
+      expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
+
+      // Whitespace padding bug check: raw length 33, but trimmed is 3 chars
+      process.env.AUTOMATION_SERVICE_SECRET = "abc" + " ".repeat(30);
       expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
 
       process.env.AUTOMATION_SERVICE_SECRET = "short-key";
       expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
+
+      // 31-char trimmed -> reject
+      process.env.AUTOMATION_SERVICE_SECRET = "a".repeat(31);
+      expect(() => resolveAutomationServiceSecret()).toThrow(/Insecure AUTOMATION_SERVICE_SECRET/);
+
+      // 32-char trimmed -> accept
+      process.env.AUTOMATION_SERVICE_SECRET = "  " + "a".repeat(32) + "  ";
+      expect(resolveAutomationServiceSecret()).toBe("a".repeat(32));
+
+      // 40-char strong -> accept
+      process.env.AUTOMATION_SERVICE_SECRET = "a".repeat(40);
+      expect(resolveAutomationServiceSecret()).toBe("a".repeat(40));
+    });
+  });
+
+  describe("dispatchPendingAutomationJobs & allowedTypes claim", () => {
+    it("passes allowedTypes excluding disabled job types to claimDueAutomationJobs", async () => {
+      process.env.AUTOMATION_SERVICE_SECRET = "super-secret-automation-key-32chars";
+      process.env.N8N_WEBHOOK_BASE_URL = "http://localhost:5678";
+      process.env.N8N_DISABLED_JOB_TYPES = "ORDER_PAID_EMAIL";
+
+      (dbModule.claimDueAutomationJobs as jest.Mock).mockClear();
+      (dbModule.claimDueAutomationJobs as jest.Mock).mockResolvedValue([]);
+
+      await dispatchPendingAutomationJobs({ batchSize: 10, workerId: "test-w" });
+
+      expect(dbModule.claimDueAutomationJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: 10,
+          workerId: "test-w",
+          allowedTypes: expect.not.arrayContaining([AutomationJobType.ORDER_PAID_EMAIL]),
+        }),
+      );
+      expect(dbModule.claimDueAutomationJobs).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowedTypes: expect.arrayContaining([
+            AutomationJobType.CMS_AI_DRAFT,
+            AutomationJobType.LICENSE_PROVISIONED_EMAIL,
+          ]),
+        }),
+      );
     });
   });
 

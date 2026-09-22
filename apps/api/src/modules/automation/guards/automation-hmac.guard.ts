@@ -10,7 +10,11 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
-import { verifyAutomationSignature, claimAutomationReplayKey } from "@nexus/utils";
+import {
+  verifyAutomationSignature,
+  claimAutomationReplayKey,
+  resolveAutomationServiceSecret,
+} from "@nexus/utils";
 
 @Injectable()
 export class AutomationHmacGuard implements CanActivate, OnModuleDestroy {
@@ -86,28 +90,19 @@ export class AutomationHmacGuard implements CanActivate, OnModuleDestroy {
       throw new UnauthorizedException("Missing X-Nexus-Signature header");
     }
 
-    const secret = process.env.AUTOMATION_SERVICE_SECRET;
-    const isProduction = process.env.NODE_ENV === "production";
-
-    if (!secret || secret.trim() === "") {
+    let secret: string;
+    try {
+      secret = resolveAutomationServiceSecret();
+    } catch (secErr: any) {
       throw new UnauthorizedException(
-        "Automation service authentication unconfigured",
+        "Insecure automation service secret configured in production",
       );
     }
 
-    if (isProduction) {
-      const lower = secret.toLowerCase();
-      if (
-        lower === "placeholder" ||
-        lower === "changeme" ||
-        lower === "secret" ||
-        lower.includes("placeholder") ||
-        secret.length < 32
-      ) {
-        throw new UnauthorizedException(
-          "Insecure automation service secret configured in production",
-        );
-      }
+    if (!secret || secret === "") {
+      throw new UnauthorizedException(
+        "Automation service authentication unconfigured",
+      );
     }
 
     // Canonical path: use originalUrl without query string

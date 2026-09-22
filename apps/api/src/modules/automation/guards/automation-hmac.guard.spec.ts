@@ -289,4 +289,33 @@ describe("AutomationHmacGuard", () => {
 
     await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
   });
+
+  it("rejects whitespace-padded short secret in production (trimmed length < 32)", async () => {
+    process.env.NODE_ENV = "production";
+    // 10 chars surrounded by spaces making 35 chars total
+    process.env.AUTOMATION_SERVICE_SECRET = "            short12345            ";
+
+    const ctx = createMockContext({
+      "x-nexus-service": "n8n",
+      "x-nexus-timestamp": Date.now().toString(),
+      "x-nexus-request-id": "req-prod-padded",
+      "x-nexus-signature": "some-sig",
+    });
+
+    await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+  });
+
+  it("rejects padded placeholder secret in production", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.AUTOMATION_SERVICE_SECRET = "   changeme   ";
+
+    const ctx = createMockContext({
+      "x-nexus-service": "n8n",
+      "x-nexus-timestamp": Date.now().toString(),
+      "x-nexus-request-id": "req-prod-padded-placeholder",
+      "x-nexus-signature": "some-sig",
+    });
+
+    await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+  });
 });

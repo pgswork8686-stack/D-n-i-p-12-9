@@ -16,6 +16,7 @@ import {
   signAutomationPayload,
   verifyAutomationSignature,
   resolveAutomationServiceSecret,
+  validateAutomationServiceSecret,
   slugify,
   isReservedSlug,
   sanitizeContentHtml,
@@ -2085,8 +2086,502 @@ async function runPhase12Acceptance() {
     }
     console.log(`✓ Gate 68 passed: Advisory lock serialized concurrent requests (1 success, 4 rejected)\n`);
 
+    // ----------------------------------------------------
+    // [Gate 69] Disabled job types excluded before atomic claim
+    // ----------------------------------------------------
+    console.log("[Gate 69] Disabled job types excluded before atomic claim...");
+    const disabledJob = await prisma.automationJob.create({
+      data: {
+        type: AutomationJobType.ORDER_PAID_EMAIL,
+        status: AutomationJobStatus.PENDING,
+        idempotencyKey: `disabled-test-${runId}`,
+        payloadJson: { test: true },
+        scheduledAt: new Date(Date.now() - 10000),
+      },
+    });
+
+    const claimedJobs69 = await claimDueAutomationJobs({
+      limit: 10,
+      workerId: `worker-test-${runId}`,
+      leaseMinutes: 5,
+      allowedTypes: [AutomationJobType.CMS_AI_DRAFT, AutomationJobType.LICENSE_PROVISIONED_EMAIL],
+    });
+
+    const foundClaimed = claimedJobs69.find((j) => j.id === disabledJob.id);
+    if (foundClaimed) {
+      throw new Error(`Gate 69 failed: disabled job ${disabledJob.id} was claimed!`);
+    }
+
+    const checkDisabledJob = await prisma.automationJob.findUnique({
+      where: { id: disabledJob.id },
+    });
+    if (
+      checkDisabledJob?.status !== AutomationJobStatus.PENDING ||
+      checkDisabledJob.attemptCount !== 0 ||
+      checkDisabledJob.leaseUntil !== null
+    ) {
+      throw new Error(
+        `Gate 69 failed: expected PENDING with attemptCount 0 and leaseUntil null, got ${JSON.stringify(checkDisabledJob)}`,
+      );
+    }
+    console.log("✓ Gate 69 passed: Disabled job type excluded before claim and remained untouched PENDING\n");
+
+    // ----------------------------------------------------
+    // [Gate 70] Stale exhausted RUNNING job terminalized to FAILED
+    // ----------------------------------------------------
+    console.log("[Gate 70] Stale exhausted RUNNING job terminalized to FAILED...");
+    const staleJob70 = await prisma.automationJob.create({
+      data: {
+        type: AutomationJobType.ORDER_PAID_EMAIL,
+        status: AutomationJobStatus.RUNNING,
+        idempotencyKey: `stale-exhausted-${runId}`,
+        payloadJson: { test: "stale" },
+        attemptCount: 3,
+        maxAttempts: 3,
+        leaseUntil: new Date(Date.now() - 120000),
+      },
+    });
+    const staleDelivery70 = await prisma.automationDelivery.create({
+      data: {
+        jobId: staleJob70.id,
+        recipientEmail: `stale-${runId}@example.com`,
+        template: "order_receipt",
+        status: "SENDING",
+        idempotencyKey: `stale-deliv-${runId}`,
+      },
+    });
+
+    await claimDueAutomationJobs({
+      limit: 10,
+      workerId: `worker-stale-${runId}`,
+      leaseMinutes: 5,
+    });
+
+    const checkStaleJob = await prisma.automationJob.findUnique({
+      where: { id: staleJob70.id },
+    });
+    if (
+      checkStaleJob?.status !== AutomationJobStatus.FAILED ||
+      checkStaleJob.lastErrorCode !== "MAX_ATTEMPTS_EXHAUSTED" ||
+      !checkStaleJob.completedAt
+    ) {
+      throw new Error(
+        `Gate 70 failed: stale exhausted job not terminalized to FAILED: ${JSON.stringify(checkStaleJob)}`,
+      );
+    }
+
+    const checkStaleDelivery = await prisma.automationDelivery.findUnique({
+      where: { id: staleDelivery70.id },
+    });
+    if (checkStaleDelivery?.status !== "FAILED") {
+      throw new Error(
+        `Gate 70 failed: stale delivery not marked FAILED: ${JSON.stringify(checkStaleDelivery)}`,
+      );
+    }
+
+    const reclaimAttempt = await claimDueAutomationJobs({
+      limit: 10,
+      workerId: `worker-stale-2-${runId}`,
+      leaseMinutes: 5,
+    });
+    if (reclaimAttempt.some((j) => j.id === staleJob70.id)) {
+      throw new Error("Gate 70 failed: terminalized FAILED job was reclaimed!");
+    }
+    console.log("✓ Gate 70 passed: Stale exhausted job and delivery terminalized to FAILED and never reclaimed\n");
+
+    // ----------------------------------------------------
+    // [Gate 71] Retryable provider failure resets delivery SENDING -> PENDING, then success marks SENT
+    // ----------------------------------------------------
+    console.log("[Gate 71] Retryable provider failure resets delivery SENDING -> PENDING...");
+    const retryJob = await prisma.automationJob.create({
+      data: {
+        type: AutomationJobType.ORDER_PAID_EMAIL,
+        status: AutomationJobStatus.RUNNING,
+        idempotencyKey: `retry-flow-${runId}`,
+        payloadJson: { test: "retry-flow" },
+        attemptCount: 1,
+        maxAttempts: 3,
+        leaseUntil: new Date(Date.now() + 60000),
+      },
+    });
+    const retryDelivery = await prisma.automationDelivery.create({
+      data: {
+        jobId: retryJob.id,
+        recipientEmail: `retry-${runId}@example.com`,
+        template: "order_receipt",
+        status: "SENDING",
+        idempotencyKey: `retry-deliv-${runId}`,
+      },
+    });
+
+    const failBody71 = {
+      errorCode: "RATE_LIMIT_429",
+      errorMessage: "429 Too Many Requests - provider throttled",
+      retryable: true,
+    };
+    const failHeaders71 = createSignedHeaders(
+      "POST",
+      `/v1/internal/automation/jobs/${retryJob.id}/fail`,
+      failBody71,
+    );
+    const failRes71 = await fetch(
+      `${API_BASE}/v1/internal/automation/jobs/${retryJob.id}/fail`,
+      {
+        method: "POST",
+        headers: failHeaders71,
+        body: JSON.stringify(failBody71),
+      },
+    );
+    if (!failRes71.ok) {
+      throw new Error(`Gate 71 failed: fail call returned ${failRes71.status}`);
+    }
+
+    const checkJobPending = await prisma.automationJob.findUnique({
+      where: { id: retryJob.id },
+    });
+    if (checkJobPending?.status !== AutomationJobStatus.PENDING) {
+      throw new Error(`Gate 71 failed: expected job PENDING, got ${checkJobPending?.status}`);
+    }
+
+    const checkDeliveryPending = await prisma.automationDelivery.findUnique({
+      where: { id: retryDelivery.id },
+    });
+    if (checkDeliveryPending?.status !== "PENDING") {
+      throw new Error(
+        `Gate 71 failed: expected delivery SENDING -> PENDING reset, got ${checkDeliveryPending?.status}`,
+      );
+    }
+
+    await prisma.automationJob.update({
+      where: { id: retryJob.id },
+      data: { status: AutomationJobStatus.RUNNING },
+    });
+    const completeBody71 = { providerMessageId: "msg_success_retry_71" };
+    const completeHeaders71 = createSignedHeaders(
+      "POST",
+      `/v1/internal/automation/jobs/${retryJob.id}/complete`,
+      completeBody71,
+    );
+    const completeRes71 = await fetch(
+      `${API_BASE}/v1/internal/automation/jobs/${retryJob.id}/complete`,
+      {
+        method: "POST",
+        headers: completeHeaders71,
+        body: JSON.stringify(completeBody71),
+      },
+    );
+    if (!completeRes71.ok) {
+      throw new Error(`Gate 71 failed: complete call returned ${completeRes71.status}`);
+    }
+
+    const checkDeliverySent = await prisma.automationDelivery.findUnique({
+      where: { id: retryDelivery.id },
+    });
+    if (
+      checkDeliverySent?.status !== "SENT" ||
+      checkDeliverySent.providerMessageId !== "msg_success_retry_71"
+    ) {
+      throw new Error(
+        `Gate 71 failed: expected delivery SENT with providerMessageId, got ${JSON.stringify(checkDeliverySent)}`,
+      );
+    }
+    console.log("✓ Gate 71 passed: Retryable failure reset delivery to PENDING, subsequent success marked SENT\n");
+
+    // ----------------------------------------------------
+    // [Gate 72] License provisioning notification enqueue & reconciliation
+    // ----------------------------------------------------
+    console.log("[Gate 72] License provisioning notification enqueue & reconciliation...");
+    // 1. Dedicated entitlement for license72
+    const orderItem72a = await prisma.orderItem.create({
+      data: {
+        orderId: order34.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        productName: testProduct.name,
+        variantName: testVariant.name,
+        sku: `SKU-72A-${runId}`,
+        productType: "LICENSED_SOFTWARE",
+        fulfillmentType: "INTERNAL_LICENSE",
+        currency: "USD",
+        unitAmount: 4900,
+        quantity: 1,
+        lineTotalAmount: 4900,
+      },
+    });
+    const entitlement72a = await prisma.entitlement.create({
+      data: {
+        userId: customerUser.id,
+        orderId: order34.id,
+        orderItemId: orderItem72a.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        productType: "LICENSED_SOFTWARE",
+        fulfillmentType: "INTERNAL_LICENSE",
+        status: "ACTIVE",
+      },
+    });
+
+    const license72 = await prisma.internalLicense.create({
+      data: {
+        entitlementId: entitlement72a.id,
+        userId: customerUser.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        keyHash: `hash-72-${crypto.randomBytes(8).toString("hex")}`,
+        keyCiphertext: "encrypted-ciphertext-72",
+        keyIv: "iv-72",
+        keyAuthTag: "tag-72",
+        keyLast4: "9876",
+        status: "ACTIVE",
+      },
+    });
+
+    const licJob = await enqueueLicenseProvisionedEmailJob(license72.id, prisma);
+    if (!licJob || licJob.type !== AutomationJobType.LICENSE_PROVISIONED_EMAIL) {
+      throw new Error(`Gate 72 failed: expected LICENSE_PROVISIONED_EMAIL job, got ${JSON.stringify(licJob)}`);
+    }
+
+    const licDelivery = await prisma.automationDelivery.findFirst({
+      where: { jobId: licJob.id },
+    });
+    if (!licDelivery || licDelivery.template !== "license_ready") {
+      throw new Error(`Gate 72 failed: expected license_ready delivery, got ${JSON.stringify(licDelivery)}`);
+    }
+    const payload72 = licJob.payloadJson as any;
+    if (payload72?.maskedKey !== "NXS-****-****-9876" || payload72?.plaintextKey) {
+      throw new Error(`Gate 72 failed: key masking invariant violated in payload: ${JSON.stringify(payload72)}`);
+    }
+
+    const licJobReenqueue = await enqueueLicenseProvisionedEmailJob(license72.id, prisma);
+    if (licJobReenqueue?.id !== licJob.id) {
+      throw new Error("Gate 72 failed: duplicate job created on re-enqueue");
+    }
+
+    // 2. Dedicated entitlement for license72b (reconciliation test)
+    const orderItem72b = await prisma.orderItem.create({
+      data: {
+        orderId: order34.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        productName: testProduct.name,
+        variantName: testVariant.name,
+        sku: `SKU-72B-${runId}`,
+        productType: "LICENSED_SOFTWARE",
+        fulfillmentType: "INTERNAL_LICENSE",
+        currency: "USD",
+        unitAmount: 4900,
+        quantity: 1,
+        lineTotalAmount: 4900,
+      },
+    });
+    const entitlement72b = await prisma.entitlement.create({
+      data: {
+        userId: customerUser.id,
+        orderId: order34.id,
+        orderItemId: orderItem72b.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        productType: "LICENSED_SOFTWARE",
+        fulfillmentType: "INTERNAL_LICENSE",
+        status: "ACTIVE",
+      },
+    });
+
+    const license72b = await prisma.internalLicense.create({
+      data: {
+        entitlementId: entitlement72b.id,
+        userId: customerUser.id,
+        productId: testProduct.id,
+        variantId: testVariant.id,
+        keyHash: `hash-72b-${crypto.randomBytes(8).toString("hex")}`,
+        keyCiphertext: "encrypted-ciphertext-72b",
+        keyIv: "iv-72b",
+        keyAuthTag: "tag-72b",
+        keyLast4: "4321",
+        status: "ACTIVE",
+      },
+    });
+
+    const unnotifiedLicenses = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT l.id
+      FROM internal_licenses l
+      LEFT JOIN automation_jobs j
+        ON j.source_type = 'License'
+        AND j.source_id = l.id
+        AND j.type = 'LICENSE_PROVISIONED_EMAIL'
+      WHERE l.status = 'ACTIVE'
+        AND j.id IS NULL
+        AND l.id = ${license72b.id};
+    `;
+    if (unnotifiedLicenses.length !== 1) {
+      throw new Error(`Gate 72 failed: expected 1 unnotified license, found ${unnotifiedLicenses.length}`);
+    }
+
+    const reconciledJob = await enqueueLicenseProvisionedEmailJob(unnotifiedLicenses[0].id, prisma);
+    if (!reconciledJob || reconciledJob.type !== AutomationJobType.LICENSE_PROVISIONED_EMAIL) {
+      throw new Error("Gate 72 failed: failed to reconcile missing license notification job");
+    }
+    console.log("✓ Gate 72 passed: License provisioned email enqueued with masked key; reconciliation enqueued missing job\n");
+
+    // ----------------------------------------------------
+    // [Gate 73] AI draft request idempotency and conflict rejection
+    // ----------------------------------------------------
+    console.log("[Gate 73] AI draft request idempotency and conflict rejection...");
+    const draftAdmin = await prisma.user.create({
+      data: {
+        email: `draft-idemp-${runId}@nexustheme.dev`,
+        supabaseId: `sub_idemp_${runId}`,
+        profile: { create: { displayName: "Draft Admin" } },
+        userRoles: {
+          create: {
+            role: {
+              connectOrCreate: {
+                where: { name: "super_admin" },
+                create: { name: "super_admin", displayName: "Super Administrator" },
+              },
+            },
+          },
+        },
+      },
+    });
+    const draftHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer dev-custom:sub_idemp_${runId}:${draftAdmin.email}`,
+      "Idempotency-Key": `idemp-key-73-${runId}`,
+    };
+
+    const payload73a = { topic: "AI in Retail 2026", brief: "Industry trends", language: "en" };
+    const res73a = await fetch(`${API_BASE}/v1/admin/automation/ai-draft`, {
+      method: "POST",
+      headers: draftHeaders,
+      body: JSON.stringify(payload73a),
+    });
+    if (!res73a.ok) {
+      throw new Error(`Gate 73 failed: first draft request returned ${res73a.status}`);
+    }
+    const data73a = await res73a.json();
+
+    const res73b = await fetch(`${API_BASE}/v1/admin/automation/ai-draft`, {
+      method: "POST",
+      headers: draftHeaders,
+      body: JSON.stringify(payload73a),
+    });
+    if (!res73b.ok) {
+      throw new Error(`Gate 73 failed: replay draft request returned ${res73b.status}`);
+    }
+    const data73b = await res73b.json();
+    if (data73a.id !== data73b.id) {
+      throw new Error(`Gate 73 failed: expected same job ID ${data73a.id}, got ${data73b.id}`);
+    }
+
+    const payload73c = { topic: "Completely Different Topic", brief: "Different brief", language: "en" };
+    const res73c = await fetch(`${API_BASE}/v1/admin/automation/ai-draft`, {
+      method: "POST",
+      headers: draftHeaders,
+      body: JSON.stringify(payload73c),
+    });
+    if (res73c.status !== 409) {
+      throw new Error(`Gate 73 failed: expected 409 Conflict for mismatched payload, got ${res73c.status}`);
+    }
+
+    const draftAdmin2 = await prisma.user.create({
+      data: {
+        email: `draft-idemp-2-${runId}@nexustheme.dev`,
+        supabaseId: `sub_idemp_2_${runId}`,
+        profile: { create: { displayName: "Draft Admin 2" } },
+        userRoles: {
+          create: {
+            role: {
+              connectOrCreate: {
+                where: { name: "super_admin" },
+                create: { name: "super_admin", displayName: "Super Administrator" },
+              },
+            },
+          },
+        },
+      },
+    });
+    const draftHeaders2 = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer dev-custom:sub_idemp_2_${runId}:${draftAdmin2.email}`,
+      "Idempotency-Key": `idemp-key-73-${runId}`,
+    };
+    const res73d = await fetch(`${API_BASE}/v1/admin/automation/ai-draft`, {
+      method: "POST",
+      headers: draftHeaders2,
+      body: JSON.stringify(payload73a),
+    });
+    if (!res73d.ok) {
+      throw new Error(`Gate 73 failed: admin 2 draft request returned ${res73d.status}`);
+    }
+    const data73d = await res73d.json();
+    if (data73d.id === data73a.id) {
+      throw new Error("Gate 73 failed: different admin reused job from admin 1!");
+    }
+    console.log("✓ Gate 73 passed: AI draft request idempotency verified (replays return same job, payload change gives 409, admin-isolated)\n");
+
+    // ----------------------------------------------------
+    // [Gate 74] Production secret whitespace-padding and placeholder rejection
+    // ----------------------------------------------------
+    console.log("[Gate 74] Production secret whitespace-padding and placeholder rejection...");
+    const originalEnvSecret = process.env.AUTOMATION_SERVICE_SECRET;
+    const originalEnvNodeEnv = process.env.NODE_ENV;
+
+    try {
+      // 1. Whitespace padding around short secret (<32 chars after trim)
+      const paddedShort = "   short-secret   ";
+      try {
+        validateAutomationServiceSecret(paddedShort);
+        throw new Error("Gate 74 failed: padded short secret did not throw in validateAutomationServiceSecret");
+      } catch (err: any) {
+        if (!err.message.includes("minimum 32 chars")) {
+          throw new Error(`Gate 74 failed: unexpected error message: ${err.message}`);
+        }
+      }
+
+      // 2. Whitespace padding around placeholder secret
+      const paddedPlaceholder = "   changeme   ";
+      try {
+        validateAutomationServiceSecret(paddedPlaceholder);
+        throw new Error("Gate 74 failed: padded placeholder did not throw in validateAutomationServiceSecret");
+      } catch (err: any) {
+        if (!err.message.includes("cannot be a placeholder")) {
+          throw new Error(`Gate 74 failed: unexpected error message: ${err.message}`);
+        }
+      }
+
+      // 3. Valid secret with whitespace padding trims correctly
+      const validRaw = "   " + "x".repeat(32) + "   ";
+      const validated = validateAutomationServiceSecret(validRaw);
+      if (validated !== "x".repeat(32)) {
+        throw new Error(`Gate 74 failed: expected trimmed secret, got '${validated}'`);
+      }
+
+      // 4. Test resolveAutomationServiceSecret in production mode
+      process.env.NODE_ENV = "production";
+      process.env.AUTOMATION_SERVICE_SECRET = paddedShort;
+      try {
+        resolveAutomationServiceSecret();
+        throw new Error("Gate 74 failed: resolveAutomationServiceSecret did not throw for padded short in production");
+      } catch (err: any) {
+        if (!err.message.includes("minimum 32 chars")) {
+          throw new Error(`Gate 74 failed: unexpected error message: ${err.message}`);
+        }
+      }
+
+      process.env.AUTOMATION_SERVICE_SECRET = validRaw;
+      const resolved = resolveAutomationServiceSecret();
+      if (resolved !== "x".repeat(32)) {
+        throw new Error(`Gate 74 failed: resolveAutomationServiceSecret did not trim correctly: '${resolved}'`);
+      }
+    } finally {
+      process.env.AUTOMATION_SERVICE_SECRET = originalEnvSecret;
+      process.env.NODE_ENV = originalEnvNodeEnv;
+    }
+    console.log("✓ Gate 74 passed: Production secret whitespace-padding and placeholder validation verified\n");
+
     console.log("==================================================");
-    console.log("ALL 68 PHASE 12 GATES PASSED SUCCESSFULLY!");
+    console.log("ALL 74 PHASE 12 GATES PASSED SUCCESSFULLY!");
     console.log("==================================================");
   } finally {
     stopChildProcesses();

@@ -179,6 +179,7 @@ for (const file of files) {
     ["replay fail-closed", "fail-closed"],
     ["replay atomic NX claim", "enc('NX')"],
     ["job type binding", `'${expectedType}'`],
+    ["secret strength guard", "Insecure AUTOMATION_SERVICE_SECRET configured"],
   ];
   const missingChecks = codeChecks.filter(([, needle]) => !code.includes(needle));
   if (missingChecks.length > 0) {
