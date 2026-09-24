@@ -447,6 +447,32 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow & Quality Gates**:
   - `.github/workflows/phase13-ci.yml` verifying lint, typecheck, all monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 13.
 
+### Phase 14: Hosting & Infrastructure Provisioning Integration (Completed)
+- **Domain Boundaries & Core Strategy**:
+  - Multi-provider hosting adapter architecture supporting cPanel WHM UAPI, DirectAdmin API, Cloudflare DNS API v4, and MockHostingProvider for testing.
+  - Zero-client authority: all hosting account state transitions, DNS mutations, quota allocations, and credentials encryption are backend-driven.
+  - Plaintext server API tokens are NEVER persisted or returned in DTOs.
+- **AES-256-GCM Credential Security**:
+  - `authEncryptedToken` serialized as `{ encrypted, iv, tag }` using a 12-byte random IV and 16-byte authentication tag.
+  - Fails closed immediately upon ciphertext modification or tag tampering.
+- **Data Models & Database Migration (`20260924120000_20260924_phase14_hosting_infrastructure`)**:
+  - `HostingServer`: Manages server endpoints, IP addresses, provider types, maximum and active accounts, and encrypted credentials.
+  - `HostingAccount`: Stores domain, username, plan, lifecycle status (`PROVISIONING`, `ACTIVE`, `SUSPENDED`, `TERMINATED`, `FAILED`), resource usage (disk, bandwidth), and relations to user, server, order, and entitlement.
+  - `HostingDnsRecord`: Tenant-isolated DNS records (`A`, `AAAA`, `CNAME`, `TXT`, `MX`, `NS`, `SRV`) with TTL, proxy status, priority, and external Cloudflare record ID.
+- **REST API Endpoints**:
+  - Customer (`/v1/hosting/accounts`): Tenant-isolated list/get accounts, single sign-on redirect generator (`POST /:id/sso`), DNS record CRUD (`/:id/dns`), and CDN cache purge (`POST /:id/purge-cache`).
+  - Admin (`/v1/admin/hosting`): Server CRUD (`/servers`), accounts inspection (`/accounts`), account suspend/unsuspend/terminate (`/:id/suspend`, `/:id/unsuspend`, `/:id/terminate`), and provisioning retry (`/:id/retry`).
+  - RBAC: Governed by permissions `hosting.read` and `hosting.manage`.
+- **Worker & Outbox Orchestration**:
+  - `hosting-processor.ts`: Listens to `ORDER_PAID` for automated idempotent provisioning of `HOSTING_PROVISIONING` entitlements; seeds default Apex A and www CNAME records.
+  - Automated suspension on `ORDER_REFUNDED` and `ENTITLEMENT_REVOKED`.
+  - Cron reconciler `reconcileHostingUsage`: Periodically syncs disk and bandwidth metrics and evaluates quota thresholds (alert at >= 85%).
+- **Customer Portal UI Integration (`/hosting`)**:
+  - Clean instance management UI displaying server node, IP, disk & bandwidth progress bars, one-click Control Panel SSO launcher, Cloudflare DNS records manager with record syntax validation, and CDN edge cache purge.
+- **75-Gate Acceptance Suite (`phase14-acceptance.ts`)**:
+  - Complete 75 verification gates across 8 thematic sections (Pure domain math, syntax validation, AES-256-GCM cryptography, database relations, multi-provider adapters, service tenant isolation, outbox provisioning/suspension, and usage reconciliation).
+- **CI Workflow**:
+  - `.github/workflows/phase14-ci.yml` verifying lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 14.
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

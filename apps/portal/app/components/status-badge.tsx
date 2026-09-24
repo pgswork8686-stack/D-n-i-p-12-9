@@ -26,6 +26,8 @@ export function StatusBadge({ status }: StatusBadgeProps) {
     case "EXPIRED":
     case "ARCHIVED":
     case "DEACTIVATED":
+    case "SUSPENDED":
+    case "TERMINATED":
       return <Badge variant="error">{status}</Badge>;
 
     default:

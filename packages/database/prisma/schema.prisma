@@ -31,6 +31,7 @@ model User {
   affiliateAccount   AffiliateAccount?
   affiliateReferrals AffiliateReferral[]
   affiliateClicks    AffiliateClick[]
+  hostingAccounts    HostingAccount[]
 
   @@map("users")
 }
@@ -157,6 +158,7 @@ enum FulfillmentType {
   EXTERNAL_MANAGED
   MEMBERSHIP_ACCESS
   MANUAL_SERVICE
+  HOSTING_PROVISIONING
 }
 
 enum ProductStatus {
@@ -441,6 +443,7 @@ model Order {
   payments          Payment[]
   entitlements      Entitlement[]
   affiliateReferral AffiliateReferral?
+  hostingAccounts   HostingAccount[]
 
   @@index([userId])
   @@index([status])
@@ -609,6 +612,7 @@ model Entitlement {
   internalLicense InternalLicense?
   downloadEvents  DownloadEvent[]
   downloadGrants  DownloadGrant[]
+  hostingAccount  HostingAccount?
 
   @@index([userId])
   @@index([orderId])
@@ -1226,5 +1230,121 @@ model AffiliatePayout {
   @@index([affiliateId])
   @@index([status])
   @@map("affiliate_payouts")
+}
+
+// --------------------------------------------------------
+// Phase 14 — Hosting & Infrastructure Provisioning Models
+// --------------------------------------------------------
+
+enum HostingProvider {
+  CPANEL
+  DIRECTADMIN
+  CLOUDFLARE
+  MOCK
+}
+
+enum HostingAccountStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+  FAILED
+}
+
+enum DnsRecordType {
+  A
+  AAAA
+  CNAME
+  TXT
+  MX
+  NS
+  SRV
+}
+
+enum DnsRecordStatus {
+  PENDING
+  ACTIVE
+  ERROR
+  DELETED
+}
+
+model HostingServer {
+  id                 String          @id @default(uuid())
+  name               String
+  hostname           String          @unique
+  provider           HostingProvider @default(MOCK)
+  endpointUrl        String          @map("endpoint_url")
+  ipAddress          String          @map("ip_address")
+  maxAccounts        Int             @default(100) @map("max_accounts")
+  activeAccounts     Int             @default(0) @map("active_accounts")
+  authEncryptedToken String          @map("auth_encrypted_token")
+  isActive           Boolean         @default(true) @map("is_active")
+  metadata           Json?
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  accounts           HostingAccount[]
+
+  @@index([provider])
+  @@index([isActive])
+  @@map("hosting_servers")
+}
+
+model HostingAccount {
+  id               String               @id @default(uuid())
+  userId           String               @map("user_id")
+  serverId         String               @map("server_id")
+  entitlementId    String?              @unique @map("entitlement_id")
+  orderId          String?              @map("order_id")
+  domain           String               @unique
+  username         String               @unique
+  packagePlan      String               @default("default") @map("package_plan")
+  status           HostingAccountStatus @default(PROVISIONING)
+  diskUsageMb      Int                  @default(0) @map("disk_usage_mb")
+  diskLimitMb      Int                  @default(5120) @map("disk_limit_mb")
+  bandwidthUsageMb Int                  @default(0) @map("bandwidth_usage_mb")
+  bandwidthLimitMb Int                  @default(51200) @map("bandwidth_limit_mb")
+  suspendedAt      DateTime?            @map("suspended_at")
+  suspensionReason String?              @map("suspension_reason")
+  terminatedAt     DateTime?            @map("terminated_at")
+  metadata         Json?
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  server           HostingServer        @relation(fields: [serverId], references: [id], onDelete: Restrict)
+  entitlement      Entitlement?         @relation(fields: [entitlementId], references: [id], onDelete: SetNull)
+  order            Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  dnsRecords       HostingDnsRecord[]
+
+  @@index([userId])
+  @@index([serverId])
+  @@index([status])
+  @@index([domain])
+  @@map("hosting_accounts")
+}
+
+model HostingDnsRecord {
+  id                 String          @id @default(uuid())
+  hostingAccountId   String          @map("hosting_account_id")
+  type               DnsRecordType
+  name               String
+  content            String
+  ttl                Int             @default(3600)
+  priority           Int?
+  proxied            Boolean         @default(false)
+  cloudflareRecordId String?         @map("cloudflare_record_id")
+  status             DnsRecordStatus @default(ACTIVE)
+  metadata           Json?
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  hostingAccount     HostingAccount  @relation(fields: [hostingAccountId], references: [id], onDelete: Cascade)
+
+  @@index([hostingAccountId])
+  @@index([name])
+  @@index([type])
+  @@index([status])
+  @@map("hosting_dns_records")
 }
 

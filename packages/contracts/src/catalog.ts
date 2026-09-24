@@ -11,7 +11,8 @@ export type FulfillmentType =
   | 'INTERNAL_LICENSE'
   | 'EXTERNAL_MANAGED'
   | 'MEMBERSHIP_ACCESS'
-  | 'MANUAL_SERVICE';
+  | 'MANUAL_SERVICE'
+  | 'HOSTING_PROVISIONING';
 
 export type ProductStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
 export type VariantStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';

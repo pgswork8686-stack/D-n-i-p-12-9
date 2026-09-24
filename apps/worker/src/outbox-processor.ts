@@ -4,6 +4,11 @@ import {
   processAffiliateReferralForOrder,
   clawbackAffiliateReferralForOrder,
 } from "./affiliate-processor";
+import {
+  processHostingProvisioningForOrder,
+  suspendHostingAccountsForOrder,
+  suspendHostingForRevokedEntitlement,
+} from "./hosting-processor";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -148,9 +153,29 @@ export async function processOutboxEvents(
 
         // Phase 13: Idempotently process affiliate referral commission
         await processAffiliateReferralForOrder(authoritativeOrderId);
+
+        // Phase 14: Idempotently provision hosting accounts for hosting items in order
+        await processHostingProvisioningForOrder(authoritativeOrderId, workerId);
       } else if (event.eventType === "ORDER_REFUNDED") {
         const authoritativeOrderId = event.aggregateId;
         await clawbackAffiliateReferralForOrder(authoritativeOrderId);
+        // Phase 14: Suspend hosting accounts on order refund
+        await suspendHostingAccountsForOrder(authoritativeOrderId, "Order refunded", workerId);
+      } else if (event.eventType === "ENTITLEMENT_REVOKED") {
+        const entitlementId = event.aggregateId;
+        await suspendHostingForRevokedEntitlement(
+          entitlementId,
+          (event.payload as any)?.reason || "Entitlement revoked",
+          workerId,
+        );
+      } else if (
+        event.eventType === "HOSTING_ACCOUNT_PROVISIONED" ||
+        event.eventType === "HOSTING_ACCOUNT_SUSPENDED" ||
+        event.eventType === "HOSTING_ACCOUNT_UNSUSPENDED" ||
+        event.eventType === "HOSTING_ACCOUNT_TERMINATED" ||
+        event.eventType === "HOSTING_ACCOUNT_FAILED"
+      ) {
+        // Informational hosting lifecycle events - mark processed
       } else {
         throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }
