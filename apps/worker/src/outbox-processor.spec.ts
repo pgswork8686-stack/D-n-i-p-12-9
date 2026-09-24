@@ -11,6 +11,13 @@ jest.mock("./affiliate-processor", () => ({
   clawbackAffiliateReferralForOrder: jest.fn().mockResolvedValue(true),
 }));
 
+jest.mock("./hosting-processor", () => ({
+  processHostingProvisioningForOrder: jest.fn().mockResolvedValue({ provisionedCount: 1 }),
+  suspendHostingAccountsForOrder: jest.fn().mockResolvedValue({ suspendedCount: 1 }),
+  suspendHostingForRevokedEntitlement: jest.fn().mockResolvedValue(true),
+  reconcileHostingUsage: jest.fn().mockResolvedValue({ reconciledCount: 1 }),
+}));
+
 jest.mock("@nexus/database", () => {
   return {
     OutboxEventStatus: {

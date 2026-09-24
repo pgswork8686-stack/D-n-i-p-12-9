@@ -13,6 +13,7 @@ import {
 } from "./license-provisioner";
 import { publishDueScheduledContent } from "./content-scheduler";
 import { dispatchPendingAutomationJobs } from "./automation-dispatcher";
+import { reconcileHostingUsage } from "./hosting-processor";
 
 
 // Load root .env file
@@ -111,6 +112,9 @@ const runPollingTick = async () => {
 
     // 7. Authoritative claiming and dispatching of pending automation jobs to n8n
     await dispatchPendingAutomationJobs({ workerId });
+
+    // 8. Authoritative reconciliation of hosting accounts usage and metric sync
+    await reconcileHostingUsage({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({

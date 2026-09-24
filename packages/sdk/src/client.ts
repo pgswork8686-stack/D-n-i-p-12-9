@@ -97,6 +97,19 @@ import {
   AdminUpdateAffiliateStatusRequest,
   AdminUpdateCommissionRequest,
   AdminProcessPayoutRequest,
+  HostingServerDto,
+  HostingAccountDto,
+  HostingDnsRecordDto,
+  HostingSsoResponseDto,
+  CreateHostingServerRequest,
+  UpdateHostingServerRequest,
+  CreateHostingAccountRequest,
+  CreateDnsRecordRequest,
+  UpdateDnsRecordRequest,
+  PurgeCacheRequest,
+  PurgeCacheResponseDto,
+  UsageStatsDto,
+  HostingAccountStatus,
 } from "@nexus/contracts";
 
 
@@ -1869,6 +1882,249 @@ export class NexusApiClient {
       await handleCmsError(res, "Process admin affiliate payout failed");
     }
     return (await res.json()) as AffiliatePayoutDto;
+  }
+
+  // -------------------------------------------------------------
+  // Hosting Customer APIs
+  // -------------------------------------------------------------
+
+  async listMyHostingAccounts(): Promise<HostingAccountDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List hosting accounts failed");
+    }
+    return (await res.json()) as HostingAccountDto[];
+  }
+
+  async getMyHostingAccount(id: string): Promise<HostingAccountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts/${id}`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get hosting account failed");
+    }
+    return (await res.json()) as HostingAccountDto;
+  }
+
+  async createHostingAccount(req: CreateHostingAccountRequest): Promise<HostingAccountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create hosting account failed");
+    }
+    return (await res.json()) as HostingAccountDto;
+  }
+
+  async generateHostingSsoUrl(accountId: string): Promise<HostingSsoResponseDto> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts/${accountId}/sso`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Generate hosting SSO URL failed");
+    }
+    return (await res.json()) as HostingSsoResponseDto;
+  }
+
+  async listHostingDnsRecords(accountId: string): Promise<HostingDnsRecordDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts/${accountId}/dns`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List DNS records failed");
+    }
+    return (await res.json()) as HostingDnsRecordDto[];
+  }
+
+  async createHostingDnsRecord(
+    accountId: string,
+    req: CreateDnsRecordRequest,
+  ): Promise<HostingDnsRecordDto> {
+    const res = await fetch(`${this.baseUrl}/v1/hosting/accounts/${accountId}/dns`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create DNS record failed");
+    }
+    return (await res.json()) as HostingDnsRecordDto;
+  }
+
+  async updateHostingDnsRecord(
+    accountId: string,
+    recordId: string,
+    req: UpdateDnsRecordRequest,
+  ): Promise<HostingDnsRecordDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/hosting/accounts/${accountId}/dns/${recordId}`,
+      {
+        method: "PATCH",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(req),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Update DNS record failed");
+    }
+    return (await res.json()) as HostingDnsRecordDto;
+  }
+
+  async deleteHostingDnsRecord(
+    accountId: string,
+    recordId: string,
+  ): Promise<{ success: boolean }> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/hosting/accounts/${accountId}/dns/${recordId}`,
+      {
+        method: "DELETE",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Delete DNS record failed");
+    }
+    return (await res.json()) as { success: boolean };
+  }
+
+  async purgeHostingCdnCache(
+    accountId: string,
+    req: PurgeCacheRequest,
+  ): Promise<PurgeCacheResponseDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/hosting/accounts/${accountId}/purge-cache`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(req),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Purge CDN cache failed");
+    }
+    return (await res.json()) as PurgeCacheResponseDto;
+  }
+
+  // -------------------------------------------------------------
+  // Hosting Admin APIs
+  // -------------------------------------------------------------
+
+  async listAdminHostingServers(): Promise<HostingServerDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/servers`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin hosting servers failed");
+    }
+    return (await res.json()) as HostingServerDto[];
+  }
+
+  async createAdminHostingServer(
+    req: CreateHostingServerRequest,
+  ): Promise<HostingServerDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/servers`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create admin hosting server failed");
+    }
+    return (await res.json()) as HostingServerDto;
+  }
+
+  async updateAdminHostingServer(
+    id: string,
+    req: UpdateHostingServerRequest,
+  ): Promise<HostingServerDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/servers/${id}`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Update admin hosting server failed");
+    }
+    return (await res.json()) as HostingServerDto;
+  }
+
+  async deleteAdminHostingServer(id: string): Promise<{ success: boolean }> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/servers/${id}`, {
+      method: "DELETE",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Delete admin hosting server failed");
+    }
+    return (await res.json()) as { success: boolean };
+  }
+
+  async listAdminHostingAccounts(query?: {
+    serverId?: string;
+    status?: HostingAccountStatus;
+    userId?: string;
+  }): Promise<HostingAccountDto[]> {
+    const params = new URLSearchParams();
+    if (query?.serverId) params.append("serverId", query.serverId);
+    if (query?.status) params.append("status", query.status);
+    if (query?.userId) params.append("userId", query.userId);
+    const qs = params.toString() ? `?${params.toString()}` : "";
+
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/accounts${qs}`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin hosting accounts failed");
+    }
+    return (await res.json()) as HostingAccountDto[];
+  }
+
+  async adminSuspendHostingAccount(
+    id: string,
+    reason?: string,
+  ): Promise<HostingAccountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/hosting/accounts/${id}/suspend`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Suspend hosting account failed");
+    }
+    return (await res.json()) as HostingAccountDto;
+  }
+
+  async adminUnsuspendHostingAccount(id: string): Promise<HostingAccountDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/hosting/accounts/${id}/unsuspend`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Unsuspend hosting account failed");
+    }
+    return (await res.json()) as HostingAccountDto;
+  }
+
+  async adminTerminateHostingAccount(id: string): Promise<HostingAccountDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/hosting/accounts/${id}/terminate`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Terminate hosting account failed");
+    }
+    return (await res.json()) as HostingAccountDto;
   }
 
   private buildHeaders(): Record<string, string> {

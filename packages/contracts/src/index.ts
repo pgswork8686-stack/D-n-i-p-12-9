@@ -11,3 +11,4 @@ export * from "./content";
 export * from "./automation";
 export * from "./affiliates";
 export * from "./subscriptions";
+export * from "./hosting";

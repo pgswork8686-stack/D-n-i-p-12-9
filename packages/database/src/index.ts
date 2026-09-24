@@ -7,4 +7,5 @@ export * from "./domain/download-version-engine";
 export * from "./domain/cms-engine";
 export * from "./domain/automation-engine";
 export * from "./domain/membership-affiliate-engine";
+export * from "./domain/hosting-engine";
 
