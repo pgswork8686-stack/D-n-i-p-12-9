@@ -1,0 +1,176 @@
+name: Phase 18 Verification
+
+on:
+  push:
+    branches:
+      - feature/phase-18-hardening-cutover
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'docs/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/phase18-ci.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marketplace
+      REDIS_URL: redis://localhost:6379
+      STORAGE_PROVIDER: minio
+      STORAGE_ENDPOINT: http://localhost:9000
+      STORAGE_BUCKET: marketplace-dev
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      STORAGE_REGION: auto
+      WEB_URL: http://localhost:3000
+      PORTAL_URL: http://localhost:3001
+      ADMIN_URL: http://localhost:3002
+      API_URL: http://localhost:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_DEV_AUTH_ENABLED: 'true'
+      PAYMENT_RETURN_BASE_URL: http://localhost:3001
+      STRIPE_MOCK_CLIENT: 'true'
+      STRIPE_SECRET_KEY: sk_test_placeholder_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci_test_secret
+      STRIPE_WEBHOOK_TOLERANCE_SECONDS: '300'
+      ENABLE_TEST_PAYMENT_PROVIDER: 'true'
+      TEST_PAYMENT_WEBHOOK_SECRET: ci-test-payment-secret
+      LICENSE_KEY_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      HOSTING_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      SEED_DEV_USERS: 'true'
+      AUTOMATION_SERVICE_SECRET: test-automation-secret-minimum-32-chars-long
+      N8N_WEBHOOK_BASE_URL: http://localhost:5678
+      INTERNAL_HMAC_MAX_SKEW_SECONDS: '300'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start infrastructure
+        run: |
+          docker compose up -d postgres redis
+          docker run -d --name nexustheme-minio -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2024-11-07T00-52-28Z server /data --console-address ":9001"
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for postgres..."
+          for i in {1..30}; do
+            if docker compose exec -T postgres pg_isready -U postgres; then
+              echo "Postgres is ready!"
+              break
+            fi
+            sleep 1
+          done
+
+          echo "Waiting for minio..."
+          for i in {1..30}; do
+            if curl -s http://localhost:9000/minio/health/live; then
+              echo "Minio is ready!"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Create MinIO test bucket
+        run: |
+          docker run --rm --network host \
+            -e MC_HOST_local=http://minioadmin:minioadmin@localhost:9000 \
+            minio/mc:RELEASE.2024-11-05T11-41-28Z mb local/marketplace-dev || true
+
+      - name: Setup test database
+        run: |
+          pnpm db:generate
+          pnpm db:migrate
+          pnpm db:seed:all
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build --concurrency=2
+
+      - name: Worker smoke
+        run: pnpm worker:smoke
+
+      - name: Phase 4 acceptance
+        run: pnpm test:acceptance:phase4
+
+      - name: Phase 5 acceptance
+        run: pnpm test:acceptance:phase5
+
+      - name: Phase 6 acceptance
+        run: pnpm test:acceptance:phase6
+
+      - name: Phase 7 acceptance
+        run: pnpm test:acceptance:phase7
+
+      - name: Phase 8 acceptance
+        run: pnpm test:acceptance:phase8
+
+      - name: Phase 9 acceptance
+        run: pnpm test:acceptance:phase9
+
+      - name: Phase 10 acceptance
+        run: pnpm test:acceptance:phase10
+
+      - name: Phase 11 acceptance
+        run: pnpm test:acceptance:phase11
+
+      - name: Phase 12 acceptance
+        run: pnpm test:acceptance:phase12
+
+      - name: Phase 13 acceptance
+        run: pnpm test:acceptance:phase13
+
+      - name: Phase 14 acceptance
+        run: pnpm test:acceptance:phase14
+
+      - name: Phase 15 acceptance
+        run: pnpm test:acceptance:phase15
+
+      - name: Phase 16 acceptance
+        run: pnpm test:acceptance:phase16
+
+      - name: Phase 17 acceptance
+        run: pnpm test:acceptance:phase17
+
+      - name: Phase 18 acceptance
+        run: pnpm test:acceptance:phase18
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose ps || true
+          docker compose logs --tail=200 postgres redis || true
+          docker logs nexustheme-minio || true

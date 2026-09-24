@@ -3,6 +3,7 @@ import { Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppModule } from "./app.module";
 import { AllExceptionsFilter } from "./common/filters/http-exception.filter";
+import { StructuredLoggingInterceptor } from "./common/interceptors/structured-logging.interceptor";
 
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
@@ -44,6 +45,7 @@ async function bootstrap() {
   );
 
   app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalInterceptors(new StructuredLoggingInterceptor());
 
   const port = configService.get<number>("PORT", 4000);
   await app.listen(port);
