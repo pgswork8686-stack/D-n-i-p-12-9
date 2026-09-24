@@ -119,6 +119,13 @@ import {
   QueryTicketsRequest,
   QueryNotificationsRequest,
   UnreadNotificationCountDto,
+  TaxCalculationRequest,
+  TaxCalculationResponse,
+  InvoiceDto,
+  QueryInvoicesRequest,
+  QueryLedgerRequest,
+  LedgerEntryDto,
+  FinancialSummaryReportDto,
 } from "@nexus/contracts";
 
 
@@ -2316,6 +2323,125 @@ export class NexusApiClient {
       await handleCmsError(res, "Admin reply ticket failed");
     }
     return (await res.json()) as TicketMessageDto;
+  }
+
+  // ----------------------------------------------------
+  // Phase 16: Finance, Invoices & Ledger
+  // ----------------------------------------------------
+
+  async calculateTax(req: TaxCalculationRequest): Promise<TaxCalculationResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/finance/calculate-tax`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Tax calculation failed");
+    }
+    return (await res.json()) as TaxCalculationResponse;
+  }
+
+  async listMyInvoices(
+    query?: QueryInvoicesRequest,
+  ): Promise<{ items: InvoiceDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.status) params.append("status", query.status);
+    if (query?.orderId) params.append("orderId", query.orderId);
+    if (query?.page) params.append("page", String(query.page));
+    if (query?.limit) params.append("limit", String(query.limit));
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/finance/invoices${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Failed to list invoices");
+    }
+    return (await res.json()) as { items: InvoiceDto[]; total: number };
+  }
+
+  async getMyInvoice(id: string): Promise<InvoiceDto> {
+    const res = await fetch(`${this.baseUrl}/v1/finance/invoices/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Failed to get invoice");
+    }
+    return (await res.json()) as InvoiceDto;
+  }
+
+  async adminListInvoices(
+    query?: QueryInvoicesRequest,
+  ): Promise<{ items: InvoiceDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.status) params.append("status", query.status);
+    if (query?.orderId) params.append("orderId", query.orderId);
+    if (query?.userId) params.append("userId", query.userId);
+    if (query?.page) params.append("page", String(query.page));
+    if (query?.limit) params.append("limit", String(query.limit));
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/admin/finance/invoices${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin list invoices failed");
+    }
+    return (await res.json()) as { items: InvoiceDto[]; total: number };
+  }
+
+  async adminGetInvoice(id: string): Promise<InvoiceDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/finance/invoices/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin get invoice failed");
+    }
+    return (await res.json()) as InvoiceDto;
+  }
+
+  async adminListLedger(
+    query?: QueryLedgerRequest,
+  ): Promise<{ items: LedgerEntryDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.accountCode) params.append("accountCode", query.accountCode);
+    if (query?.referenceType) params.append("referenceType", query.referenceType);
+    if (query?.referenceId) params.append("referenceId", query.referenceId);
+    if (query?.page) params.append("page", String(query.page));
+    if (query?.limit) params.append("limit", String(query.limit));
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/admin/finance/ledger${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin list ledger failed");
+    }
+    return (await res.json()) as { items: LedgerEntryDto[]; total: number };
+  }
+
+  async adminGetFinancialSummary(
+    periodStart?: string,
+    periodEnd?: string,
+  ): Promise<FinancialSummaryReportDto> {
+    const params = new URLSearchParams();
+    if (periodStart) params.append("periodStart", periodStart);
+    if (periodEnd) params.append("periodEnd", periodEnd);
+
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const res = await fetch(`${this.baseUrl}/v1/admin/finance/summary${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin get financial summary failed");
+    }
+    return (await res.json()) as FinancialSummaryReportDto;
   }
 
   private buildHeaders(): Record<string, string> {

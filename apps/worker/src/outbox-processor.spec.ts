@@ -18,6 +18,11 @@ jest.mock("./hosting-processor", () => ({
   reconcileHostingUsage: jest.fn().mockResolvedValue({ reconciledCount: 1 }),
 }));
 
+jest.mock("./ledger-processor", () => ({
+  processFinancialLedgerForOrder: jest.fn().mockResolvedValue({ invoice: { invoiceNumber: "INV-1" }, ledgerTransactionId: "tx-1" }),
+  processFinancialLedgerForOrderRefund: jest.fn().mockResolvedValue({ refunded: true, transactionId: "tx-ref-1" }),
+}));
+
 jest.mock("@nexus/database", () => {
   return {
     OutboxEventStatus: {

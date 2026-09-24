@@ -501,6 +501,34 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow**:
   - `.github/workflows/phase15-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 15.
 
+### Phase 16 — Multi-Currency Financial Ledger, Commercial Invoicing, Tax/VAT & Reporting Engine
+- **Data Contracts & Domain Types (`packages/contracts/src/finance.ts`)**:
+  - `LedgerAccountType`, `LedgerAccountCode`, `LedgerEntryType`, `InvoiceStatus`, `TaxJurisdiction`.
+  - DTOs: `LedgerEntryDto`, `InvoiceDto`, `InvoiceItemDto`, `TaxCalculationRequest`, `TaxCalculationResponse`, `FinancialSummaryReportDto`, query interfaces.
+- **Tax / VAT Calculation & Compliance Engine (`packages/utils/src/tax-utils.ts`)**:
+  - Multi-jurisdiction tax resolution: US State taxes (CA, NY, TX, FL, WA), EU Member State standard VAT, Vietnam (10%), United Kingdom (20%), Australia GST (10%), Rest of World (0%).
+  - EU Cross-Border B2B Reverse Charge under Articles 194/196 Directive 2006/112/EC with validated VAT ID -> 0% rate and `isReverseCharge: true`.
+  - Half-up rounding minor currency calculation (`calculateTaxMinor`) and VAT ID format validation regex.
+- **Prisma Schema & Additive Migration (`packages/database`)**:
+  - Models: `FinancialLedgerEntry`, `Invoice`, `InvoiceItem`.
+  - Additive migration `20260924160000_20260924_phase16_financial_ledger_invoicing`.
+  - Chart of Accounts domain engine (`ledger-engine.ts`): Strict double-entry accounting invariant \(\sum \text{Debit} - \sum \text{Credit} === 0\), automated payment & refund entry generation, account balance aggregation.
+- **API Services & RBAC Controllers (`apps/api/src/modules/finance/`)**:
+  - `FinanceService`: `calculateTax`, `generateInvoiceForOrder`, `listMyInvoices`, `getMyInvoice` (with strict anti-enumeration 404 security), `adminListInvoices`, `adminGetInvoice`, `adminListLedger`, `adminGetFinancialSummary`.
+  - Customer controller: `POST /v1/finance/calculate-tax`, `GET /v1/finance/invoices`, `GET /v1/finance/invoices/:id`.
+  - Admin controller: `GET /v1/admin/finance/ledger`, `GET /v1/admin/finance/summary`, `GET /v1/admin/finance/invoices`, `GET /v1/admin/finance/invoices/:id`, `POST /v1/admin/finance/invoices`.
+  - RBAC: Governed by permissions `finance.read`, `finance.manage`, `invoice.read`.
+- **Worker & Outbox Automation (`apps/worker/src/ledger-processor.ts`)**:
+  - Processes `ORDER_PAID`: Idempotently generates official commercial invoice and books balanced double-entry ledger rows.
+  - Processes `ORDER_REFUNDED`: Idempotently records balanced refund reversal rows.
+- **Customer Portal UI Integration (`/invoices`, `/invoices/[id]`)**:
+  - Commercial Invoices List with status filtering, tax breakdown badges, and PDF print/download actions.
+  - Printable Invoice Detail page with company tax registration headers, line item breakdowns, and reverse charge regulatory notices.
+- **75-Gate Acceptance Suite (`phase16-acceptance.ts`)**:
+  - 75/75 verification gates passing across tax resolution, reverse charge, VAT format checking, invoice numbering, double-entry ledger zero-sum balance, financial summary reports, anti-enumeration security, and worker idempotency.
+- **CI Workflow**:
+  - `.github/workflows/phase16-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 16.
+
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
 - Rate limiting

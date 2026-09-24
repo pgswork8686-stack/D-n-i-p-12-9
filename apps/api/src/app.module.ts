@@ -21,6 +21,7 @@ import { SubscriptionsModule } from "./modules/subscriptions/subscriptions.modul
 import { AffiliatesModule } from "./modules/affiliates/affiliates.module";
 import { HostingModule } from "./modules/hosting/hosting.module";
 import { TicketsModule } from "./modules/tickets/tickets.module";
+import { FinanceModule } from "./modules/finance/finance.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 
 @Module({
@@ -48,6 +49,7 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
     AffiliatesModule,
     HostingModule,
     TicketsModule,
+    FinanceModule,
     HealthModule,
     StorageModule,
     AuthModule,
