@@ -6,6 +6,11 @@ jest.mock("./entitlement-issuer", () => ({
   issueEntitlementsForOrder: jest.fn().mockResolvedValue({ orderId: "order-123", issuedCount: 1, entitlements: [] }),
 }));
 
+jest.mock("./affiliate-processor", () => ({
+  processAffiliateReferralForOrder: jest.fn().mockResolvedValue(null),
+  clawbackAffiliateReferralForOrder: jest.fn().mockResolvedValue(true),
+}));
+
 jest.mock("@nexus/database", () => {
   return {
     OutboxEventStatus: {

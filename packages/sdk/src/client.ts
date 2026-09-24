@@ -78,6 +78,25 @@ import {
   CreateAiDraftJobDto,
   ListAutomationJobsQuery,
   PaginatedAutomationJobsDto,
+  SubscriptionPlanDto,
+  SubscriptionDto,
+  CreateSubscriptionSessionRequest,
+  CreatePortalSessionRequest,
+  SessionResponseDto,
+  CheckMembershipQuotaResponse,
+  AdminCreatePlanRequest,
+  AdminUpdatePlanRequest,
+  AffiliateAccountDto,
+  AffiliateDashboardStatsDto,
+  AffiliateClickRequest,
+  AffiliateClickResponse,
+  RegisterAffiliateRequest,
+  RequestPayoutRequest,
+  AffiliateReferralDto,
+  AffiliatePayoutDto,
+  AdminUpdateAffiliateStatusRequest,
+  AdminUpdateCommissionRequest,
+  AdminProcessPayoutRequest,
 } from "@nexus/contracts";
 
 
@@ -1570,6 +1589,286 @@ export class NexusApiClient {
       await handleCmsError(res, "Create AI draft request failed");
     }
     return (await res.json()) as AutomationJobDto;
+  }
+
+  // --------------------------------------------------------
+  // Phase 13 — Subscriptions Methods
+  // --------------------------------------------------------
+
+  async listSubscriptionPlans(): Promise<SubscriptionPlanDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/subscriptions/plans`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List subscription plans failed");
+    }
+    return (await res.json()) as SubscriptionPlanDto[];
+  }
+
+  async getMySubscription(): Promise<SubscriptionDto> {
+    const res = await fetch(`${this.baseUrl}/v1/subscriptions/me`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get subscription failed");
+    }
+    return (await res.json()) as SubscriptionDto;
+  }
+
+  async createSubscriptionCheckoutSession(
+    req: CreateSubscriptionSessionRequest,
+  ): Promise<SessionResponseDto> {
+    const res = await fetch(`${this.baseUrl}/v1/subscriptions/checkout-session`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create subscription checkout session failed");
+    }
+    return (await res.json()) as SessionResponseDto;
+  }
+
+  async createSubscriptionPortalSession(
+    req: CreatePortalSessionRequest,
+  ): Promise<SessionResponseDto> {
+    const res = await fetch(`${this.baseUrl}/v1/subscriptions/customer-portal`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create customer portal session failed");
+    }
+    return (await res.json()) as SessionResponseDto;
+  }
+
+  async checkMembershipQuota(
+    entitlementId: string,
+  ): Promise<CheckMembershipQuotaResponse> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/subscriptions/quota/${entitlementId}`,
+      {
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Check membership quota failed");
+    }
+    return (await res.json()) as CheckMembershipQuotaResponse;
+  }
+
+  async listAdminSubscriptionPlans(): Promise<SubscriptionPlanDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/subscriptions/plans`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin subscription plans failed");
+    }
+    return (await res.json()) as SubscriptionPlanDto[];
+  }
+
+  async createAdminSubscriptionPlan(
+    dto: AdminCreatePlanRequest,
+  ): Promise<SubscriptionPlanDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/subscriptions/plans`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(dto),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create admin subscription plan failed");
+    }
+    return (await res.json()) as SubscriptionPlanDto;
+  }
+
+  async updateAdminSubscriptionPlan(
+    id: string,
+    dto: AdminUpdatePlanRequest,
+  ): Promise<SubscriptionPlanDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/subscriptions/plans/${id}`,
+      {
+        method: "PATCH",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(dto),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Update admin subscription plan failed");
+    }
+    return (await res.json()) as SubscriptionPlanDto;
+  }
+
+  async listAdminSubscriptions(): Promise<SubscriptionDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/subscriptions`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin subscriptions failed");
+    }
+    return (await res.json()) as SubscriptionDto[];
+  }
+
+  async cancelAdminSubscription(id: string): Promise<SubscriptionDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/subscriptions/${id}/cancel`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Cancel admin subscription failed");
+    }
+    return (await res.json()) as SubscriptionDto;
+  }
+
+  // --------------------------------------------------------
+  // Phase 13 — Affiliates Methods
+  // --------------------------------------------------------
+
+  async registerAffiliate(
+    req: RegisterAffiliateRequest,
+  ): Promise<AffiliateAccountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/register`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Register affiliate failed");
+    }
+    return (await res.json()) as AffiliateAccountDto;
+  }
+
+  async getMyAffiliateDashboard(): Promise<AffiliateDashboardStatsDto> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/me`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get affiliate dashboard failed");
+    }
+    return (await res.json()) as AffiliateDashboardStatsDto;
+  }
+
+  async recordAffiliateClick(
+    req: AffiliateClickRequest,
+  ): Promise<AffiliateClickResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/click`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Record affiliate click failed");
+    }
+    return (await res.json()) as AffiliateClickResponse;
+  }
+
+  async requestAffiliatePayout(
+    req: RequestPayoutRequest,
+  ): Promise<AffiliatePayoutDto> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/payouts`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Request affiliate payout failed");
+    }
+    return (await res.json()) as AffiliatePayoutDto;
+  }
+
+  async listMyReferrals(): Promise<AffiliateReferralDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/referrals`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List referrals failed");
+    }
+    return (await res.json()) as AffiliateReferralDto[];
+  }
+
+  async listMyPayouts(): Promise<AffiliatePayoutDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/affiliates/payouts`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List payouts failed");
+    }
+    return (await res.json()) as AffiliatePayoutDto[];
+  }
+
+  async listAdminAffiliates(): Promise<AffiliateAccountDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/affiliates`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin affiliates failed");
+    }
+    return (await res.json()) as AffiliateAccountDto[];
+  }
+
+  async updateAdminAffiliateStatus(
+    id: string,
+    req: AdminUpdateAffiliateStatusRequest,
+  ): Promise<AffiliateAccountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/affiliates/${id}/status`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Update admin affiliate status failed");
+    }
+    return (await res.json()) as AffiliateAccountDto;
+  }
+
+  async updateAdminAffiliateCommission(
+    id: string,
+    req: AdminUpdateCommissionRequest,
+  ): Promise<AffiliateAccountDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/affiliates/${id}/commission`,
+      {
+        method: "PATCH",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(req),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Update admin affiliate commission failed");
+    }
+    return (await res.json()) as AffiliateAccountDto;
+  }
+
+  async listAdminAffiliatePayouts(): Promise<AffiliatePayoutDto[]> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/affiliates/payouts`, {
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List admin affiliate payouts failed");
+    }
+    return (await res.json()) as AffiliatePayoutDto[];
+  }
+
+  async processAdminAffiliatePayout(
+    id: string,
+    req: AdminProcessPayoutRequest,
+  ): Promise<AffiliatePayoutDto> {
+    const res = await fetch(
+      `${this.baseUrl}/v1/admin/affiliates/payouts/${id}/process`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify(req),
+      },
+    );
+    if (!res.ok) {
+      await handleCmsError(res, "Process admin affiliate payout failed");
+    }
+    return (await res.json()) as AffiliatePayoutDto;
   }
 
   private buildHeaders(): Record<string, string> {

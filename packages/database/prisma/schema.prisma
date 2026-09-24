@@ -27,6 +27,10 @@ model User {
   downloadEvents     DownloadEvent[]
   downloadGrants     DownloadGrant[]
   contentPosts       ContentPost[]
+  subscriptions      Subscription[]
+  affiliateAccount   AffiliateAccount?
+  affiliateReferrals AffiliateReferral[]
+  affiliateClicks    AffiliateClick[]
 
   @@map("users")
 }
@@ -187,6 +191,7 @@ enum BillingInterval {
   MONTHLY
   QUARTERLY
   YEARLY
+  LIFETIME
 }
 
 enum MediaType {
@@ -425,18 +430,22 @@ model Order {
   totalAmount    Int         @map("total_amount")
   cartId         String?     @unique @map("cart_id")
   metadata       Json?
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
+  affiliateId    String?       @map("affiliate_id")
+  affiliateCode  String?       @map("affiliate_code")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
-  cart         Cart?         @relation(fields: [cartId], references: [id], onDelete: SetNull)
-  items        OrderItem[]
-  payments     Payment[]
-  entitlements Entitlement[]
+  user              User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  cart              Cart?              @relation(fields: [cartId], references: [id], onDelete: SetNull)
+  items             OrderItem[]
+  payments          Payment[]
+  entitlements      Entitlement[]
+  affiliateReferral AffiliateReferral?
 
   @@index([userId])
   @@index([status])
   @@index([orderNumber])
+  @@index([affiliateId])
   @@map("orders")
 }
 
@@ -585,19 +594,21 @@ model Entitlement {
   maxActivations  Int?              @map("max_activations")
   updatesUntil    DateTime?         @map("updates_until")
   supportUntil    DateTime?         @map("support_until")
+  subscriptionId  String?           @map("subscription_id")
   metadata        Json?
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 
-  user        User                @relation(fields: [userId], references: [id], onDelete: Restrict)
-  order       Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderItem   OrderItem           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
-  product     Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
-  variant     ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  allocations LicenseAllocation[]
+  user            User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order           Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem       OrderItem           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  product         Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant         ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  subscription    Subscription?       @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  allocations     LicenseAllocation[]
   internalLicense InternalLicense?
-  downloadEvents DownloadEvent[]
-  downloadGrants DownloadGrant[]
+  downloadEvents  DownloadEvent[]
+  downloadGrants  DownloadGrant[]
 
   @@index([userId])
   @@index([orderId])
@@ -605,6 +616,7 @@ model Entitlement {
   @@index([productId])
   @@index([variantId])
   @@index([expiresAt])
+  @@index([subscriptionId])
   @@index([status, expiresAt])
   @@map("entitlements")
 }
@@ -1020,5 +1032,199 @@ model AutomationDelivery {
   @@index([jobId])
   @@index([status])
   @@map("automation_deliveries")
+}
+
+// --------------------------------------------------------
+// Phase 13 — Affiliate & Membership Models
+// --------------------------------------------------------
+
+enum SubscriptionTier {
+  STARTER
+  PRO
+  AGENCY
+  ALL_ACCESS
+}
+
+enum SubscriptionStatus {
+  INCOMPLETE
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  TRIALING
+}
+
+enum AffiliateStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+enum ReferralStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum PayoutStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum PayoutMethod {
+  BANK_TRANSFER
+  PAYPAL
+  CRYPTO
+}
+
+model SubscriptionPlan {
+  id                      String           @id @default(uuid())
+  name                    String
+  slug                    String           @unique
+  description             String?
+  tier                    SubscriptionTier
+  interval                BillingInterval  @default(MONTHLY)
+  priceMinor              Int              @map("price_minor")
+  currency                Currency         @default(USD)
+  dailyDownloadQuota      Int              @default(10) @map("daily_download_quota")
+  maxActivationsPerProduct Int             @default(1) @map("max_activations_per_product")
+  stripePriceId           String?          @map("stripe_price_id")
+  features                Json?
+  isActive                Boolean          @default(true) @map("is_active")
+  createdAt               DateTime         @default(now()) @map("created_at")
+  updatedAt               DateTime         @updatedAt @map("updated_at")
+
+  subscriptions           Subscription[]
+
+  @@index([slug])
+  @@index([tier])
+  @@index([isActive])
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  userId               String             @map("user_id")
+  planId               String             @map("plan_id")
+  status               SubscriptionStatus @default(INCOMPLETE)
+  stripeCustomerId     String?            @map("stripe_customer_id")
+  stripeSubscriptionId String?            @unique @map("stripe_subscription_id")
+  currentPeriodStart   DateTime           @default(now()) @map("current_period_start")
+  currentPeriodEnd     DateTime           @map("current_period_end")
+  cancelAtPeriodEnd    Boolean            @default(false) @map("cancel_at_period_end")
+  canceledAt           DateTime?          @map("canceled_at")
+  trialEndsAt          DateTime?          @map("trial_ends_at")
+  endedAt              DateTime?          @map("ended_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 SubscriptionPlan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+  entitlements         Entitlement[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([planId])
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model AffiliateAccount {
+  id                   String           @id @default(uuid())
+  userId               String           @unique @map("user_id")
+  code                 String           @unique
+  status               AffiliateStatus  @default(PENDING)
+  commissionRateBp     Int              @default(2000) @map("commission_rate_bp")
+  payoutMethod         PayoutMethod     @default(BANK_TRANSFER) @map("payout_method")
+  payoutDetails        Json?            @map("payout_details")
+  totalEarnedMinor     BigInt           @default(0) @map("total_earned_minor")
+  pendingBalanceMinor  BigInt           @default(0) @map("pending_balance_minor")
+  availableBalanceMinor BigInt          @default(0) @map("available_balance_minor")
+  withdrawnBalanceMinor BigInt          @default(0) @map("withdrawn_balance_minor")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  user                 User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clicks               AffiliateClick[]
+  referrals            AffiliateReferral[]
+  payouts              AffiliatePayout[]
+
+  @@index([code])
+  @@index([status])
+  @@map("affiliate_accounts")
+}
+
+model AffiliateClick {
+  id             String           @id @default(uuid())
+  affiliateId    String           @map("affiliate_id")
+  userId         String?          @map("user_id")
+  ipHash         String           @map("ip_hash")
+  userAgentHash  String           @map("user_agent_hash")
+  referer        String?
+  landingPage    String           @map("landing_page")
+  utmSource      String?          @map("utm_source")
+  utmCampaign    String?          @map("utm_campaign")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  affiliate      AffiliateAccount @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  user           User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([affiliateId])
+  @@index([ipHash])
+  @@index([createdAt])
+  @@map("affiliate_clicks")
+}
+
+model AffiliateReferral {
+  id                   String           @id @default(uuid())
+  affiliateId          String           @map("affiliate_id")
+  orderId              String           @unique @map("order_id")
+  customerUserId       String           @map("customer_user_id")
+  orderAmountMinor     Int              @map("order_amount_minor")
+  commissionAmountMinor Int             @map("commission_amount_minor")
+  status               ReferralStatus   @default(PENDING)
+  matureAt             DateTime         @map("mature_at")
+  approvedAt           DateTime?        @map("approved_at")
+  rejectedAt           DateTime?        @map("rejected_at")
+  rejectionReason      String?          @map("rejection_reason")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  affiliate            AffiliateAccount @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  order                Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  customer             User             @relation(fields: [customerUserId], references: [id], onDelete: Restrict)
+
+  @@index([affiliateId])
+  @@index([status])
+  @@index([matureAt])
+  @@index([customerUserId])
+  @@map("affiliate_referrals")
+}
+
+model AffiliatePayout {
+  id                   String           @id @default(uuid())
+  affiliateId          String           @map("affiliate_id")
+  amountMinor          Int              @map("amount_minor")
+  currency             Currency         @default(USD)
+  status               PayoutStatus     @default(REQUESTED)
+  payoutMethod         PayoutMethod     @map("payout_method")
+  payoutDetailsSnapshot Json            @map("payout_details_snapshot")
+  referenceCode        String?          @map("reference_code")
+  requestedAt          DateTime         @default(now()) @map("requested_at")
+  processedAt          DateTime?        @map("processed_at")
+  processedBy          String?          @map("processed_by")
+  rejectionReason      String?          @map("rejection_reason")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  affiliate            AffiliateAccount @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId])
+  @@index([status])
+  @@map("affiliate_payouts")
 }
 

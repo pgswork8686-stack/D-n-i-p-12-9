@@ -1,5 +1,9 @@
 import { prisma, OutboxEventStatus, enqueueOrderPaidEmailJob } from "@nexus/database";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
+import {
+  processAffiliateReferralForOrder,
+  clawbackAffiliateReferralForOrder,
+} from "./affiliate-processor";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -141,6 +145,12 @@ export async function processOutboxEvents(
 
         // Phase 12: Idempotently enqueue ORDER_PAID_EMAIL automation job
         await enqueueOrderPaidEmailJob(authoritativeOrderId);
+
+        // Phase 13: Idempotently process affiliate referral commission
+        await processAffiliateReferralForOrder(authoritativeOrderId);
+      } else if (event.eventType === "ORDER_REFUNDED") {
+        const authoritativeOrderId = event.aggregateId;
+        await clawbackAffiliateReferralForOrder(authoritativeOrderId);
       } else {
         throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }

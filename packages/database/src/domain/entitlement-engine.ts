@@ -424,6 +424,7 @@ export async function issueEntitlementsForOrder(
             updatesUntil,
             supportUntil,
             metadata: metadata as any,
+            subscriptionId: null,
             createdAt: new Date(),
             updatedAt: new Date(),
           });

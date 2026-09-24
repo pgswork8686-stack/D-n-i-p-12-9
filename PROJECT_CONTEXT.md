@@ -409,21 +409,44 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 
 - **n8n Pinned Runtime & Real Smoke**: Workflows validated against pinned `n8nio/n8n:2.40.0` (documented in `automation/n8n/README.md`); real container smoke (`pnpm n8n:smoke`) boots n8n 2.40.0, waits for `/healthz`, loads workflows, executes Code nodes with `NODE_FUNCTION_ALLOW_BUILTIN=crypto` (crypto only, never `*`), and exercises signed ingress against local mock providers with zero real OpenAI/Resend calls.
 ### Phase 12: n8n Automation & AI Content Orchestration
-**Status**: IMPLEMENTED / UNDER REVIEW (PR #15 OPEN — NOT MERGED; Branch: `feature/phase-12-n8n-automation`; Reviewed HEAD: `e1a9881f22c7a3a1ce752f87c901046191f5b27d`; Round 4 hardening complete; Acceptance: 74/74 Gates Green — real assertions only, zero print-only gates; n8n runtime pinned: 1.82.1 / 2.40.0 compatibility; Phase 13: NOT STARTED)
+**Status**: MERGED (PR #15 merged into `main`; 74/74 Gates Green — real assertions only, zero print-only gates; n8n runtime pinned: 1.82.1 / 2.40.0 compatibility).
 
-- **Strict Type-to-Route Mapping & Pre-Claim Filtering**: `resolveWebhookUrlForJobType()` maps `CMS_AI_DRAFT`, `ORDER_PAID_EMAIL`, and `LICENSE_PROVISIONED_EMAIL` to dedicated `N8N_*_WEBHOOK_URL` routes; unknown/unsupported types (including `EXTERNAL_ALLOCATION_EMAIL`, intentionally unsupported in Phase 12 V1) fail closed and are never dispatched to a base URL. `claimDueAutomationJobs` accepts `allowedTypes` filtering in the SQL atomic claim query so disabled types (`N8N_DISABLED_JOB_TYPES`) are never claimed, leased, or attempt-incremented.
-- **Shared Secret Policy (Single Source of Truth)**: `validateAutomationServiceSecret()` and `resolveAutomationServiceSecret()` in `@nexus/utils` provide the authoritative single source of truth across worker, API HMAC guard, and n8n Code nodes. Whitespace is normalized and trimmed before length (>= 32 chars) and placeholder checks (`placeholder`, `changeme`, `secret`).
-- **Distributed Replay Protection**: API callback guard and n8n ingress verification share `claimAutomationReplayKey()` (Redis `SET key 1 NX PX 600000`); Redis outage fails closed (503, zero business mutation); multi-instance proof runs two guard contexts on one Redis — guard A accepts, guard B receives 409.
-- **Timing-Safe HMAC & Ingress Verification**: every workflow is Webhook → Verify Nexus Dispatch → provider; the verifier enforces `X-Nexus-Service=worker`, fresh timestamp, `X-Nexus-Request-Id`, hex signature validation, `crypto.timingSafeEqual` (never `===`), per-workflow expected job type, and Redis replay claim BEFORE any provider call; wrong service / expired timestamp / bad or replayed signature reach zero providers.
-- **Provider Idempotency (Resend)**: backend-created notification payloads carry the authoritative `providerIdempotencyKey` (`email:order-paid:<orderId>`, `email:license-provisioned:<licenseId>`); n8n forwards it verbatim as `Idempotency-Key`; neither browser nor n8n can generate or override it; callback-loss + redispatch reuses the same key so logical customer emails stay at exactly one.
-- **n8n Credential Store & Env Policy**: OpenAI and Resend are referenced through n8n credential types only — zero literal API keys and no `Bearer {{ $env.* }}` construction in workflow JSON; `AUTOMATION_SERVICE_SECRET` remains a runtime-only HMAC secret; production execution-data retention documented (no plaintext license keys persisted anywhere).
-- **Provider Failure Callbacks & Delivery Reset**: all three workflows implement failure branches (429/5xx/timeout → sanitized `AI_HTTP_429`, `EMAIL_HTTP_5XX`, `PROVIDER_TIMEOUT` codes with safe messages, never raw provider bodies) that POST signed `/v1/internal/automation/jobs/:id/fail`. Retryable failures reset `AutomationDelivery` status from `SENDING` back to `PENDING` for future dispatch attempts.
-- **Delivery Lifecycle & Stale Recovery**: typed `AutomationDeliveryStatus` (`PENDING`, `SENDING`, `SENT`, `FAILED`); only provider-success callback sets `SENT` with `sentAt` and stored `providerMessageId`. Stale recovery inside `claimDueAutomationJobs` atomically terminalizes expired RUNNING jobs with `attempt_count >= max_attempts` to `FAILED` and associated deliveries to `FAILED` with `MAX_ATTEMPTS_EXHAUSTED`, ensuring exhausted jobs are never reclaimed.
-- **Fail-Closed PostgreSQL Locks & Rate Limiting**: `lockJobForUpdate()` executes real `SELECT ... FOR UPDATE` and any production lock failure throws — no silent `findUnique` downgrade; `pg_advisory_xact_lock` AI rate limiting fails closed so the max-3 concurrent AI job cost control cannot be raced.
-- **AI Callback Linearization & Request Idempotency**: `applyAiDraftResult` strictly requires `CMS_AI_DRAFT + RUNNING`, locks the job row `FOR UPDATE` inside one transaction, and 20 concurrent callbacks produce exactly one `ContentPost`. Admin AI draft creation supports `Idempotency-Key` scoped per admin (`cms-ai-draft:<adminId>:<key>`) with canonical SHA-256 request fingerprinting, returning 409 Conflict on payload mismatch and safely resolving concurrent P2002 races.
-- **License Provisioning Notification Lifecycle**: `LICENSE_PROVISIONED_EMAIL` is fully wired into worker provisioning (`enqueueLicenseProvisionedEmailJob`) with masked key payloads (`NXS-****-****-XXXX`, never plaintext). A background reconciliation task (`reconcileMissingLicenseProvisionedEmailJobs`) periodically checks for and recovers missing license notification jobs.
-- **74-Gate Acceptance Suite (Real Assertions Only)**: 74 end-to-end assertions covering secret policy, whitespace padding rejection, Redis-outage 503, multi-guard replay, timing-safe HMAC, provider idempotency, delivery PENDING/SENDING/SENT/FAILED lifecycle, stale job terminalization, disabled type pre-claim filtering, license notification provisioning and reconciliation, AI draft request idempotency & conflict rejection, advisory lock concurrency, and slug collision handling.
-- **Real n8n Runtime Smoke in CI**: `.github/workflows/phase12-ci.yml` runs `pnpm n8n:smoke` right after `pnpm n8n:validate` (no `continue-on-error`), spinning up n8n and executing all 3 workflows against mock providers in containerized CI.
+### Phase 13: Affiliate & Membership Architecture
+**Status**: IMPLEMENTED / READY FOR REVIEW (Branch: `feature/phase-13-affiliate-membership`; 90/90 Acceptance Gates; 100% Green CI; Zero-client authority; CAS balance transfers; Anti-fraud self-referral engine; Atomic quota enforcement).
+
+- **Domain Model & Additive Database Migration**:
+  - `SubscriptionPlan`: Tiered membership specifications (`STARTER`, `PRO`, `AGENCY`, `ALL_ACCESS`), intervals (`WEEKLY`, `MONTHLY`, `QUARTERLY`, `YEARLY`, `LIFETIME`), daily download quotas, feature lists, pricing in integer minor units.
+  - `Subscription`: Customer subscription state machine (`INCOMPLETE`, `ACTIVE`, `PAST_DUE`, `CANCELED`, `UNPAID`, `TRIALING`), current period tracking, cancellation flags, and atomic links to `MEMBERSHIP_ACCESS` entitlements.
+  - `AffiliateAccount`: Partner registration, unique referral codes, status (`PENDING`, `ACTIVE`, `SUSPENDED`, `REJECTED`), configurable commission basis points (`commissionRateBp`), and double-entry balance accounting (`pendingBalanceMinor`, `availableBalanceMinor`, `withdrawnBalanceMinor`, `totalEarnedMinor`).
+  - `AffiliateClick`: Privacy-preserving click tracking storing SHA-256 hashes of IP and User-Agent (`ipHash`, `userAgentHash`) with zero raw PII stored in the database.
+  - `AffiliateReferral`: Referred order tracking, commission calculation, and maturation lifecycle (`PENDING` -> `APPROVED` -> `PAID` or `REJECTED`).
+  - `AffiliatePayout`: Payout request ledger (`REQUESTED`, `PROCESSING`, `COMPLETED`, `REJECTED`) with CAS deduction, reference codes, and refund-on-rejection safety.
+  - Additive SQL migration: `20260924000000_20260924_phase13_affiliate_membership`.
+- **Zero Client Authority & Double-Entry Accounting**:
+  - All balance mutations, quota decrements, and status transitions occur exclusively in backend transactions.
+  - Commission is initially credited only to `pendingBalanceMinor` with a 30-day maturation lock.
+  - Balance advancement from pending to available is atomically executed by worker reconciliation (`reconcileMatureAffiliateReferrals`).
+  - Payout requests use Compare-And-Swap (CAS) to deduct from `availableBalanceMinor` without risking negative balances or concurrent double-withdrawal race conditions.
+  - Rejected payouts atomically refund the requested amount back to `availableBalanceMinor`.
+- **Anti-Fraud Self-Referral Prevention**:
+  - `isSelfReferral(buyerUserId, affiliateUserId, buyerIpHash, affiliateIpHash)` enforces strict validation:
+    - Same-user referral is blocked immediately (`SAME_USER`).
+    - Matching SHA-256 IP/User-Agent fingerprint between buyer and affiliate owner is blocked (`MATCHING_IP_FINGERPRINT`).
+  - Self-referral attempts create zero commission and leave balances completely untouched.
+- **Daily Download Quota Engine & Entitlement Rate-Limiting**:
+  - `/v1/subscriptions/quota/:entitlementId` inspects daily download capacity, queries today's downloads from `download_logs` (resets at UTC 00:00:00), and calculates `quotaRemainingToday`.
+  - Non-owners receive 403 Forbidden; expired or revoked entitlements fail closed with `allowed: false`.
+- **Customer Portal UI Integration**:
+  - `/affiliate`: Complete partner dashboard displaying referral link, copy-to-clipboard, conversion rate metrics, pending/available balances, payout request modal ($50 threshold validation), recent referrals table, and payout history.
+  - `/subscription`: Membership management hub showing current tier badge, period dates, interactive daily download quota consumption bar, customer billing portal redirect, and upgrade tier pricing matrix.
+- **Worker Processors & Outbox Hooks**:
+  - `affiliate-processor.ts`: Listens to `ORDER_PAID` to attribute referral commissions and `ORDER_REFUNDED` to execute commission clawbacks; runs `reconcileMatureAffiliateReferrals` for mature balance transfers.
+  - `subscription-reconciler.ts`: Periodically reconciles expired subscriptions, transitions status to `CANCELED`/`PAST_DUE`, and atomically revokes linked entitlements.
+- **90-Gate Acceptance Test Suite (`phase13-acceptance.ts`)**:
+  - 90 end-to-end verification gates covering: Plan creation/validation/hiding (Gates 1-10), Customer checkout & provisioning (Gates 11-20), Quota tracking & tenant isolation (Gates 21-28), Subscription cancellation & reconciler (Gates 29-36), Affiliate registration & reserved codes (Gates 37-46), Anonymous click tracking & cookies (Gates 47-53), Order attribution & commission math (Gates 54-60), Anti-fraud self-referral prevention (Gates 61-66), Maturation cron & balance advancement (Gates 67-72), Payout lifecycle & CAS deductions (Gates 73-80), Refund clawback & idempotency (Gates 81-85), RBAC & data isolation (Gates 86-90).
+- **CI Workflow & Quality Gates**:
+  - `.github/workflows/phase13-ci.yml` verifying lint, typecheck, all monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 13.
+
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
