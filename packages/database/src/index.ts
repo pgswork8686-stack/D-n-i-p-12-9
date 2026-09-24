@@ -8,4 +8,5 @@ export * from "./domain/cms-engine";
 export * from "./domain/automation-engine";
 export * from "./domain/membership-affiliate-engine";
 export * from "./domain/hosting-engine";
+export * from "./domain/ticket-engine";
 

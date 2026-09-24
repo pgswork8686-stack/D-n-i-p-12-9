@@ -110,6 +110,15 @@ import {
   PurgeCacheResponseDto,
   UsageStatsDto,
   HostingAccountStatus,
+  TicketDto,
+  TicketMessageDto,
+  NotificationDto,
+  CreateTicketRequest,
+  ReplyTicketRequest,
+  AdminUpdateTicketRequest,
+  QueryTicketsRequest,
+  QueryNotificationsRequest,
+  UnreadNotificationCountDto,
 } from "@nexus/contracts";
 
 
@@ -2125,6 +2134,188 @@ export class NexusApiClient {
       await handleCmsError(res, "Terminate hosting account failed");
     }
     return (await res.json()) as HostingAccountDto;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Customer Support Helpdesk & Notifications
+  // ---------------------------------------------------------------------------
+
+  async listMyTickets(
+    query?: QueryTicketsRequest,
+  ): Promise<{ items: TicketDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.priority) params.set("priority", query.priority);
+    if (query?.category) params.set("category", query.category);
+    if (query?.page) params.set("page", String(query.page));
+    if (query?.limit) params.set("limit", String(query.limit));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+
+    const res = await fetch(`${this.baseUrl}/v1/tickets${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List tickets failed");
+    }
+    return (await res.json()) as { items: TicketDto[]; total: number };
+  }
+
+  async getMyTicket(id: string): Promise<TicketDto> {
+    const res = await fetch(`${this.baseUrl}/v1/tickets/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get ticket failed");
+    }
+    return (await res.json()) as TicketDto;
+  }
+
+  async createTicket(req: CreateTicketRequest): Promise<TicketDto> {
+    const res = await fetch(`${this.baseUrl}/v1/tickets`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Create ticket failed");
+    }
+    return (await res.json()) as TicketDto;
+  }
+
+  async replyTicket(
+    id: string,
+    req: ReplyTicketRequest,
+  ): Promise<TicketMessageDto> {
+    const res = await fetch(`${this.baseUrl}/v1/tickets/${id}/reply`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Reply ticket failed");
+    }
+    return (await res.json()) as TicketMessageDto;
+  }
+
+  async listMyNotifications(
+    query?: QueryNotificationsRequest,
+  ): Promise<NotificationDto[]> {
+    const params = new URLSearchParams();
+    if (query?.isRead !== undefined) params.set("isRead", String(query.isRead));
+    if (query?.limit) params.set("limit", String(query.limit));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+
+    const res = await fetch(`${this.baseUrl}/v1/notifications${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "List notifications failed");
+    }
+    return (await res.json()) as NotificationDto[];
+  }
+
+  async getUnreadNotificationCount(): Promise<UnreadNotificationCountDto> {
+    const res = await fetch(`${this.baseUrl}/v1/notifications/unread-count`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Get unread count failed");
+    }
+    return (await res.json()) as UnreadNotificationCountDto;
+  }
+
+  async markNotificationAsRead(id: string): Promise<NotificationDto> {
+    const res = await fetch(`${this.baseUrl}/v1/notifications/${id}/read`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Mark notification as read failed");
+    }
+    return (await res.json()) as NotificationDto;
+  }
+
+  async markAllNotificationsAsRead(): Promise<{ success: boolean; updatedCount: number }> {
+    const res = await fetch(`${this.baseUrl}/v1/notifications/read-all`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Mark all notifications read failed");
+    }
+    return (await res.json()) as { success: boolean; updatedCount: number };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admin Support Helpdesk
+  // ---------------------------------------------------------------------------
+
+  async adminListTickets(
+    query?: QueryTicketsRequest,
+  ): Promise<{ items: TicketDto[]; total: number }> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.priority) params.set("priority", query.priority);
+    if (query?.category) params.set("category", query.category);
+    if (query?.userId) params.set("userId", query.userId);
+    if (query?.assignedAdminId) params.set("assignedAdminId", query.assignedAdminId);
+    if (query?.page) params.set("page", String(query.page));
+    if (query?.limit) params.set("limit", String(query.limit));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+
+    const res = await fetch(`${this.baseUrl}/v1/admin/tickets${qs}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin list tickets failed");
+    }
+    return (await res.json()) as { items: TicketDto[]; total: number };
+  }
+
+  async adminGetTicket(id: string): Promise<TicketDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/tickets/${id}`, {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin get ticket failed");
+    }
+    return (await res.json()) as TicketDto;
+  }
+
+  async adminUpdateTicket(
+    id: string,
+    req: AdminUpdateTicketRequest,
+  ): Promise<TicketDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/tickets/${id}`, {
+      method: "PATCH",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin update ticket failed");
+    }
+    return (await res.json()) as TicketDto;
+  }
+
+  async adminReplyTicket(
+    id: string,
+    req: ReplyTicketRequest,
+  ): Promise<TicketMessageDto> {
+    const res = await fetch(`${this.baseUrl}/v1/admin/tickets/${id}/reply`, {
+      method: "POST",
+      headers: this.buildHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+      await handleCmsError(res, "Admin reply ticket failed");
+    }
+    return (await res.json()) as TicketMessageDto;
   }
 
   private buildHeaders(): Record<string, string> {

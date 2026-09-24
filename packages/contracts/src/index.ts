@@ -12,3 +12,4 @@ export * from "./automation";
 export * from "./affiliates";
 export * from "./subscriptions";
 export * from "./hosting";
+export * from "./tickets";

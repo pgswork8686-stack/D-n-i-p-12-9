@@ -474,6 +474,33 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow**:
   - `.github/workflows/phase14-ci.yml` verifying lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 14.
 
+### Phase 15: Customer Support Helpdesk, Ticketing & Multi-Channel Notification Engine (COMPLETED)
+- **Domain Modeling & Database Schema**:
+  - `Ticket`: Tracks `ticketNumber` (`TK-YYYYMM-XXXX`), `userId`, `assignedAdminId`, `subject`, `category`, `priority` (`LOW`, `NORMAL`, `MEDIUM`, `HIGH`, `URGENT`), `status` (`OPEN`, `WAITING_CUSTOMER`, `WAITING_STAFF`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`), `orderId`, `entitlementId`, and `closedAt`.
+  - `TicketMessage`: Threaded conversation messages with `senderType` (`CUSTOMER`, `STAFF`, `SYSTEM`) and `isInternalNote` flag for confidential staff-only collaboration.
+  - `TicketAttachment`: Whitelisted file attachments (images, PDF, TXT, JSON, ZIP <= 25MB) with SHA256 checksums.
+  - `Notification`: Tenant-isolated in-app notification center tracking `type`, `title`, `message`, `actionUrl`, `isRead`, and `readAt`.
+- **Security & Anti-Enumeration Defense**:
+  - Zero-client authority: Customer query for tickets not belonging to them returns `404 Not Found` (never 403 or existence leakage).
+  - Internal staff notes are strictly stripped by `filterMessagesForCustomer()` before delivering responses to customers.
+  - HTML content sanitization in `sanitizeTicketContent()` strips scripts, iframes, objects, embeds, and inline event handlers.
+- **REST API Endpoints**:
+  - Customer (`/v1/tickets`): List own tickets, get ticket conversation thread, open ticket, reply to ticket.
+  - Customer (`/v1/notifications`): List notifications, unread count badge, mark as read, mark all read.
+  - Admin (`/v1/admin/tickets`): Ticket queue inspection, assign agent, update priority/status, post public replies or internal notes.
+  - RBAC: Governed by permissions `ticket.read`, `ticket.manage`, `notification.read`, `notification.manage`.
+- **Worker & Outbox Automation**:
+  - `ticket-processor.ts`: Processes `TICKET_CREATED`, `TICKET_REPLIED`, and `TICKET_STATUS_CHANGED` outbox events.
+  - In-app notification creation for customers upon public staff replies.
+  - Scheduled worker `reconcileIdleTickets`: Automatically closes tickets in `WAITING_CUSTOMER` or `RESOLVED` with >= 7 days inactivity and emits system audit messages.
+- **Customer Portal UI Integration (`/tickets`, `/notifications`)**:
+  - Full-featured Ticket Management UI with status filtering tabs, priority badges, threaded conversation history, and rich reply box with reopen support.
+  - Notification Center UI with unread filtering, quick "Mark as Read", and "Mark All as Read" actions.
+- **75-Gate Acceptance Suite (`phase15-acceptance.ts`)**:
+  - 75/75 verification gates passing across contracts, security utils, domain engine, SLA evaluation, anti-enumeration, and worker automation.
+- **CI Workflow**:
+  - `.github/workflows/phase15-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 15.
+
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
 - Rate limiting

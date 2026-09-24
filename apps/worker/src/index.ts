@@ -14,6 +14,7 @@ import {
 import { publishDueScheduledContent } from "./content-scheduler";
 import { dispatchPendingAutomationJobs } from "./automation-dispatcher";
 import { reconcileHostingUsage } from "./hosting-processor";
+import { reconcileIdleTickets } from "./ticket-processor";
 
 
 // Load root .env file
@@ -115,6 +116,9 @@ const runPollingTick = async () => {
 
     // 8. Authoritative reconciliation of hosting accounts usage and metric sync
     await reconcileHostingUsage({ workerId });
+
+    // 9. Authoritative reconciliation of idle tickets (> 7 days inactive)
+    await reconcileIdleTickets({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({
