@@ -33,7 +33,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const isMulterError = (exception as any)?.name === "MulterError";
     const isPayloadTooLarge =
-      isMulterError && (exception as any)?.code === "LIMIT_FILE_SIZE";
+      (isMulterError && (exception as any)?.code === "LIMIT_FILE_SIZE") ||
+      (exception as any)?.type === "entity.too.large" ||
+      (exception as any)?.status === 413 ||
+      (exception as any)?.statusCode === 413;
 
     const isHttpException = exception instanceof HttpException;
     const status = isPayloadTooLarge
@@ -46,7 +49,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // For 4xx HttpExceptions and Multer payload limit, expose client-safe messages
     if (isPayloadTooLarge) {
-      clientMessage = "File payload too large";
+      clientMessage = (exception as any)?.message || "Payload too large";
     } else if (isHttpException && status < 500) {
       const exceptionResponse = exception.getResponse();
       if (typeof exceptionResponse === "string") {

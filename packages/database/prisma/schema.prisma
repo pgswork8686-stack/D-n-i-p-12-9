@@ -947,3 +947,78 @@ model ContentPost {
   @@map("content_posts")
 }
 
+// --------------------------------------------------------
+// Phase 12 — n8n Automation & AI Content Orchestration
+// --------------------------------------------------------
+
+enum AutomationJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AutomationJobType {
+  CMS_AI_DRAFT
+  ORDER_PAID_EMAIL
+  LICENSE_PROVISIONED_EMAIL
+  EXTERNAL_ALLOCATION_EMAIL
+}
+
+model AutomationJob {
+  id               String              @id @default(uuid())
+  type             AutomationJobType
+  status           AutomationJobStatus @default(PENDING)
+  sourceType       String?             @map("source_type")
+  sourceId         String?             @map("source_id")
+  idempotencyKey   String              @unique @map("idempotency_key")
+  payloadJson      Json                @map("payload_json")
+  resultJson       Json?               @map("result_json")
+  attemptCount     Int                 @default(0) @map("attempt_count")
+  maxAttempts      Int                 @default(3) @map("max_attempts")
+  lastErrorCode    String?             @map("last_error_code")
+  lastErrorMessage String?             @map("last_error_message")
+  scheduledAt      DateTime?           @map("scheduled_at")
+  startedAt        DateTime?           @map("started_at")
+  completedAt      DateTime?           @map("completed_at")
+  leaseUntil       DateTime?           @map("lease_until")
+  createdBy        String?             @map("created_by")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  deliveries       AutomationDelivery[]
+
+  @@index([status, scheduledAt])
+  @@index([type, status])
+  @@index([sourceType, sourceId])
+  @@map("automation_jobs")
+}
+
+enum AutomationDeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+model AutomationDelivery {
+  id                String                   @id @default(uuid())
+  jobId             String?                  @map("job_id")
+  recipientEmail    String                   @map("recipient_email")
+  template          String
+  idempotencyKey    String                   @unique @map("idempotency_key")
+  status            AutomationDeliveryStatus @default(PENDING)
+  payloadJson       Json?                    @map("payload_json")
+  providerMessageId String?                  @map("provider_message_id")
+  sentAt            DateTime?                @map("sent_at")
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  job               AutomationJob?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([status])
+  @@map("automation_deliveries")
+}
+

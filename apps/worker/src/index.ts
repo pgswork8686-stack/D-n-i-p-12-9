@@ -9,8 +9,10 @@ import { reconcileExternalAllocations } from "./allocation-reconciler";
 import {
   provisionInternalLicenses,
   reconcileInternalLicenses,
+  reconcileMissingLicenseProvisionedEmailJobs,
 } from "./license-provisioner";
 import { publishDueScheduledContent } from "./content-scheduler";
+import { dispatchPendingAutomationJobs } from "./automation-dispatcher";
 
 
 // Load root .env file
@@ -98,11 +100,17 @@ const runPollingTick = async () => {
     // 4. Authoritative provisioning of internal licenses for active INTERNAL_LICENSE entitlements
     await provisionInternalLicenses({ workerId });
 
+    // 4b. Reconcile missing notification jobs for active internal licenses (crash-safe recovery)
+    await reconcileMissingLicenseProvisionedEmailJobs({ workerId });
+
     // 5. Authoritative reconciliation of internal licenses whose parent entitlement is REVOKED or EXPIRED
     await reconcileInternalLicenses({ workerId });
 
     // 6. Authoritative publishing of scheduled content posts whose scheduledAt <= NOW()
     await publishDueScheduledContent({ workerId });
+
+    // 7. Authoritative claiming and dispatching of pending automation jobs to n8n
+    await dispatchPendingAutomationJobs({ workerId });
   } catch (err: any) {
     console.error(
       JSON.stringify({

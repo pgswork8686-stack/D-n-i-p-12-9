@@ -234,6 +234,7 @@ async function runPhase10Acceptance() {
 
   let testVariant = await prisma.productVariant.findFirst({
     where: { productId: testProduct.id },
+    include: { prices: true },
   });
   if (!testVariant) {
     testVariant = await prisma.productVariant.create({
@@ -242,6 +243,23 @@ async function runPhase10Acceptance() {
         name: "Pro License",
         sku: "NXS-PORTAL-01",
         status: "ACTIVE",
+        prices: {
+          create: {
+            currency: "USD",
+            amount: 9900,
+            isActive: true,
+          },
+        },
+      },
+      include: { prices: true },
+    });
+  } else if (!testVariant.prices || testVariant.prices.length === 0) {
+    await prisma.productPrice.create({
+      data: {
+        variantId: testVariant.id,
+        currency: "USD",
+        amount: 9900,
+        isActive: true,
       },
     });
   }
@@ -706,7 +724,7 @@ async function runPhase10Acceptance() {
       version = { ...version, files: [file] };
     } else {
       await prisma.productVersionFile.updateMany({
-        where: { versionId: version.id },
+        where: { productVersionId: version.id },
         data: {
           verifiedAt: new Date(),
           storageKey,
