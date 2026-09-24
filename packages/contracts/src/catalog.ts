@@ -18,7 +18,7 @@ export type VariantStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
 export type CategoryStatus = 'ACTIVE' | 'ARCHIVED';
 export type Currency = 'VND' | 'USD';
 export type BillingType = 'ONE_TIME' | 'RECURRING';
-export type BillingInterval = 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+export type BillingInterval = 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'YEARLY' | 'LIFETIME';
 export type MediaType = 'IMAGE' | 'GALLERY' | 'PREVIEW' | 'ICON' | 'THUMBNAIL';
 
 // DTOs

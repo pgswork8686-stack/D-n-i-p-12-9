@@ -9,6 +9,5 @@ export * from "./licenses";
 export * from "./downloads";
 export * from "./content";
 export * from "./automation";
-
-
-
+export * from "./affiliates";
+export * from "./subscriptions";

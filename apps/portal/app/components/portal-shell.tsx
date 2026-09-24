@@ -13,6 +13,8 @@ const NAV_ITEMS = [
   { label: "Downloads", href: "/downloads", icon: "⬇️" },
   { label: "Internal Licenses", href: "/licenses", icon: "🔑" },
   { label: "External Allocations", href: "/allocations", icon: "🌐" },
+  { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝" },
+  { label: "Membership", href: "/subscription", icon: "👑" },
   { label: "Account Profile", href: "/account", icon: "👤" },
 ];
 

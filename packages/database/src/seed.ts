@@ -64,6 +64,14 @@ export const SEED_PERMISSIONS = [
   // Automation
   { name: "automation.read", displayName: "Read Automation", module: "automation", description: "View automation jobs and statuses" },
   { name: "automation.manage", displayName: "Manage Automation", module: "automation", description: "Trigger, retry and manage automation jobs" },
+
+  // Affiliate
+  { name: "affiliate.read", displayName: "Read Affiliates", module: "affiliate", description: "View affiliate partners, referrals and payouts" },
+  { name: "affiliate.manage", displayName: "Manage Affiliates", module: "affiliate", description: "Manage affiliate statuses, commission rates, and payouts" },
+
+  // Subscription
+  { name: "subscription.read", displayName: "Read Subscriptions", module: "subscription", description: "View subscription plans and customer subscriptions" },
+  { name: "subscription.manage", displayName: "Manage Subscriptions", module: "subscription", description: "Manage subscription plans and customer subscriptions" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -102,6 +110,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "order.refund",
     "payment.read",
     "payment.manage",
+    "affiliate.read",
+    "affiliate.manage",
+    "subscription.read",
     "finance.read",
     "audit.read",
   ],
@@ -142,6 +153,10 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "content.publish",
     "ticket.read",
     "ticket.manage",
+    "affiliate.read",
+    "affiliate.manage",
+    "subscription.read",
+    "subscription.manage",
     "finance.read",
     "audit.read",
     "settings.manage",
@@ -170,6 +185,10 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "content.publish",
     "ticket.read",
     "ticket.manage",
+    "affiliate.read",
+    "affiliate.manage",
+    "subscription.read",
+    "subscription.manage",
     "finance.read",
     "audit.read",
     "settings.manage",

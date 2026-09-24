@@ -13,4 +13,4 @@ export * from "./article-seo";
 export * from "./hmac-signature";
 export * from "./automation-secret";
 export * from "./automation-replay";
-
+export * from "./affiliate-utils";
