@@ -1,25 +1,51 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { Badge, Card, Button } from "@nexus/ui";
-import { formatMoney } from "@nexus/utils";
+import {
+  Badge,
+  Button,
+  PriceDisplay,
+  ProductVersionBadge,
+  FacetedFilter,
+  CartDrawer,
+  CartDrawerItem,
+} from "@nexus/ui";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+const PRODUCT_TYPES = [
+  { id: "DOWNLOADABLE_ASSET", label: "Downloads" },
+  { id: "LICENSED_SOFTWARE", label: "Plugins & Software" },
+  { id: "MEMBERSHIP", label: "Membership Passes" },
+  { id: "HOSTING_PROVISIONING", label: "Cloud Hosting" },
+];
 
 export default function PublicProductsCatalogPage() {
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [selectedProductTypes, setSelectedProductTypes] = useState<string[]>([]);
+  const [minPrice, setMinPrice] = useState<number | undefined>();
+  const [maxPrice, setMaxPrice] = useState<number | undefined>();
   const [currency, setCurrency] = useState<"USD" | "VND">("USD");
-  const [sort, setSort] = useState<"newest" | "price_asc" | "price_desc" | "name_asc">("newest");
-  const [loading, setLoading] = useState(true);
+  const [sort, setSort] = useState<string>("newest");
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const fetchCatalog = () => {
+  // Cart Drawer State
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartItems, setCartItems] = useState<CartDrawerItem[]>([]);
+
+  const fetchCatalog = useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams();
-    if (selectedCategory) params.set("category", selectedCategory);
+    if (selectedCategoryIds.length > 0) {
+      params.set("category", selectedCategoryIds[0]); // API single-category filter
+    }
+    if (selectedProductTypes.length > 0) {
+      params.set("productType", selectedProductTypes[0]);
+    }
     if (search) params.set("search", search);
     params.set("currency", currency);
     if (sort) params.set("sort", sort);
@@ -28,13 +54,33 @@ export default function PublicProductsCatalogPage() {
     fetch(`${API_URL}/products${queryStr ? `?${queryStr}` : ""}`)
       .then((res) => res.json())
       .then((data) => {
-        setProducts(data.items || []);
+        let items = data.items || [];
+        // Client-side multi-facet refinement if multiple categories selected
+        if (selectedCategoryIds.length > 1) {
+          items = items.filter((p: any) =>
+            p.categories?.some((c: any) => selectedCategoryIds.includes(c.id)),
+          );
+        }
+        // Client-side price filtering if specified
+        if (minPrice != null) {
+          items = items.filter((p: any) => {
+            const price = p.variants?.[0]?.prices?.[0]?.amount ?? 0;
+            return price >= minPrice * 100;
+          });
+        }
+        if (maxPrice != null) {
+          items = items.filter((p: any) => {
+            const price = p.variants?.[0]?.prices?.[0]?.amount ?? 0;
+            return price <= maxPrice * 100;
+          });
+        }
+        setProducts(items);
       })
       .catch((err) => {
         console.error("Failed to load products:", err);
       })
       .finally(() => setLoading(false));
-  };
+  }, [selectedCategoryIds, selectedProductTypes, search, currency, sort, minPrice, maxPrice]);
 
   useEffect(() => {
     fetch(`${API_URL}/categories`)
@@ -45,158 +91,274 @@ export default function PublicProductsCatalogPage() {
 
   useEffect(() => {
     fetchCatalog();
-  }, [selectedCategory, currency, sort]);
+  }, [fetchCatalog]);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    fetchCatalog();
+  const handleCategoryToggle = (id: string) => {
+    setSelectedCategoryIds((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id],
+    );
+  };
+
+  const handleProductTypeToggle = (pt: string) => {
+    setSelectedProductTypes((prev) =>
+      prev.includes(pt) ? prev.filter((p) => p !== pt) : [...prev, pt],
+    );
+  };
+
+  const handleResetFilters = () => {
+    setSelectedCategoryIds([]);
+    setSelectedProductTypes([]);
+    setMinPrice(undefined);
+    setMaxPrice(undefined);
+    setSearch("");
+    setSort("newest");
+  };
+
+  const handleAddToCart = (product: any) => {
+    const defaultVariant = product.variants?.[0];
+    const defaultPrice = defaultVariant?.prices?.[0];
+    const unitAmountMinor = defaultPrice?.amount ?? 4900;
+
+    const newItem: CartDrawerItem = {
+      id: defaultVariant?.id || product.id,
+      name: product.name,
+      variantName: defaultVariant?.name,
+      unitAmountMinor,
+      quantity: 1,
+    };
+
+    setCartItems((prev) => {
+      const existing = prev.find((it) => it.id === newItem.id);
+      if (existing) {
+        return prev.map((it) =>
+          it.id === newItem.id ? { ...it, quantity: it.quantity + 1 } : it,
+        );
+      }
+      return [...prev, newItem];
+    });
+
+    setIsCartOpen(true);
   };
 
   return (
-    <main className="max-w-6xl mx-auto py-12 px-6 font-sans">
-      <div className="pb-8 border-b border-gray-200 mb-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-extrabold text-[#0037b0]">Digital Products</h1>
-            <p className="text-gray-500 text-base mt-2">
-              Themes, software plugins, Figma design assets, and external managed licenses.
-            </p>
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
+      {/* Top Header */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          <Link href="/" className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-[#0037b0] text-white flex items-center justify-center font-black text-lg">
+              N
+            </span>
+            <span className="font-extrabold text-[#0037b0] text-lg tracking-tight">
+              NEXUSTHEME
+            </span>
+          </Link>
+
+          {/* Quick Search in Header */}
+          <div className="hidden sm:flex flex-1 max-w-md items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200 focus-within:border-[#0037b0] focus-within:bg-white transition-all">
+            <span className="text-slate-400">🔍</span>
+            <input
+              type="text"
+              placeholder="Search catalog..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 bg-transparent text-xs outline-none text-slate-900 placeholder-slate-400"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            )}
           </div>
-          {/* Currency Switcher */}
-          <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg border border-gray-200 text-xs">
-            <span className="font-semibold px-2 text-gray-500">Currency:</span>
+
+          <div className="flex items-center gap-3">
+            {/* Currency Switcher */}
+            <div className="flex items-center rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setCurrency("USD")}
+                className={`px-2 py-1 rounded ${currency === "USD" ? "bg-[#0037b0] text-white" : "text-slate-600"}`}
+              >
+                USD ($)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrency("VND")}
+                className={`px-2 py-1 rounded ${currency === "VND" ? "bg-[#0037b0] text-white" : "text-slate-600"}`}
+              >
+                VND (₫)
+              </button>
+            </div>
+
+            {/* Cart Trigger */}
             <button
-              onClick={() => setCurrency("USD")}
-              className={`px-2.5 py-1 rounded font-bold transition ${
-                currency === "USD"
-                  ? "bg-[#0037b0] text-white shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+              type="button"
+              onClick={() => setIsCartOpen(true)}
+              className="relative p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
             >
-              USD ($)
-            </button>
-            <button
-              onClick={() => setCurrency("VND")}
-              className={`px-2.5 py-1 rounded font-bold transition ${
-                currency === "VND"
-                  ? "bg-[#0037b0] text-white shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              VND (₫)
+              <span className="text-xl">🛒</span>
+              {cartItems.length > 0 && (
+                <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-[#0037b0] text-white text-[10px] font-bold flex items-center justify-center">
+                  {cartItems.reduce((s, it) => s + it.quantity, 0)}
+                </span>
+              )}
             </button>
           </div>
         </div>
+      </header>
 
-        {/* Filters & Search & Sort */}
-        <div className="flex flex-col sm:flex-row gap-4 mt-6 items-center justify-between">
-          {/* Category Tabs */}
-          <div className="flex gap-2 overflow-x-auto pb-1 w-full sm:w-auto">
-            <button
-              onClick={() => setSelectedCategory("")}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
-                selectedCategory === ""
-                  ? "bg-[#0037b0] text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-              }`}
-            >
-              All Categories
-            </button>
-            {categories.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setSelectedCategory(c.slug)}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition ${
-                  selectedCategory === c.slug
-                    ? "bg-[#0037b0] text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                {c.name}
-              </button>
-            ))}
+      {/* Main Catalog Layout */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Title & Sort Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200 mb-8">
+          <div>
+            <h1 className="text-3xl font-extrabold text-slate-950 tracking-tight">
+              Digital Products Marketplace
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Showing {products.length} digital themes, verified plugins, and hosting tiers.
+            </p>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            {/* Sort Selector */}
+          {/* Sort Dropdown */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 font-medium">Sort by:</span>
             <select
               value={sort}
-              onChange={(e: any) => setSort(e.target.value)}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onChange={(e) => setSort(e.target.value)}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="newest">Newest First</option>
               <option value="price_asc">Price: Low to High</option>
               <option value="price_desc">Price: High to Low</option>
               <option value="name_asc">Name: A to Z</option>
             </select>
-
-            {/* Search Input */}
-            <form onSubmit={handleSearchSubmit} className="flex gap-2 w-full sm:w-60">
-              <input
-                type="text"
-                placeholder="Search products..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <Button variant="primary" type="submit" className="text-xs px-3">
-                Search
-              </Button>
-            </form>
           </div>
         </div>
-      </div>
 
-      {loading ? (
-        <div className="p-12 text-center text-gray-400">Loading catalog...</div>
-      ) : products.length === 0 ? (
-        <div className="p-12 text-center text-gray-500 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-          No published products available in this category.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {products.map((p) => (
-            <Card key={p.id} className="flex flex-col justify-between p-6 border border-gray-200 hover:shadow-lg transition">
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold uppercase text-gray-400 tracking-wider">
-                    {p.brand || "Nexus"}
-                  </span>
-                  <Badge variant="info">{p.productType}</Badge>
-                </div>
+        {/* Content Body: Sidebar Filter + Product Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 items-start">
+          {/* Faceted Filter Sidebar */}
+          <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-slate-200/90 shadow-sm sticky top-24">
+            <FacetedFilter
+              categories={categories}
+              selectedCategoryIds={selectedCategoryIds}
+              onCategoryToggle={handleCategoryToggle}
+              productTypes={PRODUCT_TYPES}
+              selectedProductTypes={selectedProductTypes}
+              onProductTypeToggle={handleProductTypeToggle}
+              minPrice={minPrice}
+              maxPrice={maxPrice}
+              onPriceChange={(min, max) => {
+                setMinPrice(min);
+                setMaxPrice(max);
+              }}
+              currency={currency}
+              onReset={handleResetFilters}
+            />
+          </div>
 
-                <h3 className="text-xl font-bold text-gray-900 mb-2">
-                  <Link href={`/products/${p.slug}`} className="hover:text-blue-600 transition">
-                    {p.name}
-                  </Link>
-                </h3>
-
-                <p className="text-gray-600 text-sm line-clamp-2 mb-4">
-                  {p.shortDescription || "High quality digital product ready for activation."}
+          {/* Products Grid */}
+          <div className="lg:col-span-3">
+            {loading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div key={i} className="h-80 rounded-2xl bg-white border border-slate-200 animate-pulse p-6" />
+                ))}
+              </div>
+            ) : products.length === 0 ? (
+              <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 p-8 space-y-4">
+                <span className="text-5xl block">🔍</span>
+                <h3 className="text-lg font-bold text-slate-900">No products match your criteria</h3>
+                <p className="text-sm text-slate-500 max-w-md mx-auto">
+                  Try clearing some filter facets or search for different keywords.
                 </p>
+                <Button onClick={handleResetFilters} variant="outline" size="sm">
+                  Reset Filters
+                </Button>
               </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                {products.map((p) => {
+                  const defaultVariant = p.variants?.[0];
+                  const defaultPrice = defaultVariant?.prices?.[0];
+                  const amountMinor = defaultPrice?.amount ?? 4900;
+                  const compareAt = defaultPrice?.compareAtAmount;
 
-              <div className="pt-4 border-t border-gray-100 flex items-center justify-between">
-                <div>
-                  <span className="text-xs text-gray-400 block">Starting from</span>
-                  <span className={`font-extrabold ${p.minPrice ? "text-lg text-[#0037b0]" : "text-sm text-gray-500"}`}>
-                    {p.minPrice
-                      ? p.minPrice.amount === 0
-                        ? "Free"
-                        : formatMoney(p.minPrice.amount, p.minPrice.currency)
-                      : `Unavailable in ${currency}`}
-                  </span>
-                </div>
-                <Link href={`/products/${p.slug}`}>
-                  <Button variant="outline" className="text-xs py-1 px-3">
-                    View Details →
-                  </Button>
-                </Link>
+                  return (
+                    <div
+                      key={p.id}
+                      className="rounded-2xl bg-white border border-slate-200/90 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col overflow-hidden group"
+                    >
+                      <div className="h-44 bg-gradient-to-br from-slate-100 to-blue-50/50 flex items-center justify-center relative p-6 border-b border-slate-100">
+                        <span className="text-5xl group-hover:scale-105 transition-transform duration-200">
+                          📦
+                        </span>
+                        <div className="absolute top-3 left-3">
+                          <ProductVersionBadge version="1.0.0" channel="STABLE" />
+                        </div>
+                      </div>
+
+                      <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
+                        <div className="space-y-1.5">
+                          <Link
+                            href={`/products/${p.slug}`}
+                            className="text-base font-bold text-slate-900 group-hover:text-[#0037b0] transition-colors block leading-snug"
+                          >
+                            {p.name}
+                          </Link>
+                          <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                            {p.shortDescription || p.description || "Premium digital asset with automated entitlement access."}
+                          </p>
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                          <PriceDisplay
+                            amountMinor={amountMinor}
+                            compareAtMinor={compareAt}
+                            currency={currency}
+                            size="md"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleAddToCart(p)}
+                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#0037b0] hover:bg-[#002c8f] text-white shadow-sm transition-all"
+                            >
+                              Add to Cart 🛒
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </Card>
-          ))}
+            )}
+          </div>
         </div>
-      )}
-    </main>
+      </main>
+
+      {/* Slide-over Cart Drawer */}
+      <CartDrawer
+        isOpen={isCartOpen}
+        onClose={() => setIsCartOpen(false)}
+        items={cartItems}
+        currency={currency}
+        onUpdateQuantity={(id, qty) => {
+          setCartItems((prev) =>
+            prev.map((it) => (it.id === id ? { ...it, quantity: qty } : it)),
+          );
+        }}
+        onRemoveItem={(id) => {
+          setCartItems((prev) => prev.filter((it) => it.id !== id));
+        }}
+        checkoutUrl={`/checkout?currency=${currency}`}
+      />
+    </div>
   );
 }

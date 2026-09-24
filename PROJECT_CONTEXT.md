@@ -529,6 +529,24 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow**:
   - `.github/workflows/phase16-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 16.
 
+### Phase 17 — Production Storefront, Modern Design System, Faceted Search & 1-Step Express Checkout
+- **Design System Components (`packages/ui`)**:
+  - `PriceDisplay` (`price-display.tsx`): Minor-unit monetary formatting across USD and VND, compare-at strikethrough, auto savings percentage badge, billing cycle suffixes.
+  - `LicenseKeyCard` (`license-key-card.tsx`): Security masking (`ABCD-••••-••••-WXYZ`), show/hide toggle, one-click copy with toast feedback, activation counter with status pill indicator.
+  - `DownloadButtonWithProgress` (`download-button.tsx`): Action CTA with loading spinner, signed URL handling, and human-readable byte size calculation (`formatBytes`).
+  - `ProductVersionBadge` (`product-version-badge.tsx`): SemVer version badge with release channel pill (`STABLE`, `LTS`, `BETA`) and ecosystem compatibility chips (e.g. Next.js, WordPress, Figma).
+  - `FacetedFilter` (`faceted-filter.tsx`): Category multi-select with counts, product type filter pills, min/max price range controls, and active filter reset button.
+  - `CartDrawer` (`cart-drawer.tsx`): Responsive slide-over cart drawer with backdrop, item cards, incremental quantity buttons, item removal, dynamic subtotal, and 1-step checkout CTA.
+- **Production Storefront Experience (`apps/web`)**:
+  - Landing Page (`/`): High-converting modern SaaS/digital marketplace hero, instant search bar with quick category filters, 4 value proposition badges, featured products grid with `PriceDisplay` and version badges, membership pass CTA banner, and multi-column footer.
+  - Faceted Search Catalog (`/products`): Multi-dimension filtering (category, type, min/max price), instant keyword search, sorting (`newest`, `price_asc`, `price_desc`, `name_asc`), currency toggle (`USD`/`VND`), zero-CLS skeleton states, and slide-over `CartDrawer`.
+  - Frictionless 1-Step Checkout (`/checkout`): Express 2-column checkout layout with customer contact info, billing address, automated country/state tax detection, B2B VAT reverse charge toggle, payment provider radio selector, coupon code validation with client-side preview, and authoritative backend checkout payload submission (zero client trust on amounts).
+- **75-Gate Acceptance Suite (`packages/database/scripts/phase17-acceptance.ts`)**:
+  - 75/75 verification gates passing across token consistency, price formatting, license masking, SemVer comparisons, faceted filtering, cart mathematics, coupon calculation, B2B tax exemption, and payload security.
+- **CI Workflow**:
+  - `.github/workflows/phase17-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 17.
+
+
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin
 - Rate limiting
