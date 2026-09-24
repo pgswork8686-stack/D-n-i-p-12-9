@@ -9,6 +9,10 @@ import {
   suspendHostingAccountsForOrder,
   suspendHostingForRevokedEntitlement,
 } from "./hosting-processor";
+import {
+  processTicketCreatedEvent,
+  processTicketRepliedEvent,
+} from "./ticket-processor";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -176,6 +180,12 @@ export async function processOutboxEvents(
         event.eventType === "HOSTING_ACCOUNT_FAILED"
       ) {
         // Informational hosting lifecycle events - mark processed
+      } else if (event.eventType === "TICKET_CREATED") {
+        await processTicketCreatedEvent(event.payload, workerId);
+      } else if (event.eventType === "TICKET_REPLIED") {
+        await processTicketRepliedEvent(event.payload, workerId);
+      } else if (event.eventType === "TICKET_STATUS_CHANGED") {
+        // Ticket status change outbox event - mark processed
       } else {
         throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }

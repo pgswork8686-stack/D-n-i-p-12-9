@@ -27,6 +27,7 @@
     "acceptance:phase12": "ts-node --transpile-only scripts/phase12-acceptance.ts",
     "acceptance:phase13": "ts-node --transpile-only scripts/phase13-acceptance.ts",
     "acceptance:phase14": "ts-node --transpile-only scripts/phase14-acceptance.ts",
+    "acceptance:phase15": "ts-node --transpile-only scripts/phase15-acceptance.ts",
     "test": "echo \"Database migrations and client loaded\""
   },
   "dependencies": {

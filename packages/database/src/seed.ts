@@ -76,6 +76,10 @@ export const SEED_PERMISSIONS = [
   // Hosting
   { name: "hosting.read", displayName: "Read Hosting", module: "hosting", description: "View hosting clusters and customer accounts" },
   { name: "hosting.manage", displayName: "Manage Hosting", module: "hosting", description: "Manage servers, provision accounts, and DNS records" },
+
+  // Notification
+  { name: "notification.read", displayName: "Read Notifications", module: "notification", description: "View in-app notifications" },
+  { name: "notification.manage", displayName: "Manage Notifications", module: "notification", description: "Send and broadcast system notifications" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -84,6 +88,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "profile.update",
     "order.read",
     "ticket.read",
+    "notification.read",
   ],
   support_agent: [
     "profile.read",
@@ -93,6 +98,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "license.read",
     "ticket.read",
     "ticket.manage",
+    "notification.read",
+    "notification.manage",
   ],
   content_editor: [
     "profile.read",
@@ -136,6 +143,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "automation.manage",
     "hosting.read",
     "hosting.manage",
+    "notification.read",
+    "notification.manage",
   ],
   admin: [
     "profile.read",
@@ -159,6 +168,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "content.publish",
     "ticket.read",
     "ticket.manage",
+    "notification.read",
+    "notification.manage",
     "affiliate.read",
     "affiliate.manage",
     "subscription.read",
