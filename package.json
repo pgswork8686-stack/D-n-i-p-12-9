@@ -32,6 +32,7 @@
     "test:acceptance:phase14": "pnpm --filter @nexus/database acceptance:phase14",
     "test:acceptance:phase15": "pnpm --filter @nexus/database acceptance:phase15",
     "test:acceptance:phase16": "pnpm --filter @nexus/database acceptance:phase16",
+    "test:acceptance:phase17": "pnpm --filter @nexus/database acceptance:phase17",
     "n8n:validate": "node automation/n8n/scripts/validate-workflows.mjs",
     "n8n:build": "node automation/n8n/scripts/build-workflows.mjs",
     "n8n:smoke": "node automation/n8n/scripts/runtime-smoke.mjs",
