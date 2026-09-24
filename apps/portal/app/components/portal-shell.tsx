@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { label: "Cloud Hosting", href: "/hosting", icon: "☁️" },
   { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝" },
   { label: "Membership", href: "/subscription", icon: "👑" },
+  { label: "Invoices & Billing", href: "/invoices", icon: "🧾" },
   { label: "Support Tickets", href: "/tickets", icon: "🎫" },
   { label: "Notifications", href: "/notifications", icon: "🔔" },
   { label: "Account Profile", href: "/account", icon: "👤" },

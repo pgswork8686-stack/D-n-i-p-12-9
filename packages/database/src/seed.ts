@@ -50,6 +50,8 @@ export const SEED_PERMISSIONS = [
 
   // Finance
   { name: "finance.read", displayName: "Read Finance", module: "finance", description: "View financial reports and transactions" },
+  { name: "finance.manage", displayName: "Manage Finance", module: "finance", description: "Manage ledger adjustments and manual invoices" },
+  { name: "invoice.read", displayName: "Read Invoices", module: "invoice", description: "View commercial invoices and tax summaries" },
 
   // Audit
   { name: "audit.read", displayName: "Read Audit Logs", module: "audit", description: "View system audit trail" },
@@ -89,6 +91,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "order.read",
     "ticket.read",
     "notification.read",
+    "invoice.read",
   ],
   support_agent: [
     "profile.read",
@@ -125,6 +128,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "affiliate.manage",
     "subscription.read",
     "finance.read",
+    "finance.manage",
+    "invoice.read",
     "audit.read",
   ],
   ops: [

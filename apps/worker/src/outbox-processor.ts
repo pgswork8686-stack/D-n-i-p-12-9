@@ -13,6 +13,10 @@ import {
   processTicketCreatedEvent,
   processTicketRepliedEvent,
 } from "./ticket-processor";
+import {
+  processFinancialLedgerForOrder,
+  processFinancialLedgerForOrderRefund,
+} from "./ledger-processor";
 
 export interface ProcessOutboxOptions {
   workerId?: string;
@@ -160,11 +164,16 @@ export async function processOutboxEvents(
 
         // Phase 14: Idempotently provision hosting accounts for hosting items in order
         await processHostingProvisioningForOrder(authoritativeOrderId, workerId);
+
+        // Phase 16: Idempotently generate invoice & record balanced double-entry ledger rows
+        await processFinancialLedgerForOrder(authoritativeOrderId, workerId);
       } else if (event.eventType === "ORDER_REFUNDED") {
         const authoritativeOrderId = event.aggregateId;
         await clawbackAffiliateReferralForOrder(authoritativeOrderId);
         // Phase 14: Suspend hosting accounts on order refund
         await suspendHostingAccountsForOrder(authoritativeOrderId, "Order refunded", workerId);
+        // Phase 16: Record balanced refund ledger rows
+        await processFinancialLedgerForOrderRefund(authoritativeOrderId, workerId);
       } else if (event.eventType === "ENTITLEMENT_REVOKED") {
         const entitlementId = event.aggregateId;
         await suspendHostingForRevokedEntitlement(
@@ -177,9 +186,11 @@ export async function processOutboxEvents(
         event.eventType === "HOSTING_ACCOUNT_SUSPENDED" ||
         event.eventType === "HOSTING_ACCOUNT_UNSUSPENDED" ||
         event.eventType === "HOSTING_ACCOUNT_TERMINATED" ||
-        event.eventType === "HOSTING_ACCOUNT_FAILED"
+        event.eventType === "HOSTING_ACCOUNT_FAILED" ||
+        event.eventType === "INVOICE_GENERATED" ||
+        event.eventType === "LEDGER_POSTED"
       ) {
-        // Informational hosting lifecycle events - mark processed
+        // Informational hosting and finance lifecycle events - mark processed
       } else if (event.eventType === "TICKET_CREATED") {
         await processTicketCreatedEvent(event.payload, workerId);
       } else if (event.eventType === "TICKET_REPLIED") {

@@ -36,6 +36,7 @@ model User {
   assignedTickets    Ticket[]            @relation("AssignedAdminTickets")
   ticketMessages     TicketMessage[]
   notifications      Notification[]
+  invoices           Invoice[]
 
   @@map("users")
 }
@@ -449,6 +450,7 @@ model Order {
   affiliateReferral AffiliateReferral?
   hostingAccounts   HostingAccount[]
   tickets           Ticket[]
+  invoice           Invoice?
 
   @@index([userId])
   @@index([status])
@@ -1484,4 +1486,112 @@ model Notification {
   @@index([createdAt])
   @@map("notifications")
 }
+
+// --------------------------------------------------------
+// Phase 16 — Financial Ledger, Invoicing & Tax/VAT Engine
+// --------------------------------------------------------
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum LedgerAccountCode {
+  ACCOUNTS_RECEIVABLE
+  SALES_REVENUE
+  TAX_LIABILITY
+  REFUND_EXPENSE
+  AFFILIATE_COMMISSION_PAYABLE
+  GATEWAY_FEE_EXPENSE
+}
+
+enum LedgerEntryType {
+  DEBIT
+  CREDIT
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
+  REFUNDED
+}
+
+model FinancialLedgerEntry {
+  id            String            @id @default(uuid())
+  transactionId String            @map("transaction_id")
+  accountCode   LedgerAccountCode @map("account_code")
+  accountType   LedgerAccountType @map("account_type")
+  entryType     LedgerEntryType   @map("entry_type")
+  amountMinor   Int               @map("amount_minor")
+  currency      Currency          @default(USD)
+  referenceType String            @map("reference_type")
+  referenceId   String            @map("reference_id")
+  description   String
+  metadata      Json?
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  @@index([transactionId])
+  @@index([accountCode])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@map("financial_ledger_entries")
+}
+
+model Invoice {
+  id                 String        @id @default(uuid())
+  invoiceNumber      String        @unique @map("invoice_number")
+  orderId            String        @unique @map("order_id")
+  userId             String        @map("user_id")
+  customerName       String        @map("customer_name")
+  customerEmail      String        @map("customer_email")
+  customerAddress    String?       @map("customer_address")
+  status             InvoiceStatus @default(ISSUED)
+  currency           Currency      @default(USD)
+  subtotalMinor      Int           @map("subtotal_minor")
+  taxAmountMinor     Int           @default(0) @map("tax_amount_minor")
+  totalAmountMinor   Int           @map("total_amount_minor")
+  taxRateBasisPoints Int           @default(0) @map("tax_rate_basis_points")
+  isReverseCharge    Boolean       @default(false) @map("is_reverse_charge")
+  vatId              String?       @map("vat_id")
+  pdfStorageKey      String?       @map("pdf_storage_key")
+  issuedAt           DateTime      @default(now()) @map("issued_at")
+  paidAt             DateTime?     @map("paid_at")
+  metadata           Json?
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  user               User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  order              Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  items              InvoiceItem[]
+
+  @@index([userId])
+  @@index([orderId])
+  @@index([invoiceNumber])
+  @@index([status])
+  @@index([issuedAt])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id                 String   @id @default(uuid())
+  invoiceId          String   @map("invoice_id")
+  description        String
+  quantity           Int      @default(1)
+  unitPriceMinor     Int      @map("unit_price_minor")
+  amountMinor        Int      @map("amount_minor")
+  taxRateBasisPoints Int      @default(0) @map("tax_rate_basis_points")
+  taxAmountMinor     Int      @default(0) @map("tax_amount_minor")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
 
