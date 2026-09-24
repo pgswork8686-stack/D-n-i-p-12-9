@@ -119,4 +119,85 @@ export class HealthService {
       },
     };
   }
+
+  checkLiveness(): {
+    status: "ok";
+    service: string;
+    uptimeSeconds: number;
+    timestamp: string;
+    pid: number;
+  } {
+    return {
+      status: "ok",
+      service: "api",
+      uptimeSeconds: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      pid: process.pid,
+    };
+  }
+
+  async checkReadiness(): Promise<HealthCheckResponse & {
+    system: {
+      memory: {
+        rssMb: number;
+        heapTotalMb: number;
+        heapUsedMb: number;
+        externalMb: number;
+      };
+      uptimeSeconds: number;
+      nodeVersion: string;
+      pid: number;
+    };
+  }> {
+    const aggregate = await this.checkAggregate();
+    const mem = process.memoryUsage();
+    const toMb = (bytes: number) =>
+      Math.round((bytes / 1024 / 1024) * 100) / 100;
+
+    return {
+      ...aggregate,
+      system: {
+        memory: {
+          rssMb: toMb(mem.rss),
+          heapTotalMb: toMb(mem.heapTotal),
+          heapUsedMb: toMb(mem.heapUsed),
+          externalMb: toMb(mem.external),
+        },
+        uptimeSeconds: Math.floor(process.uptime()),
+        nodeVersion: process.version,
+        pid: process.pid,
+      },
+    };
+  }
+
+  checkMetrics(): {
+    uptimeSeconds: number;
+    nodeVersion: string;
+    pid: number;
+    memory: {
+      rssMb: number;
+      heapTotalMb: number;
+      heapUsedMb: number;
+      externalMb: number;
+    };
+    timestamp: string;
+  } {
+    const mem = process.memoryUsage();
+    const toMb = (bytes: number) =>
+      Math.round((bytes / 1024 / 1024) * 100) / 100;
+
+    return {
+      uptimeSeconds: Math.floor(process.uptime()),
+      nodeVersion: process.version,
+      pid: process.pid,
+      memory: {
+        rssMb: toMb(mem.rss),
+        heapTotalMb: toMb(mem.heapTotal),
+        heapUsedMb: toMb(mem.heapUsed),
+        externalMb: toMb(mem.external),
+      },
+      timestamp: new Date().toISOString(),
+    };
+  }
 }
+

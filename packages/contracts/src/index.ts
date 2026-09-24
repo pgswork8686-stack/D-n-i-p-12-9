@@ -14,3 +14,4 @@ export * from "./subscriptions";
 export * from "./hosting";
 export * from "./tickets";
 export * from "./finance";
+export * from "./observability";

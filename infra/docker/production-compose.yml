@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # CORE BACKEND API (NestJS Modular Monolith)
+  # ----------------------------------------------------------------------------
+  api:
+    image: ghcr.io/pgswork8686-stack/nexustheme-api:latest
+    container_name: nexustheme-api
+    restart: always
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_PROVIDER: s3
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_BUCKET: ${STORAGE_BUCKET}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
+      STORAGE_REGION: auto
+      WEB_URL: https://nexustheme.com
+      PORTAL_URL: https://app.nexustheme.com
+      ADMIN_URL: https://admin.nexustheme.com
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:4000/health/liveness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ----------------------------------------------------------------------------
+  # ASYNC JOB WORKER (BullMQ Queue Processor)
+  # ----------------------------------------------------------------------------
+  worker:
+    image: ghcr.io/pgswork8686-stack/nexustheme-worker:latest
+    container_name: nexustheme-worker
+    restart: always
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      STORAGE_PROVIDER: s3
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_BUCKET: ${STORAGE_BUCKET}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
+      AUTOMATION_SERVICE_SECRET: ${AUTOMATION_SERVICE_SECRET}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1536M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ----------------------------------------------------------------------------
+  # PUBLIC STOREFRONT & CATALOG (Next.js 14 App Router)
+  # ----------------------------------------------------------------------------
+  web:
+    image: ghcr.io/pgswork8686-stack/nexustheme-web:latest
+    container_name: nexustheme-web
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
+
+  # ----------------------------------------------------------------------------
+  # CUSTOMER PORTAL (Next.js 14 App Router)
+  # ----------------------------------------------------------------------------
+  portal:
+    image: ghcr.io/pgswork8686-stack/nexustheme-portal:latest
+    container_name: nexustheme-portal
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M
+
+  # ----------------------------------------------------------------------------
+  # SUPER ADMIN & BACKOFFICE CMS (Next.js 14 App Router)
+  # ----------------------------------------------------------------------------
+  admin:
+    image: ghcr.io/pgswork8686-stack/nexustheme-admin:latest
+    container_name: nexustheme-admin
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1024M

@@ -18,3 +18,27 @@ export interface HealthCheckResponse {
     [key: string]: DependencyHealth | undefined;
   };
 }
+
+export interface LivenessCheckResponse {
+  status: ServiceStatus;
+  service: string;
+  uptimeSeconds: number;
+  timestamp: string;
+  pid: number;
+}
+
+export interface MemoryUsageStats {
+  rssMb: number;
+  heapTotalMb: number;
+  heapUsedMb: number;
+  externalMb: number;
+}
+
+export interface ReadinessCheckResponse extends HealthCheckResponse {
+  system: {
+    memory: MemoryUsageStats;
+    uptimeSeconds: number;
+    nodeVersion: string;
+    pid: number;
+  };
+}

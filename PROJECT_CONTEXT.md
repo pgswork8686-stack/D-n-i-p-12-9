@@ -546,6 +546,30 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow**:
   - `.github/workflows/phase17-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and acceptance suites from Phase 4 through Phase 17.
 
+### Phase 18 — Enterprise Hardening, Observability, Disaster Recovery & Go-Live Cutover (FINAL PHASE)
+- **Deep Healthcheck & Observability Architecture (`apps/api/src/modules/health/`)**:
+  - Fast liveness probe: `GET /health/liveness` returns 200 OK with process uptime, timestamp, and PID (zero external calls for lightweight container orchestrator probes).
+  - Deep readiness probe: `GET /health/readiness` concurrently validates PostgreSQL database connection (`SELECT 1`), Redis ping response, and Cloudflare R2 / S3 storage accessibility; aggregates memory metrics (RSS, Heap, External in MB) and system uptime; returns 503 if any dependency degrades.
+  - Process metrics probe: `GET /health/metrics` reports memory utilization and runtime metrics for Prometheus/monitoring scrapers.
+- **Enterprise Structured Logging & OWASP Security Defenses**:
+  - Structured Logging Interceptor (`apps/api/src/common/interceptors/structured-logging.interceptor.ts`): Emits single-line RFC 5424 structured JSON logs with correlation IDs (`x-correlation-id`), response status code, elapsed milliseconds, user identification, and automated recursive credential redaction (`redactSensitiveFields`).
+  - Sensitive Data Redaction Engine (`packages/utils/src/observability-utils.ts`): Redacts passwords, API secrets, tokens, credit cards, CVVs, and encrypted hosting credentials from all logs and telemetry payloads.
+  - Security Response Headers Middleware (`apps/api/src/common/middleware/security-headers.middleware.ts`): Enforces OWASP secure response headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, `Content-Security-Policy`).
+- **Disaster Recovery & Cold Restore Automation (`infra/scripts/`)**:
+  - `backup-db.sh`: Automated gzip level 9 compressed PostgreSQL backup with SHA256 cryptographic checksum calculation, timestamped archive management, retention pruning (keeps <= 30 days), and offsite S3/R2 disaster recovery sync.
+  - `restore-db.sh`: Atomic single-transaction database cold restore with pre-flight SHA256 checksum and gzip stream validation.
+  - `verify-backup.sh`: Dry-run backup archive integrity and checksum verification script.
+  - Disaster Recovery SLA targets: RPO < 15 minutes, RTO < 30 minutes.
+- **Production Topology & Documentation (`infra/docker/` & `docs/`)**:
+  - Production Compose topology (`infra/docker/production-compose.yml`): Full 5-service container stack (API, Worker, Web, Portal, Admin) with production resource constraints (CPU/memory limits), restart policies, and healthcheck dependencies.
+  - Production Cutover Runbook (`docs/production-cutover-runbook.md`): 5-phase zero-downtime cutover procedure, maintenance window rules, and automated rollback decision matrix.
+  - Enterprise Security Audit Report (`docs/security-audit-report.md`): OWASP Top 10 compliance audit, Anti-IDOR ownership isolation analysis, and zero-trust settlement guarantees.
+- **75-Gate Acceptance Suite (`packages/database/scripts/phase18-acceptance.ts`)**:
+  - 75/75 verification gates passing across liveness/readiness probes, memory bounds, correlation ID generation, recursive data redaction, OWASP security headers, Anti-IDOR guards, SSRF defenses, backup & restore scripts, production seed isolation, multi-app port topology, and production cutover runbook.
+- **CI Workflow**:
+  - `.github/workflows/phase18-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and all acceptance suites from Phase 4 through Phase 18.
+
+
 
 ## Security baseline
 - HTTPS, Cloudflare WAF, RBAC, MFA cho admin

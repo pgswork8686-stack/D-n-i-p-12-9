@@ -53,4 +53,27 @@ export class HealthController {
       timestamp: new Date().toISOString(),
     });
   }
+
+  @Get("liveness")
+  getLiveness(@Res() res: Response) {
+    const liveness = this.healthService.checkLiveness();
+    return res.status(HttpStatus.OK).json(liveness);
+  }
+
+  @Get("readiness")
+  async getReadiness(@Res() res: Response) {
+    const readiness = await this.healthService.checkReadiness();
+    const httpStatus =
+      readiness.status === "ok"
+        ? HttpStatus.OK
+        : HttpStatus.SERVICE_UNAVAILABLE;
+    return res.status(httpStatus).json(readiness);
+  }
+
+  @Get("metrics")
+  getMetrics(@Res() res: Response) {
+    const metrics = this.healthService.checkMetrics();
+    return res.status(HttpStatus.OK).json(metrics);
+  }
 }
+

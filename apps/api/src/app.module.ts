@@ -23,6 +23,7 @@ import { HostingModule } from "./modules/hosting/hosting.module";
 import { TicketsModule } from "./modules/tickets/tickets.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
+import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.middleware";
 
 @Module({
   imports: [
@@ -58,6 +59,9 @@ import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.midd
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(CorrelationIdMiddleware).forRoutes("*");
+    consumer
+      .apply(CorrelationIdMiddleware, SecurityHeadersMiddleware)
+      .forRoutes("*");
   }
 }
+
