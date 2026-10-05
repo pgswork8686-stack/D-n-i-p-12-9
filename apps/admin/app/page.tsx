@@ -267,6 +267,16 @@ export default function AdminHomePage() {
             ⚡ Automation & AI Engine →
           </Button>
         </a>
+        <a href="/admin/analytics">
+          <Button variant="primary" size="sm">
+            📈 Phân tích marketing →
+          </Button>
+        </a>
+        <a href="/admin/ai">
+          <Button variant="primary" size="sm">
+            🤖 AI Marketing OS →
+          </Button>
+        </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">
             ← Return to Marketplace

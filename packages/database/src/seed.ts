@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { seedSystemAiContext } from "./ai-seed";
 import { prisma } from "./client";
 
 export const SEED_ROLES = [
@@ -82,6 +83,14 @@ export const SEED_PERMISSIONS = [
   // Notification
   { name: "notification.read", displayName: "Read Notifications", module: "notification", description: "View in-app notifications" },
   { name: "notification.manage", displayName: "Manage Notifications", module: "notification", description: "Send and broadcast system notifications" },
+
+  // Phase 19 — Analytics & AI Marketing OS (data access is additionally scoped by tenant membership)
+  { name: "analytics.read", displayName: "Read Analytics", module: "analytics", description: "View marketing analytics of tenants the user belongs to" },
+  { name: "analytics.manage", displayName: "Manage Analytics", module: "analytics", description: "Manage tenants and memberships; cross-tenant analytics access (staff)" },
+  { name: "ai.read", displayName: "Read AI", module: "ai", description: "View AI skills, workflows, executions and reports of own tenants" },
+  { name: "ai.execute", displayName: "Execute AI", module: "ai", description: "Run AI workflows (READ and WRITE_LOW_RISK tools) for own tenants" },
+  { name: "ai.approve", displayName: "Approve AI Actions", module: "ai", description: "Approve or reject WRITE_HIGH_RISK AI actions (four-eyes)" },
+  { name: "ai.context.manage", displayName: "Manage AI Context", module: "ai", description: "Create new versions of organization/client AI context" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -92,6 +101,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "ticket.read",
     "notification.read",
     "invoice.read",
+    "analytics.read",
   ],
   support_agent: [
     "profile.read",
@@ -109,6 +119,10 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "content.read",
     "content.write",
     "content.publish",
+    "analytics.read",
+    "ai.read",
+    "ai.execute",
+    "ai.context.manage",
   ],
   product_manager: [
     "profile.read",
@@ -131,6 +145,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "finance.manage",
     "invoice.read",
     "audit.read",
+    "analytics.read",
   ],
   ops: [
     "profile.read",
@@ -150,6 +165,7 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "hosting.manage",
     "notification.read",
     "notification.manage",
+    "analytics.read",
   ],
   admin: [
     "profile.read",
@@ -186,6 +202,12 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "settings.manage",
     "automation.read",
     "automation.manage",
+    "analytics.read",
+    "analytics.manage",
+    "ai.read",
+    "ai.execute",
+    "ai.approve",
+    "ai.context.manage",
   ],
   super_admin: [
     "profile.read",
@@ -220,6 +242,12 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "settings.manage",
     "automation.read",
     "automation.manage",
+    "analytics.read",
+    "analytics.manage",
+    "ai.read",
+    "ai.execute",
+    "ai.approve",
+    "ai.context.manage",
   ],
 };
 
@@ -682,6 +710,7 @@ export async function seed(db: PrismaClient = prisma) {
     }
     console.log("[seed] Running local development seed (system + dev users + catalog)...");
     const { rolesMap } = await seedSystemRbac(db);
+    await seedSystemAiContext(db);
     process.env.SEED_DEV_USERS = "true";
     await seedDevUsers(db, rolesMap);
     await seedDevCatalog(db);
@@ -694,6 +723,7 @@ export async function seed(db: PrismaClient = prisma) {
   }
 
   const { rolesMap } = await seedSystemRbac(db);
+  await seedSystemAiContext(db);
   if (process.argv.includes("--system-only")) {
     return;
   }

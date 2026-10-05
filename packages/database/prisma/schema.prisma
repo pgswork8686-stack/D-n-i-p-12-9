@@ -1,6 +1,9 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Phase 19: "analytics" holds the marketing warehouse (read-only for BI). Every Phase 1-18
+  // model/enum is pinned to "public" (annotation only, no table changes).
+  schemas  = ["public", "analytics"]
 }
 
 generator client {
@@ -37,8 +40,11 @@ model User {
   ticketMessages     TicketMessage[]
   notifications      Notification[]
   invoices           Invoice[]
+  tenantMemberships  TenantMember[]
+  aiExecutions       AiExecution[]
 
   @@map("users")
+  @@schema("public")
 }
 
 model Profile {
@@ -55,6 +61,7 @@ model Profile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
+  @@schema("public")
 }
 
 model Role {
@@ -70,6 +77,7 @@ model Role {
   rolePermissions RolePermission[]
 
   @@map("roles")
+  @@schema("public")
 }
 
 model Permission {
@@ -84,6 +92,7 @@ model Permission {
   rolePermissions RolePermission[]
 
   @@map("permissions")
+  @@schema("public")
 }
 
 model UserRole {
@@ -100,6 +109,7 @@ model UserRole {
   @@index([userId])
   @@index([roleId])
   @@map("user_roles")
+  @@schema("public")
 }
 
 model RolePermission {
@@ -115,6 +125,7 @@ model RolePermission {
   @@index([roleId])
   @@index([permissionId])
   @@map("role_permissions")
+  @@schema("public")
 }
 
 model AuditLog {
@@ -134,6 +145,7 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@map("audit_logs")
+  @@schema("public")
 }
 
 model SystemHealthTest {
@@ -142,6 +154,7 @@ model SystemHealthTest {
   service String   @default("api")
 
   @@map("system_health_tests")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -155,6 +168,7 @@ enum ProductType {
   MEMBERSHIP
   SUBSCRIPTION
   SERVICE
+  @@schema("public")
 }
 
 enum FulfillmentType {
@@ -164,33 +178,39 @@ enum FulfillmentType {
   MEMBERSHIP_ACCESS
   MANUAL_SERVICE
   HOSTING_PROVISIONING
+  @@schema("public")
 }
 
 enum ProductStatus {
   DRAFT
   ACTIVE
   ARCHIVED
+  @@schema("public")
 }
 
 enum VariantStatus {
   DRAFT
   ACTIVE
   ARCHIVED
+  @@schema("public")
 }
 
 enum CategoryStatus {
   ACTIVE
   ARCHIVED
+  @@schema("public")
 }
 
 enum Currency {
   VND
   USD
+  @@schema("public")
 }
 
 enum BillingType {
   ONE_TIME
   RECURRING
+  @@schema("public")
 }
 
 enum BillingInterval {
@@ -199,6 +219,7 @@ enum BillingInterval {
   QUARTERLY
   YEARLY
   LIFETIME
+  @@schema("public")
 }
 
 enum MediaType {
@@ -207,6 +228,7 @@ enum MediaType {
   PREVIEW
   ICON
   THUMBNAIL
+  @@schema("public")
 }
 
 model Product {
@@ -236,6 +258,7 @@ model Product {
   @@index([productType])
   @@index([fulfillmentType])
   @@map("products")
+  @@schema("public")
 }
 
 model ProductVariant {
@@ -262,6 +285,7 @@ model ProductVariant {
   @@index([sku])
   @@index([licensePlanId])
   @@map("product_variants")
+  @@schema("public")
 }
 
 model ProductPrice {
@@ -282,6 +306,7 @@ model ProductPrice {
   @@index([variantId])
   @@index([isActive])
   @@map("product_prices")
+  @@schema("public")
 }
 
 model Category {
@@ -302,6 +327,7 @@ model Category {
   @@index([slug])
   @@index([parentId])
   @@map("categories")
+  @@schema("public")
 }
 
 model ProductCategory {
@@ -316,6 +342,7 @@ model ProductCategory {
   @@index([productId])
   @@index([categoryId])
   @@map("product_categories")
+  @@schema("public")
 }
 
 model ProductMedia {
@@ -333,6 +360,7 @@ model ProductMedia {
 
   @@index([productId])
   @@map("product_media")
+  @@schema("public")
 }
 
 model LicensePlan {
@@ -351,6 +379,7 @@ model LicensePlan {
   variants ProductVariant[]
 
   @@map("license_plans")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -361,12 +390,14 @@ enum CartStatus {
   ACTIVE
   CONVERTED
   ABANDONED
+  @@schema("public")
 }
 
 enum OrderStatus {
   PENDING_PAYMENT
   PAID
   CANCELLED
+  @@schema("public")
 }
 
 enum PaymentStatus {
@@ -374,6 +405,7 @@ enum PaymentStatus {
   SUCCEEDED
   FAILED
   CANCELLED
+  @@schema("public")
 }
 
 enum OutboxEventStatus {
@@ -381,12 +413,14 @@ enum OutboxEventStatus {
   PROCESSING
   PROCESSED
   FAILED
+  @@schema("public")
 }
 
 enum IdempotencyKeyStatus {
   IN_PROGRESS
   COMMITTED
   FAILED
+  @@schema("public")
 }
 
 model Cart {
@@ -404,6 +438,7 @@ model Cart {
   @@index([userId])
   @@index([status])
   @@map("carts")
+  @@schema("public")
 }
 
 model CartItem {
@@ -424,6 +459,7 @@ model CartItem {
   @@index([variantId])
   @@index([priceId])
   @@map("cart_items")
+  @@schema("public")
 }
 
 model Order {
@@ -457,6 +493,7 @@ model Order {
   @@index([orderNumber])
   @@index([affiliateId])
   @@map("orders")
+  @@schema("public")
 }
 
 model OrderItem {
@@ -493,6 +530,7 @@ model OrderItem {
   @@index([productId])
   @@index([variantId])
   @@map("order_items")
+  @@schema("public")
 }
 
 model Payment {
@@ -514,6 +552,7 @@ model Payment {
   @@index([status])
   @@index([providerReference])
   @@map("payments")
+  @@schema("public")
 }
 
 model PaymentEvent {
@@ -532,6 +571,7 @@ model PaymentEvent {
   @@index([paymentId])
   @@index([externalEventId])
   @@map("payment_events")
+  @@schema("public")
 }
 
 model OutboxEvent {
@@ -555,6 +595,7 @@ model OutboxEvent {
   @@index([lockedAt])
   @@index([nextAttemptAt])
   @@map("outbox_events")
+  @@schema("public")
 }
 
 model IdempotencyKey {
@@ -575,6 +616,7 @@ model IdempotencyKey {
   @@index([expiresAt])
   @@index([status, startedAt])
   @@map("idempotency_keys")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -585,6 +627,7 @@ enum EntitlementStatus {
   ACTIVE
   REVOKED
   EXPIRED
+  @@schema("public")
 }
 
 model Entitlement {
@@ -631,6 +674,7 @@ model Entitlement {
   @@index([subscriptionId])
   @@index([status, expiresAt])
   @@map("entitlements")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -639,17 +683,20 @@ model Entitlement {
 
 enum LicenseFulfillmentMode {
   MANUAL_EXTERNAL
+  @@schema("public")
 }
 
 enum ProviderStatus {
   ACTIVE
   INACTIVE
+  @@schema("public")
 }
 
 enum ProviderAccountStatus {
   ACTIVE
   EXHAUSTED
   SUSPENDED
+  @@schema("public")
 }
 
 enum AllocationStatus {
@@ -658,6 +705,7 @@ enum AllocationStatus {
   DEACTIVATION_PENDING
   DEACTIVATED
   REJECTED
+  @@schema("public")
 }
 
 model LicenseProvider {
@@ -674,6 +722,7 @@ model LicenseProvider {
   allocations LicenseAllocation[]
 
   @@map("license_providers")
+  @@schema("public")
 }
 
 model ProviderAccount {
@@ -693,6 +742,7 @@ model ProviderAccount {
   @@index([providerId])
   @@index([status])
   @@map("provider_accounts")
+  @@schema("public")
 }
 
 model LicenseAllocation {
@@ -723,6 +773,7 @@ model LicenseAllocation {
   @@index([status])
   @@index([normalizedDomain])
   @@map("license_allocations")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -732,11 +783,13 @@ model LicenseAllocation {
 enum LicenseStatus {
   ACTIVE
   REVOKED
+  @@schema("public")
 }
 
 enum LicenseActivationStatus {
   ACTIVE
   DEACTIVATED
+  @@schema("public")
 }
 
 model InternalLicense {
@@ -767,6 +820,7 @@ model InternalLicense {
   @@index([variantId])
   @@index([status])
   @@map("internal_licenses")
+  @@schema("public")
 }
 
 model LicenseActivation {
@@ -790,6 +844,7 @@ model LicenseActivation {
   @@index([status])
   @@index([normalizedDomain])
   @@map("license_activations")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -799,11 +854,13 @@ model LicenseActivation {
 enum VersionStatus {
   DRAFT
   PUBLISHED
+  @@schema("public")
 }
 
 enum DownloadChannel {
   CUSTOMER_PORTAL
   LICENSE_UPDATER
+  @@schema("public")
 }
 
 model ProductVersion {
@@ -826,6 +883,7 @@ model ProductVersion {
   @@index([status])
   @@index([productId, status])
   @@map("product_versions")
+  @@schema("public")
 }
 
 model ProductVersionFile {
@@ -848,6 +906,7 @@ model ProductVersionFile {
   @@index([productVersionId])
   @@index([storageKey])
   @@map("product_version_files")
+  @@schema("public")
 }
 
 model DownloadEvent {
@@ -877,6 +936,7 @@ model DownloadEvent {
   @@index([fileId])
   @@index([createdAt])
   @@map("download_events")
+  @@schema("public")
 }
 
 model DownloadGrant {
@@ -902,6 +962,7 @@ model DownloadGrant {
   @@index([licenseId, issuedAt])
   @@index([fileId])
   @@map("download_grants")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -916,11 +977,13 @@ enum ContentStatus {
   SCHEDULED
   PUBLISHED
   ARCHIVED
+  @@schema("public")
 }
 
 enum ContentType {
   ARTICLE
   PAGE
+  @@schema("public")
 }
 
 model ContentCategory {
@@ -936,6 +999,7 @@ model ContentCategory {
   posts          ContentPost[]
 
   @@map("content_categories")
+  @@schema("public")
 }
 
 model ContentPost {
@@ -969,6 +1033,7 @@ model ContentPost {
   @@index([categoryId])
   @@index([authorId])
   @@map("content_posts")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -981,6 +1046,7 @@ enum AutomationJobStatus {
   SUCCEEDED
   FAILED
   CANCELLED
+  @@schema("public")
 }
 
 enum AutomationJobType {
@@ -988,6 +1054,7 @@ enum AutomationJobType {
   ORDER_PAID_EMAIL
   LICENSE_PROVISIONED_EMAIL
   EXTERNAL_ALLOCATION_EMAIL
+  @@schema("public")
 }
 
 model AutomationJob {
@@ -1017,6 +1084,7 @@ model AutomationJob {
   @@index([type, status])
   @@index([sourceType, sourceId])
   @@map("automation_jobs")
+  @@schema("public")
 }
 
 enum AutomationDeliveryStatus {
@@ -1024,6 +1092,7 @@ enum AutomationDeliveryStatus {
   SENDING
   SENT
   FAILED
+  @@schema("public")
 }
 
 model AutomationDelivery {
@@ -1044,6 +1113,7 @@ model AutomationDelivery {
   @@index([jobId])
   @@index([status])
   @@map("automation_deliveries")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -1055,6 +1125,7 @@ enum SubscriptionTier {
   PRO
   AGENCY
   ALL_ACCESS
+  @@schema("public")
 }
 
 enum SubscriptionStatus {
@@ -1064,6 +1135,7 @@ enum SubscriptionStatus {
   CANCELED
   UNPAID
   TRIALING
+  @@schema("public")
 }
 
 enum AffiliateStatus {
@@ -1071,6 +1143,7 @@ enum AffiliateStatus {
   ACTIVE
   SUSPENDED
   REJECTED
+  @@schema("public")
 }
 
 enum ReferralStatus {
@@ -1078,6 +1151,7 @@ enum ReferralStatus {
   APPROVED
   REJECTED
   PAID
+  @@schema("public")
 }
 
 enum PayoutStatus {
@@ -1085,12 +1159,14 @@ enum PayoutStatus {
   PROCESSING
   COMPLETED
   REJECTED
+  @@schema("public")
 }
 
 enum PayoutMethod {
   BANK_TRANSFER
   PAYPAL
   CRYPTO
+  @@schema("public")
 }
 
 model SubscriptionPlan {
@@ -1116,6 +1192,7 @@ model SubscriptionPlan {
   @@index([tier])
   @@index([isActive])
   @@map("subscription_plans")
+  @@schema("public")
 }
 
 model Subscription {
@@ -1143,6 +1220,7 @@ model Subscription {
   @@index([planId])
   @@index([currentPeriodEnd])
   @@map("subscriptions")
+  @@schema("public")
 }
 
 model AffiliateAccount {
@@ -1168,6 +1246,7 @@ model AffiliateAccount {
   @@index([code])
   @@index([status])
   @@map("affiliate_accounts")
+  @@schema("public")
 }
 
 model AffiliateClick {
@@ -1189,6 +1268,7 @@ model AffiliateClick {
   @@index([ipHash])
   @@index([createdAt])
   @@map("affiliate_clicks")
+  @@schema("public")
 }
 
 model AffiliateReferral {
@@ -1215,6 +1295,7 @@ model AffiliateReferral {
   @@index([matureAt])
   @@index([customerUserId])
   @@map("affiliate_referrals")
+  @@schema("public")
 }
 
 model AffiliatePayout {
@@ -1238,6 +1319,7 @@ model AffiliatePayout {
   @@index([affiliateId])
   @@index([status])
   @@map("affiliate_payouts")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -1249,6 +1331,7 @@ enum HostingProvider {
   DIRECTADMIN
   CLOUDFLARE
   MOCK
+  @@schema("public")
 }
 
 enum HostingAccountStatus {
@@ -1257,6 +1340,7 @@ enum HostingAccountStatus {
   SUSPENDED
   TERMINATED
   FAILED
+  @@schema("public")
 }
 
 enum DnsRecordType {
@@ -1267,6 +1351,7 @@ enum DnsRecordType {
   MX
   NS
   SRV
+  @@schema("public")
 }
 
 enum DnsRecordStatus {
@@ -1274,6 +1359,7 @@ enum DnsRecordStatus {
   ACTIVE
   ERROR
   DELETED
+  @@schema("public")
 }
 
 model HostingServer {
@@ -1296,6 +1382,7 @@ model HostingServer {
   @@index([provider])
   @@index([isActive])
   @@map("hosting_servers")
+  @@schema("public")
 }
 
 model HostingAccount {
@@ -1330,6 +1417,7 @@ model HostingAccount {
   @@index([status])
   @@index([domain])
   @@map("hosting_accounts")
+  @@schema("public")
 }
 
 model HostingDnsRecord {
@@ -1354,6 +1442,7 @@ model HostingDnsRecord {
   @@index([type])
   @@index([status])
   @@map("hosting_dns_records")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -1366,6 +1455,7 @@ enum TicketPriority {
   MEDIUM
   HIGH
   URGENT
+  @@schema("public")
 }
 
 enum TicketStatus {
@@ -1375,12 +1465,14 @@ enum TicketStatus {
   IN_PROGRESS
   RESOLVED
   CLOSED
+  @@schema("public")
 }
 
 enum TicketSenderType {
   CUSTOMER
   STAFF
   SYSTEM
+  @@schema("public")
 }
 
 enum NotificationType {
@@ -1396,6 +1488,7 @@ enum NotificationType {
   SYSTEM_ALERT
   PROMOTION
   BILLING
+  @@schema("public")
 }
 
 model Ticket {
@@ -1428,6 +1521,7 @@ model Ticket {
   @@index([ticketNumber])
   @@index([createdAt])
   @@map("tickets")
+  @@schema("public")
 }
 
 model TicketMessage {
@@ -1448,6 +1542,7 @@ model TicketMessage {
   @@index([isInternalNote])
   @@index([createdAt])
   @@map("ticket_messages")
+  @@schema("public")
 }
 
 model TicketAttachment {
@@ -1464,6 +1559,7 @@ model TicketAttachment {
 
   @@index([messageId])
   @@map("ticket_attachments")
+  @@schema("public")
 }
 
 model Notification {
@@ -1485,6 +1581,7 @@ model Notification {
   @@index([type])
   @@index([createdAt])
   @@map("notifications")
+  @@schema("public")
 }
 
 // --------------------------------------------------------
@@ -1497,6 +1594,7 @@ enum LedgerAccountType {
   EQUITY
   REVENUE
   EXPENSE
+  @@schema("public")
 }
 
 enum LedgerAccountCode {
@@ -1506,11 +1604,13 @@ enum LedgerAccountCode {
   REFUND_EXPENSE
   AFFILIATE_COMMISSION_PAYABLE
   GATEWAY_FEE_EXPENSE
+  @@schema("public")
 }
 
 enum LedgerEntryType {
   DEBIT
   CREDIT
+  @@schema("public")
 }
 
 enum InvoiceStatus {
@@ -1519,6 +1619,7 @@ enum InvoiceStatus {
   PAID
   VOID
   REFUNDED
+  @@schema("public")
 }
 
 model FinancialLedgerEntry {
@@ -1540,6 +1641,7 @@ model FinancialLedgerEntry {
   @@index([referenceType, referenceId])
   @@index([createdAt])
   @@map("financial_ledger_entries")
+  @@schema("public")
 }
 
 model Invoice {
@@ -1575,6 +1677,7 @@ model Invoice {
   @@index([status])
   @@index([issuedAt])
   @@map("invoices")
+  @@schema("public")
 }
 
 model InvoiceItem {
@@ -1592,6 +1695,462 @@ model InvoiceItem {
 
   @@index([invoiceId])
   @@map("invoice_items")
+  @@schema("public")
 }
 
+// ============================================================================
+// Phase 19 — Tenancy, AI Marketing OS & Analytics foundation
+// ============================================================================
 
+enum TenantType {
+  ORGANIZATION
+  CLIENT
+
+  @@schema("public")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+
+  @@schema("public")
+}
+
+enum TenantMemberRole {
+  VIEWER
+  ANALYST
+  MANAGER
+
+  @@schema("public")
+}
+
+/// Business tenant for marketing analytics and AI. An ORGANIZATION (agency or brand owner) owns
+/// CLIENT tenants (projects or end clients). Analytics rows are always owned by a CLIENT tenant.
+model Tenant {
+  id              String       @id @default(uuid())
+  slug            String       @unique
+  name            String
+  type            TenantType
+  status          TenantStatus @default(ACTIVE)
+  parentId        String?      @map("parent_id")
+  defaultCurrency Currency     @default(VND) @map("default_currency")
+  timezone        String       @default("Asia/Ho_Chi_Minh")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  parent          Tenant?            @relation("TenantHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children        Tenant[]           @relation("TenantHierarchy")
+  members         TenantMember[]
+  aiContexts      AiContext[]
+  aiExecutions    AiExecution[]
+  aiApprovals     AiActionApproval[]
+  aiReports       AiReportDraft[]
+  analyticsClient DimClient?
+
+  @@index([parentId])
+  @@map("tenants")
+  @@schema("public")
+}
+
+/// Membership grants access to the tenant and, for an ORGANIZATION, to its CLIENT tenants.
+model TenantMember {
+  id        String           @id @default(uuid())
+  tenantId  String           @map("tenant_id")
+  userId    String           @map("user_id")
+  role      TenantMemberRole @default(VIEWER)
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("tenant_members")
+  @@schema("public")
+}
+
+enum AiContextScope {
+  SYSTEM
+  ORGANIZATION
+  CLIENT
+
+  @@schema("public")
+}
+
+/// Versioned business context for AI (product, audience, positioning, voice...). Content lives in
+/// append-only AiContextVersion rows; currentVersion points at the latest one.
+model AiContext {
+  id             String         @id @default(uuid())
+  scope          AiContextScope
+  tenantId       String?        @map("tenant_id")
+  key            String         @default("marketing")
+  currentVersion Int            @default(0) @map("current_version")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  tenant   Tenant?            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  versions AiContextVersion[]
+
+  @@index([tenantId])
+  @@map("ai_contexts")
+  @@schema("public")
+}
+
+/// Immutable snapshot of a context (UPDATE/DELETE blocked by a DB trigger). Edits create a new version.
+model AiContextVersion {
+  id           String   @id @default(uuid())
+  contextId    String   @map("context_id")
+  version      Int
+  content      Json
+  contentHash  String   @map("content_hash")
+  changeReason String   @map("change_reason")
+  createdById  String?  @map("created_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  context AiContext @relation(fields: [contextId], references: [id], onDelete: Restrict)
+
+  @@unique([contextId, version])
+  @@map("ai_context_versions")
+  @@schema("public")
+}
+
+enum AiExecutionStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@schema("public")
+}
+
+enum AiToolRisk {
+  READ
+  WRITE_LOW_RISK
+  WRITE_HIGH_RISK
+
+  @@schema("public")
+}
+
+enum AiStepStatus {
+  SUCCEEDED
+  FAILED
+  BLOCKED
+
+  @@schema("public")
+}
+
+/// Audit record of one AI workflow run (input and result are stored redacted).
+model AiExecution {
+  id              String            @id @default(uuid())
+  tenantId        String            @map("tenant_id")
+  userId          String            @map("user_id")
+  workflow        String
+  workflowVersion String            @map("workflow_version")
+  skills          String[]
+  contextVersions Json              @map("context_versions")
+  status          AiExecutionStatus @default(RUNNING)
+  provider        String?
+  model           String?
+  input           Json
+  result          Json?
+  resultSummary   String?           @map("result_summary")
+  error           String?
+  idempotencyKey  String?           @map("idempotency_key")
+  startedAt       DateTime          @default(now()) @map("started_at")
+  finishedAt      DateTime?         @map("finished_at")
+
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  steps     AiExecutionStep[]
+  approvals AiActionApproval[]
+  report    AiReportDraft?
+
+  @@unique([userId, idempotencyKey])
+  @@index([tenantId, startedAt])
+  @@index([userId, startedAt])
+  @@map("ai_executions")
+  @@schema("public")
+}
+
+/// One step or tool call of an execution, with redacted input and output summaries.
+model AiExecutionStep {
+  id            String       @id @default(uuid())
+  executionId   String       @map("execution_id")
+  seq           Int
+  name          String
+  kind          String
+  risk          AiToolRisk?
+  status        AiStepStatus
+  inputSummary  Json?        @map("input_summary")
+  outputSummary Json?        @map("output_summary")
+  error         String?
+  startedAt     DateTime     @map("started_at")
+  finishedAt    DateTime     @map("finished_at")
+
+  execution AiExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, seq])
+  @@map("ai_execution_steps")
+  @@schema("public")
+}
+
+enum AiApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@schema("public")
+}
+
+/// Human approval gate for WRITE_HIGH_RISK tools (ads budget, publish, refund, pricing...).
+model AiActionApproval {
+  id            String           @id @default(uuid())
+  executionId   String           @map("execution_id")
+  tenantId      String           @map("tenant_id")
+  tool          String
+  risk          AiToolRisk
+  payload       Json
+  payloadHash   String           @map("payload_hash")
+  status        AiApprovalStatus @default(PENDING)
+  requestedById String           @map("requested_by_id")
+  decidedById   String?          @map("decided_by_id")
+  decidedAt     DateTime?        @map("decided_at")
+  reason        String?
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  execution AiExecution @relation(fields: [executionId], references: [id], onDelete: Restrict)
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, status])
+  @@map("ai_action_approvals")
+  @@schema("public")
+}
+
+/// Draft report produced by a workflow (WRITE_LOW_RISK). Never published automatically.
+model AiReportDraft {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  executionId String   @unique @map("execution_id")
+  kind        String
+  title       String
+  body        Json
+  status      String   @default("DRAFT")
+  createdById String   @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  execution AiExecution @relation(fields: [executionId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@map("ai_report_drafts")
+  @@schema("public")
+}
+
+// ---------------------------------------------------------------------------
+// analytics schema: marketing warehouse. Written only by the ingestion service, read by the
+// analytics API and (through a read-only database role) by Apache Superset.
+// client_id is the id of a CLIENT tenant (validated by the ingestion service).
+// ---------------------------------------------------------------------------
+
+enum AnalyticsIngestKind {
+  MARKETING_DAILY
+  LEAD_FUNNEL_DAILY
+  REVENUE_DAILY
+  SEO_DAILY
+
+  @@schema("analytics")
+}
+
+enum AnalyticsBatchStatus {
+  NORMALIZED
+  REJECTED
+
+  @@schema("analytics")
+}
+
+/// Raw ingestion log: exactly what the connector sent (idempotency and replay evidence).
+model AnalyticsIngestBatch {
+  id             String               @id @default(uuid())
+  clientId       String               @map("client_id")
+  source         String
+  idempotencyKey String               @map("idempotency_key")
+  kind           AnalyticsIngestKind
+  eventTimestamp DateTime             @map("event_timestamp")
+  payloadHash    String               @map("payload_hash")
+  payload        Json
+  recordCount    Int                  @map("record_count")
+  status         AnalyticsBatchStatus
+  requestId      String               @map("request_id")
+  receivedAt     DateTime             @default(now()) @map("received_at")
+  normalizedAt   DateTime?            @map("normalized_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([source, idempotencyKey])
+  @@index([clientId, receivedAt])
+  @@map("raw_ingest_batches")
+  @@schema("analytics")
+}
+
+model DimClient {
+  clientId       String   @id @map("client_id")
+  organizationId String?  @map("organization_id")
+  name           String
+  currency       String
+  timezone       String
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant         Tenant                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  ingestBatches  AnalyticsIngestBatch[]
+  campaigns      DimCampaign[]
+  products       DimProduct[]
+  marketingDaily FactMarketingDaily[]
+  funnelDaily    FactLeadFunnelDaily[]
+  revenueDaily   FactRevenueDaily[]
+  seoDaily       FactSeoDaily[]
+
+  @@map("dim_client")
+  @@schema("analytics")
+}
+
+model DimChannel {
+  key      String @id
+  name     String
+  category String
+
+  @@map("dim_channel")
+  @@schema("analytics")
+}
+
+model DimCampaign {
+  id         String   @id @default(uuid())
+  clientId   String   @map("client_id")
+  channelKey String   @map("channel_key")
+  externalId String   @map("external_id")
+  name       String
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, channelKey, externalId])
+  @@map("dim_campaign")
+  @@schema("analytics")
+}
+
+model DimProduct {
+  id         String   @id @default(uuid())
+  clientId   String   @map("client_id")
+  externalId String   @map("external_id")
+  name       String
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, externalId])
+  @@map("dim_product")
+  @@schema("analytics")
+}
+
+model DimDate {
+  date      DateTime @id @db.Date
+  year      Int
+  quarter   Int
+  month     Int
+  isoWeek   Int      @map("iso_week")
+  dayOfWeek Int      @map("day_of_week")
+  isWeekend Boolean  @map("is_weekend")
+
+  @@map("dim_date")
+  @@schema("analytics")
+}
+
+/// Base marketing measures per client, day, channel and campaign. Ratios (CTR, CPC, ROAS...) are
+/// never stored: they are derived from these sums by the metric registry in @nexus/utils.
+model FactMarketingDaily {
+  id             String   @id @default(uuid())
+  clientId       String   @map("client_id")
+  date           DateTime @db.Date
+  channelKey     String   @map("channel_key")
+  campaignKey    String   @default("_all") @map("campaign_key")
+  currency       String
+  spendMinor     BigInt   @default(0) @map("spend_minor")
+  impressions    BigInt   @default(0)
+  clicks         BigInt   @default(0)
+  sessions       BigInt   @default(0)
+  leads          Int      @default(0)
+  qualifiedLeads Int      @default(0) @map("qualified_leads")
+  customers      Int      @default(0)
+  revenueMinor   BigInt   @default(0) @map("revenue_minor")
+  sourceBatchId  String   @map("source_batch_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, date, channelKey, campaignKey])
+  @@index([clientId, date])
+  @@map("fact_marketing_daily")
+  @@schema("analytics")
+}
+
+model FactLeadFunnelDaily {
+  id             String   @id @default(uuid())
+  clientId       String   @map("client_id")
+  date           DateTime @db.Date
+  channelKey     String   @map("channel_key")
+  sessions       BigInt   @default(0)
+  leads          Int      @default(0)
+  qualifiedLeads Int      @default(0) @map("qualified_leads")
+  opportunities  Int      @default(0)
+  customers      Int      @default(0)
+  sourceBatchId  String   @map("source_batch_id")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, date, channelKey])
+  @@index([clientId, date])
+  @@map("fact_lead_funnel_daily")
+  @@schema("analytics")
+}
+
+model FactRevenueDaily {
+  id            String   @id @default(uuid())
+  clientId      String   @map("client_id")
+  date          DateTime @db.Date
+  channelKey    String   @map("channel_key")
+  productKey    String   @default("_all") @map("product_key")
+  currency      String
+  orders        Int      @default(0)
+  revenueMinor  BigInt   @default(0) @map("revenue_minor")
+  refundsMinor  BigInt   @default(0) @map("refunds_minor")
+  sourceBatchId String   @map("source_batch_id")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, date, channelKey, productKey])
+  @@index([clientId, date])
+  @@map("fact_revenue_daily")
+  @@schema("analytics")
+}
+
+model FactSeoDaily {
+  id            String   @id @default(uuid())
+  clientId      String   @map("client_id")
+  date          DateTime @db.Date
+  pageKey       String   @map("page_key")
+  queryKey      String   @default("_all") @map("query_key")
+  impressions   BigInt   @default(0)
+  clicks        BigInt   @default(0)
+  positionSum   Float    @default(0) @map("position_sum")
+  sessions      BigInt   @default(0)
+  sourceBatchId String   @map("source_batch_id")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  client DimClient @relation(fields: [clientId], references: [clientId], onDelete: Restrict)
+
+  @@unique([clientId, date, pageKey, queryKey])
+  @@index([clientId, date])
+  @@map("fact_seo_daily")
+  @@schema("analytics")
+}

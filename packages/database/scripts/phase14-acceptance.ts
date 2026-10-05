@@ -473,6 +473,12 @@ async function runPhase14Acceptance() {
     let testDns: any;
 
     if (isDbLive) {
+      // Fixture owner for the hosting rows below (the suite referenced it without creating it).
+      await prisma.user.upsert({
+        where: { id: "usr-tenant-1" },
+        update: {},
+        create: { id: "usr-tenant-1", email: "usr-tenant-1@phase14.acceptance.test" },
+      });
       testServer = await prisma.hostingServer.create({
         data: {
           name: `Test Server ${runId}`,

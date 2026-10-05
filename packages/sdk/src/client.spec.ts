@@ -124,5 +124,27 @@ describe("NexusApiClient", () => {
       expect(res.orderStatus).toBe("PAID");
     });
   });
-});
 
+  describe("phase 19 analytics & AI endpoints", () => {
+    it("getAnalyticsOverview sends clientId and period as query parameters", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ totals: {} }) });
+      await client.getAnalyticsOverview("c-1", "2031-03-10", "2031-03-16");
+      expect(mockFetch.mock.calls[0][0]).toBe("https://api.example.com/v1/analytics/overview?clientId=c-1&from=2031-03-10&to=2031-03-16");
+    });
+
+    it("createAiExecution posts the workflow request", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "exec-1", status: "SUCCEEDED" }) });
+      const res = await client.createAiExecution({ workflow: "weekly-marketing-review", tenantId: "t-1" });
+      const [url, options] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://api.example.com/v1/ai/executions");
+      expect(options.method).toBe("POST");
+      expect(JSON.parse(options.body)).toEqual({ workflow: "weekly-marketing-review", tenantId: "t-1" });
+      expect(res.id).toBe("exec-1");
+    });
+
+    it("surfaces API errors without leaking raw bodies", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ message: "Không tìm thấy tenant" }) });
+      await expect(client.listAiContexts("t-x")).rejects.toThrow("Không tìm thấy tenant");
+    });
+  });
+});

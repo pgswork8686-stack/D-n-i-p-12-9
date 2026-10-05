@@ -1,0 +1,69 @@
+# Phase 19 — Apache Superset (external BI service; official image, not forked).
+#
+#   cp infra/superset/.env.example infra/superset/.env   # fill in real secrets (never commit)
+#   psql "$DATABASE_URL" -v ro_password="$ANALYTICS_RO_PASSWORD" -f infra/superset/sql/create-readonly-role.sql
+#   docker compose -f infra/superset/docker-compose.superset.yml --env-file infra/superset/.env up -d
+#
+# Superset gets its OWN metadata database (superset-db). It reaches the platform PostgreSQL only
+# through ANALYTICS_DATABASE_URI, which must use the read-only `superset_ro` role.
+name: nexustheme-superset
+
+services:
+  superset-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${SUPERSET_METADATA_DB_PASSWORD:?set SUPERSET_METADATA_DB_PASSWORD}
+    volumes:
+      - superset_metadata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      retries: 20
+
+  superset-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  superset-init:
+    image: apache/superset:4.1.1
+    depends_on:
+      superset-db:
+        condition: service_healthy
+    environment: &superset-env
+      SUPERSET_ENV: ${SUPERSET_ENV:-development}
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?set SUPERSET_SECRET_KEY}
+      SUPERSET_METADATA_DB_URI: postgresql+psycopg2://superset:${SUPERSET_METADATA_DB_PASSWORD}@superset-db:5432/superset
+      SUPERSET_REDIS_URL: redis://superset-redis:6379/0
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      ANALYTICS_DATABASE_URI: ${ANALYTICS_DATABASE_URI:?set ANALYTICS_DATABASE_URI (superset_ro role)}
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:?set SUPERSET_ADMIN_PASSWORD}
+    volumes:
+      - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./scripts/init-superset.sh:/app/init-superset.sh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["/bin/sh", "/app/init-superset.sh"]
+
+  superset:
+    image: apache/superset:4.1.1
+    restart: unless-stopped
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+      superset-redis:
+        condition: service_started
+    environment: *superset-env
+    volumes:
+      - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8088:8088"
+
+volumes:
+  superset_metadata:

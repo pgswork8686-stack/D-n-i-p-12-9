@@ -105,6 +105,9 @@ importers:
       '@nestjs/platform-express':
         specifier: ^10.4.15
         version: 10.4.22(@nestjs/common@10.4.22(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@10.4.22)(supports-color@8.1.1)
+      '@nexus/ai-core':
+        specifier: workspace:*
+        version: link:../../packages/ai-core
       '@nexus/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -365,6 +368,43 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  packages/ai-core:
+    dependencies:
+      '@nexus/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@nexus/utils':
+        specifier: workspace:*
+        version: link:../utils
+    devDependencies:
+      '@nexus/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      '@types/node':
+        specifier: ^22.13.9
+        version: 22.20.2
+      '@typescript-eslint/eslint-plugin':
+        specifier: ^8.26.0
+        version: 8.70.0(@typescript-eslint/parser@8.70.0(eslint@8.57.1(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3))(eslint@8.57.1(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
+      '@typescript-eslint/parser':
+        specifier: ^8.26.0
+        version: 8.70.0(eslint@8.57.1(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
+      eslint:
+        specifier: ^8.57.1
+        version: 8.57.1(supports-color@8.1.1)
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@22.20.2)(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.2)(typescript@5.9.3))
+      ts-jest:
+        specifier: ^29.2.6
+        version: 29.4.12(@babel/core@7.29.7(supports-color@8.1.1))(@jest/transform@29.7.0(supports-color@8.1.1))(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7(supports-color@8.1.1))(supports-color@8.1.1))(jest-util@29.7.0)(jest@29.7.0(@types/node@22.20.2)(supports-color@8.1.1)(ts-node@10.9.2(@types/node@22.20.2)(typescript@5.9.3)))(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   packages/auth:
     dependencies:
       '@nexus/contracts':
@@ -427,6 +467,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@nexus/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
       '@nexus/contracts':
         specifier: workspace:*
         version: link:../contracts

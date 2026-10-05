@@ -15,3 +15,5 @@ export * from "./hosting";
 export * from "./tickets";
 export * from "./finance";
 export * from "./observability";
+export * from "./analytics";
+export * from "./ai";

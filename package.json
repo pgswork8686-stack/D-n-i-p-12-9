@@ -17,7 +17,7 @@
     "db:seed:dev": "pnpm --filter @nexus/database seed:dev",
     "db:seed:catalog": "pnpm --filter @nexus/database seed:catalog",
     "db:seed:local": "pnpm --filter @nexus/database seed:local",
-    "db:seed:all": "pnpm db:seed:system && pnpm db:seed:catalog",
+    "db:seed:all": "pnpm db:seed:system && pnpm db:seed:dev && pnpm db:seed:catalog",
     "worker:smoke": "pnpm --filter @nexus/worker test:smoke",
     "test:acceptance:phase4": "pnpm --filter @nexus/database acceptance:phase4",
     "test:acceptance:phase5": "pnpm --filter @nexus/database acceptance:phase5",
@@ -38,7 +38,9 @@
     "n8n:build": "node automation/n8n/scripts/build-workflows.mjs",
     "n8n:smoke": "node automation/n8n/scripts/runtime-smoke.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "test:acceptance:phase19": "pnpm --filter @nexus/database acceptance:phase19",
+    "analytics:superset-metrics": "node infra/superset/scripts/export-metrics.cjs"
   },
   "devDependencies": {
     "turbo": "^2.4.4",

@@ -24,6 +24,9 @@ import { TicketsModule } from "./modules/tickets/tickets.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.middleware";
+import { TenantsModule } from "./modules/tenants/tenants.module";
+import { AnalyticsModule } from "./modules/analytics/analytics.module";
+import { AiModule } from "./modules/ai/ai.module";
 
 @Module({
   imports: [
@@ -55,6 +58,9 @@ import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.
     StorageModule,
     AuthModule,
     QueueModule,
+    TenantsModule,
+    AnalyticsModule,
+    AiModule,
   ],
 })
 export class AppModule implements NestModule {

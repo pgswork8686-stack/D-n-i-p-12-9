@@ -1,4 +1,21 @@
 import {
+  AnalyticsClientDto,
+  AnalyticsMetricDefinitionDto,
+  AnalyticsOverviewDto,
+  AnalyticsCampaignsDto,
+  AnalyticsFunnelDto,
+  AiSkillDto,
+  AiWorkflowDto,
+  AiToolDto,
+  AiContextDto,
+  AiContextVersionDto,
+  CreateAiContextVersionRequest,
+  CreateAiExecutionRequest,
+  AiExecutionDto,
+  RequestAiActionRequest,
+  RequestAiActionResponse,
+  AiApprovalStatus,
+  AiActionApprovalDto,
   HealthCheckResponse,
   AuthMeResponse,
   RoleDetail,
@@ -2442,6 +2459,113 @@ export class NexusApiClient {
       await handleCmsError(res, "Admin get financial summary failed");
     }
     return (await res.json()) as FinancialSummaryReportDto;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 19 — Analytics & AI Marketing OS
+  // ---------------------------------------------------------------------------
+
+  private async p19<T>(method: "GET" | "POST", path: string, body?: unknown, failMessage = "Request failed"): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: this.buildHeaders(),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+    if (!res.ok) await handleCmsError(res, failMessage);
+    return (await res.json()) as T;
+  }
+
+  private static periodQuery(clientId: string, from?: string, to?: string): string {
+    const params = new URLSearchParams({ clientId });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return params.toString();
+  }
+
+  async listAnalyticsClients(): Promise<AnalyticsClientDto[]> {
+    return this.p19("GET", "/v1/analytics/clients", undefined, "List analytics clients failed");
+  }
+
+  async getAnalyticsMetricDefinitions(): Promise<AnalyticsMetricDefinitionDto[]> {
+    return this.p19("GET", "/v1/analytics/metrics", undefined, "List metric definitions failed");
+  }
+
+  async getAnalyticsOverview(clientId: string, from?: string, to?: string): Promise<AnalyticsOverviewDto> {
+    return this.p19("GET", `/v1/analytics/overview?${NexusApiClient.periodQuery(clientId, from, to)}`, undefined, "Analytics overview failed");
+  }
+
+  async getAnalyticsCampaigns(clientId: string, from?: string, to?: string): Promise<AnalyticsCampaignsDto> {
+    return this.p19("GET", `/v1/analytics/campaigns?${NexusApiClient.periodQuery(clientId, from, to)}`, undefined, "Analytics campaigns failed");
+  }
+
+  async getAnalyticsFunnel(clientId: string, from?: string, to?: string): Promise<AnalyticsFunnelDto> {
+    return this.p19("GET", `/v1/analytics/funnel?${NexusApiClient.periodQuery(clientId, from, to)}`, undefined, "Analytics funnel failed");
+  }
+
+  async getAiStatus(): Promise<{ enabled: boolean; reason: string | null; provider: string; model: string | null; skills: number }> {
+    return this.p19("GET", "/v1/ai/status", undefined, "AI status failed");
+  }
+
+  async listAiSkills(): Promise<AiSkillDto[]> {
+    return this.p19("GET", "/v1/ai/skills", undefined, "List AI skills failed");
+  }
+
+  async listAiWorkflows(): Promise<AiWorkflowDto[]> {
+    return this.p19("GET", "/v1/ai/workflows", undefined, "List AI workflows failed");
+  }
+
+  async listAiTools(): Promise<AiToolDto[]> {
+    return this.p19("GET", "/v1/ai/tools", undefined, "List AI tools failed");
+  }
+
+  async listAiContexts(tenantId: string): Promise<AiContextDto[]> {
+    return this.p19("GET", `/v1/ai/contexts?tenantId=${encodeURIComponent(tenantId)}`, undefined, "List AI contexts failed");
+  }
+
+  async listAiContextVersions(contextId: string): Promise<AiContextVersionDto[]> {
+    return this.p19("GET", `/v1/ai/contexts/${encodeURIComponent(contextId)}/versions`, undefined, "List AI context versions failed");
+  }
+
+  async createAiContextVersion(dto: CreateAiContextVersionRequest): Promise<AiContextDto> {
+    return this.p19("POST", "/v1/ai/contexts/versions", dto, "Create AI context version failed");
+  }
+
+  async createAiExecution(dto: CreateAiExecutionRequest): Promise<AiExecutionDto> {
+    return this.p19("POST", "/v1/ai/executions", dto, "Create AI execution failed");
+  }
+
+  async listAiExecutions(tenantId: string): Promise<Array<Pick<AiExecutionDto, "id" | "workflow" | "workflowVersion" | "status" | "resultSummary" | "provider" | "startedAt" | "finishedAt" | "userId">>> {
+    return this.p19("GET", `/v1/ai/executions?tenantId=${encodeURIComponent(tenantId)}`, undefined, "List AI executions failed");
+  }
+
+  async getAiExecution(id: string): Promise<AiExecutionDto> {
+    return this.p19("GET", `/v1/ai/executions/${encodeURIComponent(id)}`, undefined, "Get AI execution failed");
+  }
+
+  async requestAiAction(executionId: string, dto: RequestAiActionRequest): Promise<RequestAiActionResponse> {
+    return this.p19("POST", `/v1/ai/executions/${encodeURIComponent(executionId)}/actions`, dto, "Request AI action failed");
+  }
+
+  async listAiApprovals(tenantId: string, status?: AiApprovalStatus): Promise<AiActionApprovalDto[]> {
+    const qs = new URLSearchParams({ tenantId, ...(status ? { status } : {}) }).toString();
+    return this.p19("GET", `/v1/ai/approvals?${qs}`, undefined, "List AI approvals failed");
+  }
+
+  async decideAiApproval(id: string, decision: "APPROVED" | "REJECTED", reason?: string): Promise<AiActionApprovalDto> {
+    return this.p19("POST", `/v1/ai/approvals/${encodeURIComponent(id)}/decision`, { decision, reason }, "Decide AI approval failed");
+  }
+
+  async adminListTenants(): Promise<any[]> {
+    return this.p19("GET", "/v1/admin/tenants", undefined, "List tenants failed");
+  }
+
+  async adminCreateTenant(dto: { slug: string; name: string; type: "ORGANIZATION" | "CLIENT"; parentId?: string; defaultCurrency?: "VND" | "USD" }): Promise<any> {
+    return this.p19("POST", "/v1/admin/tenants", dto, "Create tenant failed");
+  }
+
+  async adminAddTenantMember(tenantId: string, dto: { email: string; role: "VIEWER" | "ANALYST" | "MANAGER" }): Promise<any> {
+    return this.p19("POST", `/v1/admin/tenants/${encodeURIComponent(tenantId)}/members`, dto, "Add tenant member failed");
   }
 
   private buildHeaders(): Record<string, string> {
