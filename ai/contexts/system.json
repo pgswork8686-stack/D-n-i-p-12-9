@@ -1,0 +1,14 @@
+{
+  "key": "marketing",
+  "changeReason": "Phase 19: initial SYSTEM context shipped with the platform",
+  "content": {
+    "productOverview": "NEXUSTHEME là nền tảng bán tài nguyên số cho người làm web tại Việt Nam: theme và plugin WordPress, Figma UI kit, phần mềm bản quyền, hosting, kèm cổng khách hàng để tải file, quản lý license và hỗ trợ.",
+    "targetAudience": "Chủ website, freelancer, agency và doanh nghiệp nhỏ tại Việt Nam cần dựng hoặc vận hành website nhanh, hợp pháp và có hỗ trợ tiếng Việt.",
+    "problems": "Mua sản phẩm quốc tế khó thanh toán, lo ngại file crack có mã độc, thiếu hỗ trợ tiếng Việt, mất thời gian cài đặt và cập nhật.",
+    "positioning": "Nơi mua tài nguyên web có nguồn gốc rõ ràng, giao hàng tự động và được hỗ trợ bằng tiếng Việt.",
+    "differentiation": "Giao key/file tự động sau thanh toán, cổng khách hàng quản lý license và tải xuống, hoá đơn tự động, hỗ trợ qua ticket.",
+    "brandVoice": "Chuyên nghiệp, rõ ràng, thân thiện; dùng tiếng Việt tự nhiên, tránh phóng đại và tránh hứa hẹn không kiểm chứng được.",
+    "goals": "Tăng khách hàng mới có lợi nhuận, giảm chi phí mỗi khách hàng tiềm năng, tăng tỷ lệ mua lại.",
+    "metrics": "Theo dõi CPL, CPQL, CAC, ROAS, CVR và doanh thu theo kênh. Công thức chuẩn nằm trong analytics-metrics của @nexus/utils."
+  }
+}

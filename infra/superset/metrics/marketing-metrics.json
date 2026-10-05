@@ -1,0 +1,97 @@
+{
+  "dataset": "analytics.fact_marketing_daily",
+  "generatedFrom": "packages/utils/src/analytics-metrics.ts",
+  "note": "Generated file. Do not edit by hand; change the registry and re-run pnpm analytics:superset-metrics.",
+  "metrics": [
+    {
+      "metric_name": "spend",
+      "verbose_name": "spend",
+      "expression": "SUM(spend_minor)",
+      "description": "Tổng spend"
+    },
+    {
+      "metric_name": "impressions",
+      "verbose_name": "impressions",
+      "expression": "SUM(impressions)",
+      "description": "Tổng impressions"
+    },
+    {
+      "metric_name": "clicks",
+      "verbose_name": "clicks",
+      "expression": "SUM(clicks)",
+      "description": "Tổng clicks"
+    },
+    {
+      "metric_name": "sessions",
+      "verbose_name": "sessions",
+      "expression": "SUM(sessions)",
+      "description": "Tổng sessions"
+    },
+    {
+      "metric_name": "leads",
+      "verbose_name": "leads",
+      "expression": "SUM(leads)",
+      "description": "Tổng leads"
+    },
+    {
+      "metric_name": "qualified_leads",
+      "verbose_name": "qualified_leads",
+      "expression": "SUM(qualified_leads)",
+      "description": "Tổng qualified_leads"
+    },
+    {
+      "metric_name": "customers",
+      "verbose_name": "customers",
+      "expression": "SUM(customers)",
+      "description": "Tổng customers"
+    },
+    {
+      "metric_name": "revenue",
+      "verbose_name": "revenue",
+      "expression": "SUM(revenue_minor)",
+      "description": "Tổng revenue"
+    },
+    {
+      "metric_name": "ctr",
+      "verbose_name": "CTR",
+      "expression": "SUM(clicks)::numeric / NULLIF(SUM(impressions), 0)",
+      "description": "Tỷ lệ nhấp: số lượt nhấp trên số lần hiển thị. (clicks / impressions)"
+    },
+    {
+      "metric_name": "cpc",
+      "verbose_name": "CPC",
+      "expression": "SUM(spend_minor)::numeric / NULLIF(SUM(clicks), 0)",
+      "description": "Chi phí mỗi lượt nhấp. (spend / clicks)"
+    },
+    {
+      "metric_name": "cpl",
+      "verbose_name": "CPL",
+      "expression": "SUM(spend_minor)::numeric / NULLIF(SUM(leads), 0)",
+      "description": "Chi phí mỗi khách hàng tiềm năng. (spend / leads)"
+    },
+    {
+      "metric_name": "cpql",
+      "verbose_name": "CPQL",
+      "expression": "SUM(spend_minor)::numeric / NULLIF(SUM(qualified_leads), 0)",
+      "description": "Chi phí mỗi khách hàng tiềm năng đủ điều kiện. (spend / qualified_leads)"
+    },
+    {
+      "metric_name": "cac",
+      "verbose_name": "CAC",
+      "expression": "SUM(spend_minor)::numeric / NULLIF(SUM(customers), 0)",
+      "description": "Chi phí để có một khách hàng mới. (spend / customers)"
+    },
+    {
+      "metric_name": "roas",
+      "verbose_name": "ROAS",
+      "expression": "SUM(revenue_minor)::numeric / NULLIF(SUM(spend_minor), 0)",
+      "description": "Doanh thu trên mỗi đồng chi quảng cáo. (revenue / spend)"
+    },
+    {
+      "metric_name": "cvr",
+      "verbose_name": "CVR",
+      "expression": "SUM(customers)::numeric / NULLIF(SUM(sessions), 0)",
+      "description": "Tỷ lệ chuyển đổi: khách hàng mới trên số phiên truy cập. (customers / sessions)"
+    }
+  ]
+}

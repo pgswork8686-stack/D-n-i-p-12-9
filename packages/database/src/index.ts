@@ -11,3 +11,4 @@ export * from "./domain/hosting-engine";
 export * from "./domain/ticket-engine";
 export * from "./domain/ledger-engine";
 
+export * from "./ai-seed";

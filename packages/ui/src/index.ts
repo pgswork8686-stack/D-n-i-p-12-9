@@ -7,3 +7,4 @@ export * from "./download-button";
 export * from "./product-version-badge";
 export * from "./faceted-filter";
 export * from "./cart-drawer";
+export * from "./analytics-overview";

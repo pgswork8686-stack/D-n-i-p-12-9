@@ -31,13 +31,15 @@
     "acceptance:phase16": "ts-node --transpile-only scripts/phase16-acceptance.ts",
     "acceptance:phase17": "ts-node --transpile-only scripts/phase17-acceptance.ts",
     "acceptance:phase18": "ts-node --transpile-only scripts/phase18-acceptance.ts",
-    "test": "echo \"Database migrations and client loaded\""
+    "test": "echo \"Database migrations and client loaded\"",
+    "acceptance:phase19": "ts-node --transpile-only scripts/phase19-acceptance.ts"
   },
   "dependencies": {
     "@nexus/contracts": "workspace:*",
     "@nexus/utils": "workspace:*",
     "@prisma/client": "^6.4.1",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "@nexus/ai-core": "workspace:*"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1130.0",

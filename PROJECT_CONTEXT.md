@@ -291,6 +291,7 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 13. Phase 13 — Affiliate & Membership (Tiered access, recurring entitlements, referral tracking)
 14. Phase 14 — Hosting Integration (cPanel/DirectAdmin/Cloudflare automation)
 15. Phase 15 — Hardening & Production (Penetration testing, rate limiting, disaster recovery)
+16. Phase 19 — AI Marketing OS & Analytics Foundation (tenancy, analytics warehouse, signed ingestion, AI skills/context/workflows with approval gates, Superset boundary) — xem mục Phase 19 bên dưới
 
 ## Phase 9 — Production Payment Gateway Architecture
 - **Official Provider**: Stripe Checkout Session (`cs_...`) and signed webhook events.
@@ -569,6 +570,31 @@ Chưa ưu tiên: multi-vendor, hosting control plane tự xây, marketplace AI/s
 - **CI Workflow**:
   - `.github/workflows/phase18-ci.yml` verifying end-to-end lint, typecheck, monorepo unit tests, worker smoke, and all acceptance suites from Phase 4 through Phase 18.
 
+
+
+### Phase 19 — AI Marketing OS & Analytics Foundation
+**Status**: IMPLEMENTED / READY FOR REVIEW (Branch: `feature/phase-19-ai-marketing-os`; acceptance `pnpm test:acceptance:phase19`, 54 gates).
+
+Mục tiêu: nền móng để tích hợp AI Agent Skills, workflow marketing, kho dữ liệu marketing, Apache Superset và (sau này) Superset MCP, **không** phá vỡ các invariant Phase 1–18. Chi tiết: `docs/architecture/phase-19-ai-marketing-os.md`, `docs/architecture/superset-mcp.md`.
+
+- **AI architecture**:
+  - `packages/ai-core` (code, có test): frontmatter parser chặt, skill loader + validator, tool registry phân loại rủi ro `READ` / `WRITE_LOW_RISK` / `WRITE_HIGH_RISK`, chính sách thực thi, provider abstraction (`none` mặc định | `openai` | `anthropic`), lớp dữ liệu không tin cậy (`wrapUntrusted`), workflow `weekly-marketing-review` + validator output.
+  - `ai/` (nội dung): `skills/` (product-marketing, marketing-analytics, campaign-analysis, seo-analysis — định dạng Agent Skills, bắt buộc các mục Trigger/Scope/Inputs/Workflow/Output contract/Security boundary/Related skills), `contexts/system.json`, `workflows/`, `evals/` (golden case).
+  - Context 3 tầng SYSTEM → ORGANIZATION → CLIENT trong DB (`ai_contexts`, `ai_context_versions` append-only bằng trigger, optimistic `baseVersion`, bắt buộc `changeReason`, từ chối secret).
+  - Audit: `ai_executions` (user, tenant, workflow@version, skills@version#hash, context versions, provider/model, input/result đã redact, trạng thái, thời gian) + `ai_execution_steps` (từng tool call/bước, redact, giới hạn kích thước) + `ai_action_approvals` + `ai_report_drafts`.
+- **Analytics architecture**:
+  - Tenancy mới: `tenants` (ORGANIZATION → CLIENT) + `tenant_members` (VIEWER/ANALYST/MANAGER); `TenantAccessService` là điểm cô lập duy nhất (tenant không truy cập được → 404).
+  - Kho dữ liệu ở schema PostgreSQL riêng `analytics` (Prisma multiSchema; mọi model Phase 1–18 chỉ được gắn `@@schema("public")`, không đổi bảng): `dim_client`, `dim_channel`, `dim_campaign`, `dim_product`, `dim_date`, `fact_marketing_daily`, `fact_lead_funnel_daily`, `fact_revenue_daily`, `fact_seo_daily`, `raw_ingest_batches`.
+  - Công thức chỉ số duy nhất: `packages/utils/src/analytics-metrics.ts` (CTR, CPC, CPL, CPQL, CAC, ROAS, CVR; chia cho 0 → `null`). API, AI workflow và Superset (`infra/superset/metrics/marketing-metrics.json` sinh tự động) dùng chung.
+  - Ingestion `POST /internal/analytics/ingest`: HMAC dùng chung cơ chế automation (service `n8n`, cửa sổ ±5 phút, Redis chống replay), idempotency `(source, idempotencyKey)` + hash payload (khác payload → 409), tối đa 500 bản ghi / 256 KB (thêm giới hạn body 100 KB toàn cục), schema chặt theo `kind`, từ chối mọi trường KPI dẫn xuất, chỉ nhận tenant CLIENT đang hoạt động, một transaction gồm raw batch + facts + audit.
+  - Read API `GET /v1/analytics/{clients,overview,campaigns,funnel,metrics}` (`analytics.read` + membership; `analytics.manage` = staff đa tenant).
+- **Superset boundary**: dịch vụ ngoài (image `apache/superset` pin version, không fork), metadata DB riêng, role `superset_ro` chỉ `SELECT` trên `analytics` (không đọc `public`, transaction read-only, timeout 30 s), `superset_config.py` fail-closed khi thiếu `SUPERSET_SECRET_KEY`, RLS bật và bắt buộc trước khi chia sẻ dashboard, không có biến `NEXT_PUBLIC_SUPERSET_*`.
+- **MCP boundary**: chưa bật production. Hợp đồng: principal riêng theo tenant, mặc định READ-ONLY, RLS áp cho cả MCP, không cấp `execute_sql`, cấm thay đổi role/RLS/kết nối DB, mọi call ghi `ai_execution_steps`.
+- **Security rules**: AI không ghi DB trực tiếp và không có tool SQL tuỳ ý; tenant lấy từ phiên đăng nhập, không từ output model; `WRITE_HIGH_RISK` cần phê duyệt gắn đúng hash payload bởi người khác người yêu cầu (four-eyes ở API + CHECK ở DB), Phase 19 chỉ có stub dry-run (không đổi ngân sách quảng cáo, không publish, không refund); dữ liệu bên ngoài là untrusted; secret bị redact ở mọi bản ghi AI; khoá model chỉ ở env phía server, production thiếu khoá → tắt AI (503); rate limit lượt chạy AI theo user.
+- **Data ownership**: `public` = nghiệp vụ (chỉ API/worker ghi, không đổi); `analytics.*` = chỉ `AnalyticsIngestService` ghi từ batch có chữ ký, mọi dòng có `client_id` (FK → `dim_client` → `tenants`); kết quả AI là bản nháp, không tự xuất bản.
+- **RBAC mới**: `analytics.read`, `analytics.manage`, `ai.read`, `ai.execute`, `ai.approve`, `ai.context.manage` (customer chỉ có `analytics.read`, dữ liệu vẫn bị giới hạn bởi membership).
+- **Repository hygiene trong phase này**: README viết lại theo trạng thái Phase 18/19; CI Phase 15–18 dùng Node 20 trong khi pnpm 11 cần Node ≥ 22.13 nên chưa từng chạy tới bước test → nâng lên Node 22; `db:seed:all` bỏ sót user dev (Phase 5–7 luôn 403) → thêm `db:seed:dev` (vẫn bị chặn ở production); sửa fixture Phase 14 (dùng user `usr-tenant-1` chưa tạo); **Phase 13 acceptance chưa từng chạy được trên schema hiện tại** (fixture dùng trường không tồn tại như `subtotalMinor`/`totalMinor`/`paymentStatus`, entitlement thiếu `orderId`/`orderItemId`/`variantId`/`productType`) — cần PR riêng sửa bộ test, không làm trong Phase 19; bổ sung `AUTOMATION_SERVICE_SECRET`, `N8N_WEBHOOK_BASE_URL` vào `.env.example`.
+- **CI**: `.github/workflows/phase19-ci.yml` (lint, typecheck, test, build, worker smoke, acceptance Phase 4–19 — mỗi bước chạy với `if: !cancelled()` để thấy kết quả từng phase nhưng job vẫn thất bại nếu có bước lỗi, không dùng `continue-on-error` — và kiểm tra metric Superset không lệch registry).
 
 
 ## Security baseline

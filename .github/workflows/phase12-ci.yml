@@ -85,7 +85,7 @@ jobs:
             -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:latest server /data --console-address ':9001'
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data --console-address ':9001'
           for i in {1..40}; do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               exit 0
@@ -97,7 +97,7 @@ jobs:
 
       - name: Create private MinIO bucket
         run: |
-          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c '
+          docker run --rm --network host --entrypoint /bin/sh pgsty/mc:RELEASE.2026-09-16T00-00-00Z -c '
             mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
             mc mb --ignore-existing local/marketplace-dev
           '

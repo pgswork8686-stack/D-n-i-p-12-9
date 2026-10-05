@@ -1,0 +1,22 @@
+{
+  "description": "Golden case for weekly-marketing-review: meta_ads spends without producing leads, CPL rises, ROAS falls.",
+  "weekEnding": "2031-03-16",
+  "current": {
+    "totals": { "spend": 20000000, "impressions": 400000, "clicks": 8000, "sessions": 12000, "leads": 80, "qualified_leads": 30, "customers": 8, "revenue": 36000000 },
+    "byChannel": [
+      { "channel": "google_ads", "totals": { "spend": 12000000, "impressions": 200000, "clicks": 5000, "sessions": 8000, "leads": 80, "qualified_leads": 30, "customers": 8, "revenue": 36000000 } },
+      { "channel": "meta_ads", "totals": { "spend": 8000000, "impressions": 200000, "clicks": 3000, "sessions": 4000, "leads": 0, "qualified_leads": 0, "customers": 0, "revenue": 0 } }
+    ],
+    "daysWithData": 7
+  },
+  "previous": {
+    "totals": { "spend": 18000000, "impressions": 380000, "clicks": 7600, "sessions": 11000, "leads": 120, "qualified_leads": 45, "customers": 12, "revenue": 60000000 },
+    "daysWithData": 7
+  },
+  "expect": {
+    "anomalyMetrics": ["leads", "customers", "revenue", "cpl", "cac", "roas"],
+    "channelAnomaly": "meta_ads",
+    "highRiskProposalsRequireApproval": true,
+    "dataQuality": "ok"
+  }
+}
