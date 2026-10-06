@@ -2,7 +2,7 @@
 
 import React, { useEffect } from "react";
 import Link from "next/link";
-import { Button } from "@nexus/ui";
+import { RefreshCw } from "lucide-react";
 
 export default function GlobalError({
   error,
@@ -12,28 +12,24 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Log error privately without leaking internal details or URLs into the client DOM
+    // Log privately without leaking internal details or URLs into the DOM
     console.error("Public Storefront Error:", error?.message);
   }, [error]);
 
   return (
-    <main className="min-h-[60vh] flex flex-col items-center justify-center px-6 py-16 text-center font-sans">
-      <div className="max-w-md space-y-4">
-        <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight">
-          Temporarily Unavailable
-        </h1>
-        <p className="text-gray-600 leading-relaxed">
-          We are experiencing a temporary service disruption. Please try refreshing the page or check back shortly.
-        </p>
-        <div className="flex justify-center gap-3 pt-4">
-          <Button variant="primary" onClick={() => reset()}>
-            Try Again
-          </Button>
-          <Link href="/">
-            <Button variant="outline">Return Home</Button>
+    <div className="container-site flex min-h-[60vh] items-center justify-center py-16">
+      <div className="max-w-md text-center">
+        <h1 className="text-3xl font-bold tracking-tight text-ink">Hệ thống đang bận</h1>
+        <p className="mt-3 text-muted">Dịch vụ tạm thời gián đoạn. Vui lòng thử lại sau giây lát.</p>
+        <div className="mt-8 flex justify-center gap-3">
+          <button type="button" onClick={() => reset()} className="btn-primary">
+            <RefreshCw aria-hidden className="h-4 w-4" /> Thử lại
+          </button>
+          <Link href="/" className="btn-ghost">
+            Về trang chủ
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

@@ -1,123 +1,183 @@
-version: '3.8'
+# NexusTheme — single-server production stack.
+#
+#   cp .env.production.example .env.production   # fill in every value
+#   docker compose -f infra/docker/production-compose.yml --env-file .env.production up -d --build
+#
+# Only Caddy publishes ports (80/443, automatic HTTPS). Postgres, Redis and the
+# apps are reachable on the private network only. See docs/production-cutover-runbook.md.
+
+name: nexustheme
+
+x-backend-env: &backend-env
+  env_file:
+    - ../../.env.production
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    WEB_URL: https://${WEB_DOMAIN}
+    PORTAL_URL: https://${PORTAL_DOMAIN}
+    ADMIN_URL: https://${ADMIN_DOMAIN}
+    API_URL: https://${API_DOMAIN}
+
+x-next-build-args: &next-build-args
+  NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+  NEXT_PUBLIC_SITE_URL: https://${WEB_DOMAIN}
+  NEXT_PUBLIC_WEB_URL: https://${WEB_DOMAIN}
+  NEXT_PUBLIC_PORTAL_URL: https://${PORTAL_DOMAIN}
+  NEXT_PUBLIC_ADMIN_URL: https://${ADMIN_DOMAIN}
+  NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_URL}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
 
 services:
-  # ----------------------------------------------------------------------------
-  # CORE BACKEND API (NestJS Modular Monolith)
-  # ----------------------------------------------------------------------------
-  api:
-    image: ghcr.io/pgswork8686-stack/nexustheme-api:latest
-    container_name: nexustheme-api
+  postgres:
+    image: postgres:16-alpine
     restart: always
-    ports:
-      - "4000:4000"
     environment:
-      NODE_ENV: production
-      PORT: 4000
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_PROVIDER: s3
-      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
-      STORAGE_BUCKET: ${STORAGE_BUCKET}
-      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
-      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
-      STORAGE_REGION: auto
-      WEB_URL: https://nexustheme.com
-      PORTAL_URL: https://app.nexustheme.com
-      ADMIN_URL: https://admin.nexustheme.com
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:4000/health/liveness || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
       timeout: 5s
-      retries: 3
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2048M
-        reservations:
-          cpus: '0.5'
-          memory: 512M
+      retries: 10
 
-  # ----------------------------------------------------------------------------
-  # ASYNC JOB WORKER (BullMQ Queue Processor)
-  # ----------------------------------------------------------------------------
-  worker:
-    image: ghcr.io/pgswork8686-stack/nexustheme-worker:latest
-    container_name: nexustheme-worker
+  redis:
+    image: redis:7-alpine
     restart: always
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=prefer
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      STORAGE_PROVIDER: s3
-      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
-      STORAGE_BUCKET: ${STORAGE_BUCKET}
-      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
-      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
-      AUTOMATION_SERVICE_SECRET: ${AUTOMATION_SERVICE_SECRET}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # One-off: `prisma migrate deploy` + production-safe RBAC seed, then exits.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: migrate
+    <<: *backend-env
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    <<: *backend-env
+    restart: always
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     deploy:
       resources:
         limits:
-          cpus: '1.5'
+          cpus: "2.0"
           memory: 1536M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
 
-  # ----------------------------------------------------------------------------
-  # PUBLIC STOREFRONT & CATALOG (Next.js 14 App Router)
-  # ----------------------------------------------------------------------------
+  worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: worker
+    <<: *backend-env
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+
   web:
-    image: ghcr.io/pgswork8686-stack/nexustheme-web:latest
-    container_name: nexustheme-web
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: next
+      args:
+        APP: web
+        <<: *next-build-args
     restart: always
-    ports:
-      - "3000:3000"
     environment:
-      NODE_ENV: production
-      PORT: 3000
-      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 1024M
+      PORT: "3000"
+      INTERNAL_API_URL: http://api:4000
+      NEXT_PUBLIC_SITE_URL: https://${WEB_DOMAIN}
+      NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+    depends_on:
+      api:
+        condition: service_healthy
 
-  # ----------------------------------------------------------------------------
-  # CUSTOMER PORTAL (Next.js 14 App Router)
-  # ----------------------------------------------------------------------------
   portal:
-    image: ghcr.io/pgswork8686-stack/nexustheme-portal:latest
-    container_name: nexustheme-portal
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: next
+      args:
+        APP: portal
+        <<: *next-build-args
     restart: always
-    ports:
-      - "3001:3001"
     environment:
-      NODE_ENV: production
-      PORT: 3001
-      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 1024M
+      PORT: "3001"
+    depends_on:
+      api:
+        condition: service_healthy
 
-  # ----------------------------------------------------------------------------
-  # SUPER ADMIN & BACKOFFICE CMS (Next.js 14 App Router)
-  # ----------------------------------------------------------------------------
   admin:
-    image: ghcr.io/pgswork8686-stack/nexustheme-admin:latest
-    container_name: nexustheme-admin
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+      target: next
+      args:
+        APP: admin
+        <<: *next-build-args
+    restart: always
+    environment:
+      PORT: "3002"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
     restart: always
     ports:
-      - "3002:3002"
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
     environment:
-      NODE_ENV: production
-      PORT: 3002
-      NEXT_PUBLIC_API_URL: https://api.nexustheme.com
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 1024M
+      WEB_DOMAIN: ${WEB_DOMAIN}
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - portal
+      - admin
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

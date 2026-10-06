@@ -1,45 +1,34 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Badge } from "@nexus/ui";
+import { ArrowLeft, ArrowRight, ChevronRight } from "lucide-react";
 import {
   safeJsonLd,
   resolvePublicSiteUrl,
-  resolveApiUrl,
   buildArticleMetadata,
   buildArticleJsonLd,
 } from "@nexus/utils";
+import { fetchArticleBySlug } from "../../lib/storefront-fetch";
+import { formatDate } from "../../lib/format";
 
 export const dynamic = "force-dynamic";
-
-import { fetchArticleBySlug } from "../../lib/storefront-fetch";
 
 interface ArticlePageProps {
   params: Promise<{ slug: string }>;
 }
 
-async function getArticle(slug: string) {
-  return fetchArticleBySlug(slug);
-}
-
-export async function generateMetadata({
-  params,
-}: ArticlePageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: ArticlePageProps): Promise<Metadata> {
   const { slug } = await params;
-  let post = null;
-  try {
-    post = await getArticle(slug);
-  } catch (err) {
-    throw err;
-  }
-
+  const post = await fetchArticleBySlug(slug);
   const siteUrl = resolvePublicSiteUrl();
-  return buildArticleMetadata({ post, siteUrl }) as Metadata;
+  const meta = buildArticleMetadata({ post, siteUrl }) as Metadata;
+  // The shared builder already appends the brand; bypass the layout template.
+  return { ...meta, title: meta.title ? { absolute: String(meta.title) } : undefined };
 }
 
 export default async function ArticleDetailPage({ params }: ArticlePageProps) {
   const { slug } = await params;
-  const post = await getArticle(slug);
+  const post = await fetchArticleBySlug(slug);
 
   if (!post) {
     notFound();
@@ -49,127 +38,54 @@ export default async function ArticleDetailPage({ params }: ArticlePageProps) {
   const jsonLd = buildArticleJsonLd({ post, siteUrl });
 
   return (
-    <article className="max-w-4xl mx-auto py-12 px-6 font-sans">
-      {/* Safe JSON-LD script injection */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }}
-      />
+    <article className="container-site py-10 md:py-14">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: safeJsonLd(jsonLd) }} />
 
-      {/* Breadcrumb Navigation */}
-      <nav className="text-xs text-gray-500 mb-8 flex items-center gap-2">
-        <Link href="/" className="hover:text-gray-900">
-          Home
-        </Link>
-        <span>/</span>
-        <Link href="/blog" className="hover:text-gray-900">
-          Blog
-        </Link>
-        {post.category && (
-          <>
-            <span>/</span>
-            <Link
-              href={`/blog/category/${post.category.slug}`}
-              className="hover:text-gray-900"
-            >
-              {post.category.name}
-            </Link>
-          </>
-        )}
-        <span>/</span>
-        <span className="text-gray-700 font-medium truncate max-w-xs">
-          {post.title}
-        </span>
-      </nav>
-
-      {/* Article Header */}
-      <header className="mb-8 pb-6 border-b border-gray-200">
-        <div className="flex items-center gap-2 mb-3">
+      <div className="mx-auto max-w-3xl">
+        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-sm text-muted">
+          <Link href="/blog" className="hover:text-brand">
+            Blog
+          </Link>
           {post.category && (
-            <Link href={`/blog/category/${post.category.slug}`}>
-              <Badge variant="info">
+            <>
+              <ChevronRight aria-hidden className="h-4 w-4" />
+              <Link href={`/blog/category/${post.category.slug}`} className="hover:text-brand">
                 {post.category.name}
-              </Badge>
-            </Link>
+              </Link>
+            </>
           )}
-          {post.readingTimeMinutes && (
-            <span className="text-xs text-gray-400">
-              {post.readingTimeMinutes} min read
-            </span>
-          )}
-        </div>
+        </nav>
 
-        <h1 className="text-3xl md:text-5xl font-extrabold text-gray-900 tracking-tight leading-tight">
-          {post.title}
-        </h1>
-
-        {post.excerpt && (
-          <p className="text-base md:text-lg text-gray-600 mt-4 leading-relaxed font-light">
-            {post.excerpt}
+        <header className="mt-6">
+          <h1 className="text-3xl font-bold leading-tight tracking-tight text-ink sm:text-4xl md:text-5xl">{post.title}</h1>
+          {post.excerpt && <p className="mt-5 text-lg leading-8 text-muted">{post.excerpt}</p>}
+          <p className="mt-6 text-sm text-muted">
+            <time dateTime={post.publishedAt}>{formatDate(post.publishedAt)}</time>
+            {post.readingTimeMinutes ? ` · ${post.readingTimeMinutes} phút đọc` : ""}
+            {post.author?.profile?.displayName ? ` · ${post.author.profile.displayName}` : ""}
           </p>
+        </header>
+
+        {post.featuredImageUrl && (
+          <figure className="mt-8 overflow-hidden rounded-2xl border border-line">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={post.featuredImageUrl} alt={post.featuredImageAlt || post.title} className="max-h-[480px] w-full object-cover" />
+            {post.featuredImageAlt && <figcaption className="p-3 text-center text-xs text-muted">{post.featuredImageAlt}</figcaption>}
+          </figure>
         )}
 
-        <div className="flex items-center justify-between mt-6 text-xs text-gray-500">
-          <div>
-            Published on{" "}
-            <time dateTime={post.publishedAt} className="font-semibold text-gray-700">
-              {new Date(post.publishedAt).toLocaleDateString("vi-VN", {
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-              })}
-            </time>
-          </div>
-          {post.canonicalUrl && (
-            <a
-              href={post.canonicalUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-400 hover:text-gray-600 text-[11px]"
-            >
-              Original Source ↗
-            </a>
-          )}
-        </div>
-      </header>
+        {/* Content is sanitized by the backend (sanitize-html allowlist). */}
+        <div className="prose-article mt-10" dangerouslySetInnerHTML={{ __html: post.content }} />
 
-      {/* Featured Image */}
-      {post.featuredImageUrl && (
-        <div className="mb-10 rounded-2xl overflow-hidden shadow-sm border border-gray-200">
-          <img
-            src={post.featuredImageUrl}
-            alt={post.featuredImageAlt || post.title}
-            className="w-full max-h-[480px] object-cover"
-          />
-          {post.featuredImageAlt && (
-            <p className="text-[11px] text-gray-400 p-2 text-center italic">
-              {post.featuredImageAlt}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Article Content Body (Sanitized on backend and safe) */}
-      <div
-        className="prose prose-slate max-w-none text-gray-800 leading-relaxed text-base md:text-lg space-y-4"
-        dangerouslySetInnerHTML={{ __html: post.content }}
-      />
-
-      {/* Footer Navigation */}
-      <footer className="mt-16 pt-8 border-t border-gray-200 flex items-center justify-between">
-        <Link
-          href="/blog"
-          className="text-sm font-semibold text-[#0037b0] hover:underline"
-        >
-          ← Back to All Articles
-        </Link>
-        <Link
-          href="/products"
-          className="text-sm font-semibold text-gray-600 hover:underline"
-        >
-          Explore Products →
-        </Link>
-      </footer>
+        <footer className="mt-16 flex flex-col gap-3 border-t border-line pt-8 sm:flex-row sm:justify-between">
+          <Link href="/blog" className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand hover:underline">
+            <ArrowLeft aria-hidden className="h-4 w-4" /> Tất cả bài viết
+          </Link>
+          <Link href="/products" className="inline-flex items-center gap-1.5 text-sm font-semibold text-muted hover:text-brand">
+            Khám phá sản phẩm <ArrowRight aria-hidden className="h-4 w-4" />
+          </Link>
+        </footer>
+      </div>
     </article>
   );
 }

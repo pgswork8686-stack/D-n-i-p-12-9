@@ -1,304 +1,247 @@
-"use client";
-
-import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card, PriceDisplay, ProductVersionBadge } from "@nexus/ui";
+import {
+  ArrowRight,
+  BadgeCheck,
+  Download,
+  KeyRound,
+  QrCode,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+} from "lucide-react";
+import { ProductCard } from "./components/product-card";
+import { listCategories, listPosts, listProducts } from "./lib/server-api";
+import { formatDate } from "./lib/format";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+export const dynamic = "force-dynamic";
 
-export default function WebHomePage() {
-  const [featuredProducts, setFeaturedProducts] = useState<any[]>([]);
-  const [categories, setCategories] = useState<any[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+const STEPS = [
+  {
+    icon: Search,
+    title: "Chọn sản phẩm",
+    text: "Xem demo, so sánh gói license theo số website và thời hạn cập nhật.",
+  },
+  {
+    icon: QrCode,
+    title: "Quét VietQR",
+    text: "Chuyển khoản bằng app ngân hàng. Hệ thống tự đối soát, không cần gửi ảnh biên lai.",
+  },
+  {
+    icon: Download,
+    title: "Nhận hàng tự động",
+    text: "File tải về, mã bản quyền và hướng dẫn kích hoạt có sẵn trong trang tài khoản.",
+  },
+];
 
-  useEffect(() => {
-    Promise.all([
-      fetch(`${API_URL}/products?limit=6&currency=USD`).then((res) => (res.ok ? res.json() : { items: [] })),
-      fetch(`${API_URL}/categories`).then((res) => (res.ok ? res.json() : [])),
-    ])
-      .then(([productsRes, catsRes]) => {
-        setFeaturedProducts(productsRes.items || []);
-        setCategories(catsRes || []);
-      })
-      .catch((err) => {
-        console.error("Failed to load storefront data:", err);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+const VALUES = [
+  { icon: ShieldCheck, title: "Tải file an toàn", text: "Link tải ký số, hết hạn sau vài phút — không lộ file gốc." },
+  { icon: KeyRound, title: "License theo tên miền", text: "Tự kích hoạt, chuyển website khi cần ngay trong tài khoản." },
+  { icon: RefreshCw, title: "Cập nhật theo gói", text: "Nhận phiên bản mới trong thời hạn cập nhật của gói đã mua." },
+  { icon: BadgeCheck, title: "Đối soát tự động", text: "Đơn chỉ được xác nhận khi ngân hàng báo đã nhận đúng số tiền." },
+];
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (typeof window !== "undefined") {
-      window.location.href = `/products?search=${encodeURIComponent(searchQuery)}`;
-    }
-  };
+export default async function HomePage() {
+  const [products, categories, posts] = await Promise.all([
+    listProducts({ limit: "8", sort: "newest", currency: "VND" }),
+    listCategories(),
+    listPosts({ limit: "3" }),
+  ]);
+  const rootCategories = categories.filter((c) => !c.parentId).slice(0, 8);
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
-      {/* Top Announcement Bar */}
-      <div className="bg-[#0037b0] text-white py-2 px-4 text-center text-xs font-medium tracking-wide">
-        🚀 Phase 17 Production Storefront Live — Explore 500+ Premium Digital Themes, Plugins & Cloud Hosting
-      </div>
-
-      {/* Navigation Header */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="w-9 h-9 rounded-xl bg-[#0037b0] text-white flex items-center justify-center font-black text-xl shadow-sm">
-              N
-            </span>
-            <div className="leading-tight">
-              <span className="font-extrabold text-[#0037b0] text-lg tracking-tight block">
-                NEXUSTHEME
-              </span>
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest block">
-                Digital Marketplace
-              </span>
-            </div>
-          </Link>
-
-          <nav className="hidden md:flex items-center gap-6 text-sm font-semibold text-slate-600">
-            <Link href="/products" className="hover:text-[#0037b0] transition-colors">
-              All Products
-            </Link>
-            <Link href="/products?productType=LICENSED_SOFTWARE" className="hover:text-[#0037b0] transition-colors">
-              Software & Plugins
-            </Link>
-            <Link href="/products?productType=HOSTING_PROVISIONING" className="hover:text-[#0037b0] transition-colors">
-              Cloud Hosting
-            </Link>
-            <Link href="/blog" className="hover:text-[#0037b0] transition-colors">
-              Articles & Guides
-            </Link>
-          </nav>
-
-          <div className="flex items-center gap-3">
-            <Link href="/cart" className="p-2 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 relative">
-              <span className="text-xl">🛒</span>
-            </Link>
-            <a
-              href={PORTAL_URL}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 transition-colors"
-            >
-              <span>👤</span> Customer Hub
-            </a>
-          </div>
-        </div>
-      </header>
-
-      {/* Hero Section */}
-      <section className="relative overflow-hidden bg-gradient-to-b from-blue-50/50 via-white to-slate-50 pt-16 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-4xl mx-auto text-center space-y-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100/70 text-[#0037b0] text-xs font-bold tracking-wide uppercase">
-            <span>✨</span> Enterprise Digital Commerce Platform
-          </div>
-
-          <h1 className="text-4xl sm:text-6xl font-black text-slate-950 tracking-tight leading-[1.1]">
-            Build Faster with Verified <br className="hidden sm:inline" />
-            <span className="text-[#0037b0]">Themes, Plugins & Cloud Assets</span>
-          </h1>
-
-          <p className="text-base sm:text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed">
-            Curated digital assets with instant automated licensing, lifetime version updates, and enterprise-grade SLA helpdesk support.
-          </p>
-
-          {/* Instant Search Bar */}
-          <form onSubmit={handleSearch} className="max-w-2xl mx-auto flex items-center gap-2 p-1.5 bg-white rounded-2xl border-2 border-slate-200/90 shadow-lg shadow-blue-900/5 focus-within:border-[#0037b0] transition-all">
-            <span className="pl-3 text-lg text-slate-400">🔍</span>
-            <input
-              type="text"
-              placeholder="Search WordPress themes, WooCommerce plugins, templates..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 px-2 py-2.5 text-sm bg-transparent outline-none text-slate-900 placeholder-slate-400"
-            />
-            <button
-              type="submit"
-              className="px-6 py-2.5 bg-[#0037b0] hover:bg-[#002c8f] text-white rounded-xl text-sm font-bold shadow transition-all shrink-0"
-            >
-              Search
-            </button>
-          </form>
-
-          {/* Quick Category Pills */}
-          <div className="flex items-center justify-center flex-wrap gap-2 text-xs text-slate-500 pt-2">
-            <span className="font-semibold text-slate-400">Trending:</span>
-            {categories.slice(0, 5).map((cat) => (
-              <Link
-                key={cat.id}
-                href={`/products?category=${cat.id}`}
-                className="px-3 py-1 bg-white hover:bg-blue-50 hover:text-[#0037b0] border border-slate-200 rounded-full font-medium transition-colors"
-              >
-                {cat.name}
-              </Link>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Value Propositions */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-sm space-y-2">
-            <span className="text-3xl">⚡</span>
-            <h3 className="font-bold text-slate-900">Instant Fulfillment</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Automated license key generation and signed ZIP download links ready within seconds of payment.
-            </p>
-          </div>
-          <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-sm space-y-2">
-            <span className="text-3xl">🛡️</span>
-            <h3 className="font-bold text-slate-900">100% Virus-Free Code</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Every asset package is scanned with ClamAV and checksum-verified before distribution.
-            </p>
-          </div>
-          <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-sm space-y-2">
-            <span className="text-3xl">☁️</span>
-            <h3 className="font-bold text-slate-900">1-Click Hosting</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Provision high-performance cPanel/DirectAdmin instances with automated Cloudflare DNS sync.
-            </p>
-          </div>
-          <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-sm space-y-2">
-            <span className="text-3xl">🎫</span>
-            <h3 className="font-bold text-slate-900">Priority Helpdesk SLA</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Dedicated technical support tickets directly linked to your orders and license entitlements.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Featured Products Catalog */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="flex items-center justify-between mb-8">
+    <>
+      {/* Hero */}
+      <section className="relative overflow-hidden border-b border-line bg-surface">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(60rem_30rem_at_85%_-10%,rgb(79_70_229/0.12),transparent),radial-gradient(40rem_20rem_at_0%_110%,rgb(21_128_61/0.08),transparent)]"
+        />
+        <div className="container-site relative grid items-center gap-12 py-16 md:py-24 lg:grid-cols-[1.15fr_1fr]">
           <div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-950 tracking-tight">
-              Featured Digital Products
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Hand-picked best sellers backed by verified ratings and developer documentation.
+            <p className="inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-soft px-3 py-1 text-sm font-medium text-brand">
+              <QrCode aria-hidden className="h-4 w-4" />
+              Thanh toán VietQR · Giao hàng tự động
             </p>
+            <h1 className="mt-6 text-4xl font-extrabold leading-[1.1] tracking-tight text-ink [text-wrap:balance] sm:text-5xl lg:text-[3.25rem]">
+              Theme, plugin &amp; license
+              <span className="block text-brand">cho website của bạn.</span>
+            </h1>
+            <p className="mt-6 max-w-xl text-lg leading-8 text-muted">
+              Chọn sản phẩm, quét mã chuyển khoản và nhận file cùng mã bản quyền ngay khi ngân hàng xác nhận —
+              không chờ duyệt thủ công.
+            </p>
+
+            <form action="/products" className="mt-8 flex max-w-xl flex-col gap-3 sm:flex-row" role="search">
+              <label htmlFor="hero-search" className="sr-only">
+                Tìm sản phẩm
+              </label>
+              <div className="relative flex-1">
+                <Search aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted" />
+                <input
+                  id="hero-search"
+                  name="search"
+                  type="search"
+                  placeholder="Ví dụ: theme bán hàng, plugin SEO…"
+                  className="field-input min-h-[52px] pl-11"
+                />
+              </div>
+              <button type="submit" className="btn-primary min-h-[52px] px-6">
+                Tìm kiếm
+              </button>
+            </form>
+
+            {rootCategories.length > 0 && (
+              <div className="mt-6 flex flex-wrap gap-2">
+                {rootCategories.map((c) => (
+                  <Link
+                    key={c.id}
+                    href={`/products?category=${c.slug}`}
+                    className="rounded-full border border-line bg-surface px-3.5 py-2 text-sm text-muted transition-colors hover:border-brand/40 hover:text-brand"
+                  >
+                    {c.name}
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
-          <Link
-            href="/products"
-            className="text-sm font-bold text-[#0037b0] hover:text-[#002c8f] flex items-center gap-1 group"
-          >
-            <span>Explore All</span>
-            <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+
+          {/* Visual: how an order resolves (illustrative, no fabricated data) */}
+          <div aria-hidden className="relative mx-auto hidden w-full max-w-md lg:block">
+            <div className="card rotate-[-2deg] p-6">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-ink">Thanh toán đơn hàng</span>
+                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">Chờ chuyển khoản</span>
+              </div>
+              <div className="mt-5 grid grid-cols-[112px_1fr] items-center gap-5">
+                <div className="grid h-28 w-28 grid-cols-6 gap-0.5 rounded-xl border border-line bg-surface p-2">
+                  {Array.from({ length: 36 }).map((_, i) => (
+                    <span key={i} className={`rounded-[2px] ${[0, 1, 2, 6, 8, 12, 13, 14, 3, 17, 21, 22, 24, 27, 29, 30, 31, 33, 35, 19, 10].includes(i) ? "bg-ink" : "bg-transparent"}`} />
+                  ))}
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="h-2.5 w-24 rounded bg-line" />
+                  <div className="h-2.5 w-32 rounded bg-line" />
+                  <div className="h-2.5 w-20 rounded bg-brand/30" />
+                </div>
+              </div>
+            </div>
+            <div className="card absolute -bottom-8 right-0 w-64 rotate-[3deg] p-4 sm:-right-6">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
+                  <BadgeCheck className="h-5 w-5 text-cta" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-ink">Đã nhận thanh toán</p>
+                  <p className="text-xs text-muted">File &amp; license sẵn sàng</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Featured products */}
+      <section className="container-site py-16 md:py-20" aria-labelledby="featured-heading">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h2 id="featured-heading" className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+              Mới phát hành
+            </h2>
+            <p className="mt-2 text-muted">Sản phẩm vừa được cập nhật lên cửa hàng.</p>
+          </div>
+          <Link href="/products" className="hidden items-center gap-1 text-sm font-semibold text-brand hover:underline sm:inline-flex">
+            Xem tất cả <ArrowRight aria-hidden className="h-4 w-4" />
           </Link>
         </div>
 
-        {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="h-72 rounded-2xl bg-white border border-slate-200 animate-pulse p-6" />
+        {products.items.length > 0 ? (
+          <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {products.items.map((p) => (
+              <ProductCard key={p.id} product={p} />
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {featuredProducts.map((p) => {
-              const defaultVariant = p.variants?.[0];
-              const defaultPrice = defaultVariant?.prices?.[0];
-              const amountMinor = defaultPrice?.amount ?? 4900;
-              const compareAt = defaultPrice?.compareAtAmount;
-
-              return (
-                <div
-                  key={p.id}
-                  className="rounded-2xl bg-white border border-slate-200/90 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col overflow-hidden group"
-                >
-                  <div className="h-44 bg-gradient-to-br from-slate-100 to-blue-50/50 flex items-center justify-center relative p-6 border-b border-slate-100">
-                    <span className="text-5xl group-hover:scale-105 transition-transform duration-200">
-                      📦
-                    </span>
-                    <div className="absolute top-3 left-3">
-                      <ProductVersionBadge version="1.0.0" channel="STABLE" />
-                    </div>
-                  </div>
-
-                  <div className="p-6 flex-1 flex flex-col justify-between space-y-4">
-                    <div className="space-y-1.5">
-                      <Link
-                        href={`/products/${p.slug}`}
-                        className="text-lg font-bold text-slate-900 group-hover:text-[#0037b0] transition-colors block leading-snug"
-                      >
-                        {p.name}
-                      </Link>
-                      <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
-                        {p.shortDescription || p.description || "Premium digital asset with automated entitlement access."}
-                      </p>
-                    </div>
-
-                    <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-                      <PriceDisplay
-                        amountMinor={amountMinor}
-                        compareAtMinor={compareAt}
-                        currency="USD"
-                        size="md"
-                      />
-                      <Link href={`/products/${p.slug}`}>
-                        <Button size="sm" variant="outline">
-                          View Details
-                        </Button>
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <p className="card mt-8 p-10 text-center text-muted">Cửa hàng đang cập nhật sản phẩm. Vui lòng quay lại sau.</p>
         )}
       </section>
 
-      {/* Membership CTA Section */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-[#00247d] to-[#0037b0] text-white p-8 sm:p-14 shadow-xl flex flex-col md:flex-row items-center justify-between gap-8">
-          <div className="max-w-xl space-y-4 text-center md:text-left">
-            <span className="inline-block px-3 py-1 rounded-full bg-blue-400/20 text-blue-200 text-xs font-bold uppercase tracking-wider">
-              👑 Unlimited Access Pass
-            </span>
-            <h2 className="text-3xl sm:text-4xl font-black tracking-tight">
-              Get Unlimited Downloads with NexusTheme Pro Membership
+      {/* How it works */}
+      <section className="border-y border-line bg-surface" aria-labelledby="steps-heading">
+        <div className="container-site py-16 md:py-20">
+          <h2 id="steps-heading" className="text-center text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+            Mua trong 3 bước
+          </h2>
+          <ol className="mt-12 grid gap-6 md:grid-cols-3">
+            {STEPS.map((s, i) => (
+              <li key={s.title} className="card relative p-6">
+                <span className="absolute right-5 top-5 text-4xl font-extrabold text-brand/10">0{i + 1}</span>
+                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-soft">
+                  <s.icon aria-hidden className="h-6 w-6 text-brand" />
+                </span>
+                <h3 className="mt-5 text-lg font-semibold text-ink">{s.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted">{s.text}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      {/* Values */}
+      <section className="container-site py-16 md:py-20" aria-label="Cam kết">
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          {VALUES.map((v) => (
+            <div key={v.title} className="flex gap-4">
+              <v.icon aria-hidden className="mt-0.5 h-6 w-6 shrink-0 text-cta" />
+              <div>
+                <h3 className="font-semibold text-ink">{v.title}</h3>
+                <p className="mt-1 text-sm leading-6 text-muted">{v.text}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Blog */}
+      {posts.items.length > 0 && (
+        <section className="container-site pb-4" aria-labelledby="blog-heading">
+          <div className="flex items-end justify-between">
+            <h2 id="blog-heading" className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+              Hướng dẫn mới
             </h2>
-            <p className="text-sm sm:text-base text-blue-100/90 leading-relaxed">
-              Unlock access to all themes, plugins, high-bandwidth cloud hosting credits, and priority helpdesk support for one predictable subscription fee.
-            </p>
+            <Link href="/blog" className="inline-flex items-center gap-1 text-sm font-semibold text-brand hover:underline">
+              Xem blog <ArrowRight aria-hidden className="h-4 w-4" />
+            </Link>
           </div>
-          <div className="shrink-0">
-            <a
-              href={`${PORTAL_URL}/subscription`}
-              className="inline-flex items-center justify-center px-8 py-4 rounded-2xl bg-white text-slate-900 font-extrabold text-base hover:bg-blue-50 shadow-lg hover:shadow-xl transition-all"
-            >
-              Explore Membership Plans →
+          <div className="mt-8 grid gap-6 md:grid-cols-3">
+            {posts.items.map((post) => (
+              <Link key={post.id} href={`/blog/${post.slug}`} className="card group p-6 transition-shadow hover:shadow-lift">
+                {post.category && <span className="text-xs font-semibold uppercase tracking-wide text-brand">{post.category.name}</span>}
+                <h3 className="mt-2 line-clamp-2 font-semibold leading-snug text-ink group-hover:text-brand">{post.title}</h3>
+                {post.excerpt && <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted">{post.excerpt}</p>}
+                <p className="mt-4 text-xs text-muted">{formatDate(post.publishedAt)}</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Final CTA */}
+      <section className="container-site pt-16">
+        <div className="relative overflow-hidden rounded-2xl bg-ink px-6 py-12 text-center sm:px-12">
+          <h2 className="text-2xl font-bold text-white sm:text-3xl">Đã có tài khoản? Quản lý license và tải xuống tại một nơi.</h2>
+          <p className="mx-auto mt-3 max-w-2xl text-white/80">
+            Kích hoạt tên miền, tải bản cập nhật và gửi yêu cầu hỗ trợ trong trang tài khoản.
+          </p>
+          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+            <Link href="/products" className="btn-buy px-6">
+              Khám phá sản phẩm
+            </Link>
+            <a href={process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001"} className="btn border border-white/30 px-6 text-white hover:bg-white/10">
+              Vào trang tài khoản
             </a>
           </div>
         </div>
       </section>
-
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 mt-12 py-12 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p>© 2026 NexusTheme Digital Commerce Ltd. All rights reserved.</p>
-          <div className="flex items-center gap-6 font-medium">
-            <Link href="/products" className="hover:text-slate-800">
-              Catalog
-            </Link>
-            <a href={`${PORTAL_URL}/tickets`} className="hover:text-slate-800">
-              Support Helpdesk
-            </a>
-            <a href={`${PORTAL_URL}/invoices`} className="hover:text-slate-800">
-              Billing & Invoices
-            </a>
-            <a href={`${PORTAL_URL}/affiliate`} className="hover:text-slate-800">
-              Affiliate Program
-            </a>
-          </div>
-        </div>
-      </footer>
-    </div>
+    </>
   );
 }

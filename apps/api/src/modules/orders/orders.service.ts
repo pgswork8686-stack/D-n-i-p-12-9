@@ -512,11 +512,16 @@ export class OrdersService {
           ),
         );
 
-        // Create initial Payment
+        // Create initial Payment attempt. The real provider (sepay/stripe) is
+        // bound later by POST /orders/:id/payment-session; "TEST" is only used
+        // when the local test provider is explicitly enabled.
+        const testProviderEnabled =
+          process.env.NODE_ENV !== "production" &&
+          process.env.ENABLE_TEST_PAYMENT_PROVIDER === "true";
         const payment = await tx.payment.create({
           data: {
             orderId: order.id,
-            provider: "TEST",
+            provider: testProviderEnabled ? "TEST" : "UNASSIGNED",
             status: "PENDING",
             amount: totalAmount,
             currency: dto.currency,
@@ -545,11 +550,19 @@ export class OrdersService {
         const response: CheckoutResponse = {
           order: orderDto,
           payment: paymentDto,
-          testPaymentAction: {
-            paymentId: payment.id,
-            callbackUrl: "/payments/test-callback",
-            availableActions: ["succeeded", "failed", "cancelled"],
-          },
+          ...(testProviderEnabled
+            ? {
+                testPaymentAction: {
+                  paymentId: payment.id,
+                  callbackUrl: "/payments/test-callback",
+                  availableActions: ["succeeded", "failed", "cancelled"] as (
+                    | "succeeded"
+                    | "failed"
+                    | "cancelled"
+                  )[],
+                },
+              }
+            : {}),
         };
 
         if (dto.idempotencyKey) {
