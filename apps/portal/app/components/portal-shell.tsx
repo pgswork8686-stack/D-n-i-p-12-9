@@ -1,22 +1,24 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../context/auth-context";
 import { Badge, Button } from "@nexus/ui";
 
-const NAV_ITEMS = [
+type FeatureKey = "hosting" | "membership" | "affiliate" | "finance";
+
+const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureKey }[] = [
   { label: "Dashboard", href: "/", icon: "📊" },
   { label: "My Orders", href: "/orders", icon: "📦" },
   { label: "My Products", href: "/entitlements", icon: "✨" },
   { label: "Downloads", href: "/downloads", icon: "⬇️" },
   { label: "Internal Licenses", href: "/licenses", icon: "🔑" },
   { label: "External Allocations", href: "/allocations", icon: "🌐" },
-  { label: "Cloud Hosting", href: "/hosting", icon: "☁️" },
-  { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝" },
-  { label: "Membership", href: "/subscription", icon: "👑" },
-  { label: "Invoices & Billing", href: "/invoices", icon: "🧾" },
+  { label: "Cloud Hosting", href: "/hosting", icon: "☁️", feature: "hosting" },
+  { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝", feature: "affiliate" },
+  { label: "Membership", href: "/subscription", icon: "👑", feature: "membership" },
+  { label: "Invoices & Billing", href: "/invoices", icon: "🧾", feature: "finance" },
   { label: "Support Tickets", href: "/tickets", icon: "🎫" },
   { label: "Notifications", href: "/notifications", icon: "🔔" },
   { label: "Account Profile", href: "/account", icon: "👤" },
@@ -26,6 +28,17 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Modules switched off on the backend (GET /v1/features) are hidden; until
+  // the flags load, gated items stay hidden rather than flashing in.
+  const [features, setFeatures] = useState<Partial<Record<FeatureKey, boolean>>>({});
+  useEffect(() => {
+    const api = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    fetch(`${api}/v1/features`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then(setFeatures)
+      .catch(() => setFeatures({}));
+  }, []);
+  const navItems = NAV_ITEMS.filter((item) => !item.feature || features[item.feature] === true);
 
   const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
 
@@ -50,7 +63,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const isActive =
               item.href === "/"
                 ? pathname === "/"
@@ -143,7 +156,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
         {/* Mobile Menu Drawer */}
         {mobileMenuOpen && (
           <div className="md:hidden bg-white border-b border-slate-200 p-4 space-y-2">
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

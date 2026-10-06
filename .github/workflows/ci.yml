@@ -1,23 +1,22 @@
-name: Phase 15 Verification
+name: CI
+
+# Single required check for every PR into main (replaces phase9..phase18-ci.yml).
+# Branch protection: require "CI / verify" and "CI / docker" to pass before merge.
 
 on:
   push:
-    branches:
-      - feature/phase-15-helpdesk-notifications
+    branches: [main]
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/phase15-ci.yml'
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marketplace
@@ -33,35 +32,33 @@ jobs:
       ADMIN_URL: http://localhost:3002
       API_URL: http://localhost:4000
       NEXT_PUBLIC_API_URL: http://localhost:4000
-      NEXT_PUBLIC_DEV_AUTH_ENABLED: 'true'
+      NEXT_PUBLIC_DEV_AUTH_ENABLED: "true"
       PAYMENT_RETURN_BASE_URL: http://localhost:3001
-      STRIPE_MOCK_CLIENT: 'true'
+      STRIPE_MOCK_CLIENT: "true"
       STRIPE_SECRET_KEY: sk_test_placeholder_ci
       STRIPE_WEBHOOK_SECRET: whsec_ci_test_secret
-      STRIPE_WEBHOOK_TOLERANCE_SECONDS: '300'
-      ENABLE_TEST_PAYMENT_PROVIDER: 'true'
+      STRIPE_WEBHOOK_TOLERANCE_SECONDS: "300"
+      ENABLE_TEST_PAYMENT_PROVIDER: "true"
       TEST_PAYMENT_WEBHOOK_SECRET: ci-test-payment-secret
       LICENSE_KEY_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       HOSTING_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-      SEED_DEV_USERS: 'true'
+      SEED_DEV_USERS: "true"
       AUTOMATION_SERVICE_SECRET: test-automation-secret-minimum-32-chars-long
       N8N_WEBHOOK_BASE_URL: http://localhost:5678
-      INTERNAL_HMAC_MAX_SKEW_SECONDS: '300'
+      INTERNAL_HMAC_MAX_SKEW_SECONDS: "300"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 11.20.0
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      # pnpm 11 requires Node >= 22.13 (Node 20 broke every Phase 15-18 run).
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'pnpm'
+          node-version: 22
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -70,32 +67,16 @@ jobs:
         run: |
           docker compose up -d postgres redis
           docker run -d --name nexustheme-minio -p 9000:9000 -p 9001:9001 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
             minio/minio:RELEASE.2024-11-07T00-52-28Z server /data --console-address ":9001"
-
-      - name: Wait for services
-        run: |
-          echo "Waiting for postgres..."
-          for i in {1..30}; do
-            if docker compose exec -T postgres pg_isready -U postgres; then
-              echo "Postgres is ready!"
-              break
-            fi
+          for i in $(seq 1 60); do
+            docker compose exec -T postgres pg_isready -U postgres && break
             sleep 1
           done
-
-          echo "Waiting for minio..."
-          for i in {1..30}; do
-            if curl -s http://localhost:9000/minio/health/live; then
-              echo "Minio is ready!"
-              break
-            fi
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:9000/minio/health/live && break
             sleep 1
           done
-
-      - name: Create MinIO test bucket
-        run: |
           docker run --rm --network host \
             -e MC_HOST_local=http://minioadmin:minioadmin@localhost:9000 \
             minio/mc:RELEASE.2024-11-05T11-41-28Z mb local/marketplace-dev || true
@@ -121,41 +102,14 @@ jobs:
       - name: Worker smoke
         run: pnpm worker:smoke
 
-      - name: Phase 4 acceptance
-        run: pnpm test:acceptance:phase4
-
-      - name: Phase 5 acceptance
-        run: pnpm test:acceptance:phase5
-
-      - name: Phase 6 acceptance
-        run: pnpm test:acceptance:phase6
-
-      - name: Phase 7 acceptance
-        run: pnpm test:acceptance:phase7
-
-      - name: Phase 8 acceptance
-        run: pnpm test:acceptance:phase8
-
-      - name: Phase 9 acceptance
-        run: pnpm test:acceptance:phase9
-
-      - name: Phase 10 acceptance
-        run: pnpm test:acceptance:phase10
-
-      - name: Phase 11 acceptance
-        run: pnpm test:acceptance:phase11
-
-      - name: Phase 12 acceptance
-        run: pnpm test:acceptance:phase12
-
-      - name: Phase 13 acceptance
-        run: pnpm test:acceptance:phase13
-
-      - name: Phase 14 acceptance
-        run: pnpm test:acceptance:phase14
-
-      - name: Phase 15 acceptance
-        run: pnpm test:acceptance:phase15
+      - name: Acceptance suites (Phase 4 → 18)
+        run: |
+          set -e
+          for n in $(seq 4 18); do
+            echo "::group::Phase $n acceptance"
+            pnpm test:acceptance:phase$n
+            echo "::endgroup::"
+          done
 
       - name: Diagnostics
         if: failure()
@@ -163,3 +117,37 @@ jobs:
           docker compose ps || true
           docker compose logs --tail=200 postgres redis || true
           docker logs nexustheme-minio || true
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: api
+          - target: worker
+          - target: migrate
+          - target: next
+            app: web
+          - target: next
+            app: portal
+          - target: next
+            app: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.target }} ${{ matrix.app }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            APP=${{ matrix.app }}
+            NEXT_PUBLIC_API_URL=https://api.example.vn
+            NEXT_PUBLIC_SITE_URL=https://example.vn
+            NEXT_PUBLIC_PORTAL_URL=https://app.example.vn

@@ -51,35 +51,34 @@ async function runPhase18Acceptance() {
   // ============================================================================
   console.log("--- DOMAIN 1: Healthcheck & Observability Probes ---");
 
-  // Mocking health probes based on HealthService logic
-  const mockLiveness = {
-    status: "ok" as const,
-    service: "api",
-    uptimeSeconds: Math.floor(process.uptime()),
-    timestamp: new Date().toISOString(),
-    pid: process.pid,
+  // Exercise the REAL HealthService (compiled API) against the real Postgres
+  // and Redis started for this suite. Storage is injected so both the healthy
+  // and the degraded path are observed for real, not asserted on literals.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { HealthService } = require(path.resolve(repoRoot, "apps/api/dist/modules/health/health.service"));
+  const configStub = {
+    get: (key: string, fallback?: string) => process.env[key] ?? fallback,
   };
-
-  assertGate(1, "Liveness probe returns status 'ok'", mockLiveness.status === "ok");
-  assertGate(2, "Liveness probe reports positive process uptime", mockLiveness.uptimeSeconds >= 0);
-  assertGate(3, "Liveness probe reports valid process PID", mockLiveness.pid > 0);
-  assertGate(4, "Liveness probe includes valid ISO-8601 timestamp", !isNaN(Date.parse(mockLiveness.timestamp)));
-
-  const mockDependencies = {
-    database: { status: "ok" as const, latencyMs: 3 },
-    redis: { status: "ok" as const, latencyMs: 1 },
-    storage: { status: "ok" as const, latencyMs: 12 },
+  const healthyStorage = { isHealthy: async () => ({ status: "ok", latencyMs: 1 }) };
+  const brokenStorage = {
+    isHealthy: async () => ({ status: "error", latencyMs: 1, message: "Storage unreachable" }),
   };
+  const healthService = new HealthService(configStub, healthyStorage);
+  const degradedService = new HealthService(configStub, brokenStorage);
 
-  const isAllHealthy = Object.values(mockDependencies).every((d) => d.status === "ok");
-  assertGate(5, "Readiness probe aggregates database connection status", mockDependencies.database.status === "ok");
-  assertGate(6, "Readiness probe aggregates Redis cache status", mockDependencies.redis.status === "ok");
-  assertGate(7, "Readiness probe aggregates S3/R2 storage connectivity", mockDependencies.storage.status === "ok");
+  const liveness = healthService.checkLiveness();
+  assertGate(1, "Liveness probe returns status 'ok'", liveness.status === "ok");
+  assertGate(2, "Liveness probe reports positive process uptime", liveness.uptimeSeconds >= 0);
+  assertGate(3, "Liveness probe reports the real process PID", liveness.pid === process.pid);
+  assertGate(4, "Liveness probe includes valid ISO-8601 timestamp", !isNaN(Date.parse(liveness.timestamp)));
 
-  const degradedDeps = { ...mockDependencies, database: { status: "error" as const, message: "DB timeout" } };
-  const degradedStatus = Object.values(degradedDeps).every((d) => d.status === "ok") ? "ok" : "error";
-  assertGate(8, "Readiness probe evaluates to 'error' when any dependency is degraded", degradedStatus === "error");
+  const readiness = await healthService.checkReadiness();
+  assertGate(5, "Readiness probe reaches the real PostgreSQL database", readiness.dependencies?.database?.status === "ok", JSON.stringify(readiness.dependencies?.database));
+  assertGate(6, "Readiness probe reaches the real Redis instance", readiness.dependencies?.redis?.status === "ok", JSON.stringify(readiness.dependencies?.redis));
+  assertGate(7, "Readiness probe aggregates storage connectivity", readiness.dependencies?.storage?.status === "ok", JSON.stringify(readiness.dependencies?.storage));
 
+  const degraded = await degradedService.checkReadiness();
+  assertGate(8, "Readiness probe reports non-ok when a dependency is degraded", degraded.status !== "ok", `status=${degraded.status}`);
   const memoryStats = getMemoryUsageStats();
   assertGate(9, "System memory metrics probe returns RSS and Heap usage in megabytes", memoryStats.rssMb > 0 && memoryStats.heapUsedMb > 0);
   assertGate(10, "System memory metrics invariant: heapUsedMb <= heapTotalMb", memoryStats.heapUsedMb <= memoryStats.heapTotalMb);

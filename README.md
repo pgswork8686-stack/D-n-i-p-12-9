@@ -1,130 +1,72 @@
-# NEXUSTHEME — Digital Product Commerce Platform (Phase 1 Foundation)
+# NexusTheme — Chợ sản phẩm số (theme, plugin, UI kit, license)
 
-Hệ thống thương mại số cho phép phân phối Theme, Plugin, Figma UI Kit, License phần mềm và Cloud Hosting.
-Kiến trúc định hướng **3 Frontend + 1 API + Worker + Microservices Storage/Queue**.
+Monorepo gồm **3 frontend Next.js + 1 API NestJS + 1 worker**, dùng PostgreSQL, Redis và lưu trữ S3 (R2/MinIO).
+Đăng nhập qua Supabase. Thanh toán **VietQR qua SePay** (mặc định), **Stripe** là tuỳ chọn.
 
----
+| App | Port dev | Vai trò |
+| :-- | :-- | :-- |
+| `apps/web` | 3000 | Cửa hàng tiếng Việt: danh mục, chi tiết, giỏ hàng, checkout, trang thanh toán QR, blog |
+| `apps/portal` | 3001 | Tài khoản khách: đơn hàng, tải xuống, license, kích hoạt tên miền, ticket |
+| `apps/admin` | 3002 | Quản trị: sản phẩm, phiên bản/file, nội dung CMS, automation |
+| `apps/api` | 4000 | NestJS — nguồn quyết định duy nhất cho giá, đơn, thanh toán, quyền |
+| `apps/worker` | — | Outbox: cấp entitlement, license, email, xuất bản bài hẹn giờ |
 
-## 1. Yêu cầu môi trường (Prerequisites)
+## Trạng thái module
 
-- **Node.js**: `v20.x` hoặc `v24.x` (khuyến nghị `v24.19.0+`)
-- **pnpm**: `v9.x` hoặc `v11.x` (khuyến nghị `v11.20.0+`)
-- **Docker Desktop**: Hỗ trợ Docker Compose v2+
+| Module | Trạng thái production |
+| :-- | :-- |
+| Catalog, giỏ hàng, đơn hàng, thanh toán SePay/Stripe | ✅ Sẵn sàng |
+| Entitlement, license nội bộ, tải file có ký số, cập nhật plugin | ✅ Sẵn sàng |
+| License quản lý hộ (Elementor…) — duyệt tay | ✅ Sẵn sàng (xem lưu ý pháp lý bên dưới) |
+| CMS/SEO, blog, n8n automation | ✅ Sẵn sàng |
+| Helpdesk / ticket, thông báo | ✅ Sẵn sàng |
+| Hosting, Membership, Affiliate, Kế toán/Thuế | ⛔ Tắt bằng feature flag (`FEATURE_*`) — chưa hoàn thiện |
 
----
+Lưu ý: bán quyền dùng từ một tài khoản Elementor Pro dùng chung có thể vi phạm điều khoản của nhà cung cấp. Hãy kiểm tra hợp đồng hoặc chương trình reseller trước khi mở bán loại sản phẩm này.
 
-## 2. Port Map (Bản Đồ Cổng Dịch Vụ)
+## Chạy local
 
-| Dịch vụ / Ứng dụng | Đường dẫn / Port | Công nghệ | Mục đích |
-|:---|:---|:---|:---|
-| **Public Web** | `http://localhost:3000` | Next.js 14 App Router | Marketplace, Search, Catalog, SEO |
-| **Customer Portal** | `http://localhost:3001` | Next.js 14 App Router | Quản lý License, Domain, Downloads |
-| **Super Admin** | `http://localhost:3002` | Next.js 14 App Router | CMS, Điều phối License, Upstream, Audit |
-| **Backend API** | `http://localhost:4000` | NestJS Modular Monolith | Health, Storage, Auth Guard, Business Core |
-| **PostgreSQL** | `localhost:5432` | PostgreSQL 16 Alpine | Primary Relational DB & Source of Truth |
-| **Redis** | `localhost:6379` | Redis 7 Alpine | Cache, Lock & BullMQ Broker |
-| **MinIO S3 API** | `http://localhost:9000` | MinIO Storage | Giả lập Cloudflare R2 / Private Storage |
-| **MinIO Console** | `http://localhost:9001` | MinIO Web GUI | Quản trị bucket (`marketplace-dev`) |
+Yêu cầu: Node.js ≥ 22.13, pnpm 11, Docker.
 
----
-
-## 3. Hướng Dẫn Chạy Local (Quickstart)
-
-### Bước 1: Thiết lập biến môi trường
 ```bash
-cp .env.example .env
-```
-
-### Bước 2: Khởi động các dịch vụ hạ tầng Docker
-```bash
-docker compose up -d
-```
-*Lệnh này sẽ tự động khởi tạo Postgres, Redis, MinIO và chạy container `minio-init` để tạo sẵn bucket `marketplace-dev`.*
-
-### Bước 3: Cài đặt dependencies
-```bash
+cp .env.example .env            # bật thêm ENABLE_TEST_PAYMENT_PROVIDER=true, SEED_DEV_USERS=true khi dev
+docker compose up -d            # Postgres, Redis, MinIO
 pnpm install
-```
-
-### Bước 4: Khởi tạo Database Schema & Seed (Local Flow)
-```bash
-# 1. Chạy migrations (PostgreSQL):
 pnpm db:migrate
-
-# 2. Seed System RBAC (Production-safe: 8 system roles, 22 permissions, 0 users):
-pnpm db:seed:system
-
-# 3. Seed Development Users (Admin, Customer, Superadmin) - STRICTLY GATED:
-# Linux/macOS bash:
-SEED_DEV_USERS=true pnpm db:seed:dev
-
-# Windows PowerShell:
-$env:SEED_DEV_USERS="true"
-pnpm db:seed:dev
-
-# 4. Seed Development Catalog:
-pnpm db:seed:catalog
-
-# HOẶC chạy tắt cho Local Dev (tự động fail nếu NODE_ENV=production):
-pnpm db:seed:local
-```
-
-### Bước 5: Chạy toàn bộ ứng dụng ở chế độ dev
-```bash
+pnpm db:seed:local              # RBAC + user dev + catalog mẫu (bị chặn khi NODE_ENV=production)
 pnpm dev
 ```
 
----
-
-## 4. Các Lệnh Kiểm Tra Chất Lượng (Quality Gates)
-
-Dự án sử dụng Turborepo để điều phối chạy đồng loạt trên toàn bộ monorepo:
+- Đăng nhập dev: đặt `NEXT_PUBLIC_ENABLE_DEV_AUTH_TOOLS=true`, vào `/login` rồi dùng token `dev-user-token` / `dev-admin-token`. Chức năng này chỉ có khi không phải production.
+- Thử thanh toán VietQR ở local: điền các biến `SEPAY_*` (số tài khoản bất kỳ), đặt hàng, sau đó giả lập ngân hàng:
 
 ```bash
-# Kiểm tra định dạng và chuẩn code
-pnpm lint
-
-# Kiểm tra TypeScript Strict Mode toàn bộ apps và packages
-pnpm typecheck
-
-# Chạy toàn bộ unit test (API, Worker, Auth, Utils)
-pnpm test
-
-# Build toàn bộ packages và production apps
-pnpm build
+curl -X POST http://localhost:4000/v1/webhooks/payments/sepay \
+  -H "Authorization: Apikey $SEPAY_WEBHOOK_API_KEY" -H "Content-Type: application/json" \
+  -d '{"id":1,"transferType":"in","accountNumber":"<SEPAY_BANK_ACCOUNT>","transferAmount":<số tiền>,"content":"<nội dung CK>"}'
 ```
 
----
+## Kiểm tra chất lượng
 
-## 5. API Health Check Endpoints
-
-Backend API cung cấp các endpoint kiểm tra trạng thái dependency thực tế (không hard-code):
-
-- `GET http://localhost:4000/health`: Tổng hợp trạng thái toàn hệ thống (Database, Redis, Storage).
-- `GET http://localhost:4000/health/db`: Ping trực tiếp PostgreSQL thông qua Prisma query.
-- `GET http://localhost:4000/health/redis`: Ping trực tiếp Redis instance.
-- `GET http://localhost:4000/health/storage`: Kiểm tra kết nối S3/MinIO bucket.
-
-Mẫu JSON response machine-readable:
-```json
-{
-  "status": "ok",
-  "service": "api",
-  "version": "0.1.0",
-  "timestamp": "2026-09-12T07:15:00.000Z",
-  "dependencies": {
-    "database": { "status": "ok", "latencyMs": 4 },
-    "redis": { "status": "ok", "latencyMs": 2 },
-    "storage": { "status": "ok", "latencyMs": 11 }
-  }
-}
+```bash
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
+pnpm test:acceptance:phase4   # ... đến phase18 (cần Postgres/Redis/MinIO)
 ```
 
----
+CI (`.github/workflows/ci.yml`) chạy toàn bộ các bước trên với Node 22 và build cả 6 Docker image. Hãy bật **branch protection** cho `main` và yêu cầu check `CI` phải xanh trước khi merge.
 
-## 6. Known Limitations của Phase 1
+## Triển khai production
 
-1. **Phạm vi giao diện**: Phase 1 chỉ tạo các trang landing tối giản kèm chỉ báo kết nối API để xác nhận plumbing. 36 file giao diện mẫu HTML/Stitch chưa được đưa vào production ở phase này.
-2. **Auth**: Sử dụng tầng trừu tượng `DevMockAuthProvider` cho môi trường development (header: `Authorization: Bearer dev-admin-token` hoặc `dev-user-token`). Phase 2 sẽ tích hợp Supabase Auth JWT verification chính thức.
-3. **Commerce & Payment**: Chưa bao gồm các bảng thanh toán phức tạp, cổng VNPay/Momo/Stripe, hay logic cấp license thật.
-4. **Automation / n8n**: Thư mục `automation/n8n` chỉ đóng vai trò tài liệu định hướng; chưa triển khai workflow tự động hóa n8n.
+Làm theo [docs/production-cutover-runbook.md](docs/production-cutover-runbook.md): một máy chủ Docker, Caddy tự cấp HTTPS, cấu hình trong `.env.production` (mẫu: [.env.production.example](.env.production.example)).
+
+```bash
+docker compose -f infra/docker/production-compose.yml --env-file .env.production up -d --build
+```
+
+## Nguyên tắc bất biến
+
+1. Backend là nơi duy nhất quyết định giá, trạng thái đơn, thanh toán và quyền. Frontend chỉ hiển thị.
+2. Đơn chỉ chuyển sang `PAID` khi có webhook đã xác thực (SePay API key / chữ ký Stripe) hoặc khi đối soát chủ động với cổng thanh toán. Trang "thanh toán thành công" trên trình duyệt không bao giờ được tính là bằng chứng.
+3. Chuyển khoản sai số tiền hoặc sai nội dung **không** được tự động xác nhận; những giao dịch này phải đối soát tay.
+4. File gốc không bao giờ public. Tải file luôn qua kiểm tra quyền và URL ký số có hạn 2–5 phút.
+5. API fail-closed khi khởi động nếu cấu hình production không an toàn.
