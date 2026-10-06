@@ -78,7 +78,8 @@ export interface AdminCreatePlanRequest {
   tier: SubscriptionTier;
   interval: BillingInterval;
   priceMinor: number;
-  currency: string;
+  /** Defaults to VND when omitted. */
+  currency?: string;
   dailyDownloadQuota: number;
   maxActivationsPerProduct?: number;
   features?: string[];

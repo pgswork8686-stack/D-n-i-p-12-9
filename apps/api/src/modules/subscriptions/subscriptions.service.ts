@@ -14,6 +14,7 @@ import {
   EntitlementStatus,
   ProductType,
   FulfillmentType,
+  Currency,
   calculateNextPeriodEnd,
   isValidSubscriptionTransition,
 } from "@nexus/database";
@@ -381,7 +382,7 @@ export class SubscriptionsService {
         tier: dto.tier,
         interval: dto.interval,
         priceMinor: dto.priceMinor,
-        currency: dto.currency,
+        currency: dto.currency ?? Currency.VND,
         dailyDownloadQuota: dto.dailyDownloadQuota,
         maxActivationsPerProduct: dto.maxActivationsPerProduct ?? 1,
         features: dto.features ?? [],

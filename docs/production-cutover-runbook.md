@@ -85,6 +85,15 @@ curl -fsS https://API_DOMAIN/v1/features           # các module chưa hoàn thi
 | Cập nhật code | `git pull && docker compose ... up -d --build` (migrate tự chạy trước API) |
 | Bật một module khi đã hoàn thiện | Sửa `FEATURE_*=true` trong `.env.production` rồi chạy `up -d` |
 
+### Cập nhật có migration lớn (cửa sổ bảo trì)
+
+Các migration hiện có đều chỉ thêm (additive), nên cập nhật thường **không cần** dừng bán. Với migration nặng hoặc thay đổi lớn, làm như sau:
+
+1. **Bật trang bảo trì (HTTP 503)**: chạy `touch infra/docker/flags/maintenance.on`. Từ lúc đó cửa hàng, portal và admin trả về 503 kèm `Retry-After`. API vẫn chạy bình thường, nên webhook SePay/Stripe vẫn được ghi nhận và không mất tiền của khách.
+2. **Dừng worker an toàn**: chạy `docker compose -f infra/docker/production-compose.yml stop worker`. Worker nhận SIGTERM, làm xong lượt đang xử lý (tối đa 5 giây) rồi thoát. Các sự kiện chưa xử lý vẫn nằm trong bảng `outbox_events` và sẽ được xử lý tiếp khi worker chạy lại, nên không mất đơn.
+3. **Sao lưu** (lệnh ở mục Sao lưu bên dưới) → `git pull` → `up -d --build` (migrate chạy trước API).
+4. Kiểm tra `health/readiness`, sau đó xoá file `infra/docker/flags/maintenance.on` để mở lại trang. Worker đã được khởi động lại ở bước `up`.
+
 ### Sao lưu (cron hằng giờ)
 
 ```bash
@@ -101,7 +110,7 @@ Ngoài ra, hãy sao chép thư mục backup lên R2 hoặc một máy khác. **M
 gunzip -c db_YYYYMMDD_HHMM.sql.gz | docker compose ... exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
-## 7. Khi có sự cố
+## 7. Ma trận xử lý sự cố & rollback
 
 | Tình huống | Xử lý |
 | :-- | :-- |

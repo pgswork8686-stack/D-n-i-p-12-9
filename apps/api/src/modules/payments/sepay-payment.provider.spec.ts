@@ -108,8 +108,10 @@ describe("SepayPaymentProvider", () => {
     });
 
     it("refuses to run when not configured", async () => {
-      const provider = new SepayPaymentProvider();
       delete process.env.SEPAY_BANK_CODE;
+      delete process.env.SEPAY_BANK_ACCOUNT;
+      delete process.env.SEPAY_WEBHOOK_API_KEY;
+      const provider = new SepayPaymentProvider();
       await expect(
         provider.createPaymentSession({
           order: {} as any,

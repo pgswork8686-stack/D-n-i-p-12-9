@@ -164,21 +164,23 @@ describe("Hosting Worker Processor", () => {
   });
 
   describe("reconcileHostingUsage", () => {
-    it("updates disk and bandwidth metrics for active accounts", async () => {
+    it("never fabricates usage metrics (only the API syncs them from the panel)", async () => {
       jest.spyOn(prisma.hostingAccount, "findMany").mockResolvedValue([mockAccount] as any);
-      jest.spyOn(prisma.hostingAccount, "update").mockResolvedValue(mockAccount as any);
+      const update = jest.spyOn(prisma.hostingAccount, "update").mockResolvedValue(mockAccount as any);
 
       const res = await reconcileHostingUsage({ batchSize: 10 });
       expect(res.reconciledCount).toBe(1);
-      expect(prisma.hostingAccount.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: "acc-worker-1" },
-          data: expect.objectContaining({
-            diskUsageMb: 110,
-            bandwidthUsageMb: 550,
-          }),
-        }),
-      );
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("raises a quota alert from the last synced values", async () => {
+      const nearlyFull = { ...mockAccount, diskUsageMb: 950, diskLimitMb: 1000 };
+      jest.spyOn(prisma.hostingAccount, "findMany").mockResolvedValue([nearlyFull] as any);
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+      await reconcileHostingUsage({ batchSize: 10 });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("hosting_account_quota_alert"));
+      warn.mockRestore();
     });
   });
 });

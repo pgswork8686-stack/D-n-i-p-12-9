@@ -12,8 +12,23 @@
 	}
 }
 
+# Maintenance window: create infra/docker/flags/maintenance.on to serve 503.
+# The API stays reachable so payment webhooks keep being recorded.
+(maintenance) {
+	@maintenance file {
+		root /srv/flags
+		try_files /maintenance.on
+	}
+	handle @maintenance {
+		header Retry-After 900
+		header Content-Type "text/plain; charset=utf-8"
+		respond "NexusTheme đang bảo trì, vui lòng quay lại sau ít phút." 503
+	}
+}
+
 {$WEB_DOMAIN} {
 	import common
+	import maintenance
 	reverse_proxy web:3000
 }
 
@@ -23,11 +38,13 @@ www.{$WEB_DOMAIN} {
 
 {$PORTAL_DOMAIN} {
 	import common
+	import maintenance
 	reverse_proxy portal:3001
 }
 
 {$ADMIN_DOMAIN} {
 	import common
+	import maintenance
 	header X-Robots-Tag "noindex, nofollow"
 	reverse_proxy admin:3002
 }

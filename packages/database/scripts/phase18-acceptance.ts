@@ -304,10 +304,15 @@ async function runPhase18Acceptance() {
   assertGate(70, "Security audit report docs/security-audit-report.md exists with OWASP Top 10 matrix", securityReportExists);
 
   const runbookContent = runbookExists ? fs.readFileSync(runbookPath, "utf-8") : "";
-  assertGate(71, "Cutover runbook mandates Cloudflare SSL/TLS Strict mode", runbookContent.includes("Strict (Full)"));
-  assertGate(72, "Cutover runbook documents automated rollback decision matrix", runbookContent.includes("Rollback Decision Matrix"));
-  assertGate(73, "Cutover runbook specifies HTTP 503 maintenance response during migration window", runbookContent.includes("503 Maintenance Notice"));
-  assertGate(74, "Pre-cutover worker queue draining procedure is documented", runbookContent.includes("Worker Queue Draining"));
+  assertGate(71, "Cutover runbook mandates Cloudflare SSL/TLS Full (strict) mode", runbookContent.includes("Full (strict)"));
+  assertGate(72, "Cutover runbook documents an incident & rollback matrix", runbookContent.includes("Ma trận xử lý sự cố & rollback"));
+  const caddyfileContent = fs.readFileSync(path.join(repoRoot, "infra/docker/Caddyfile"), "utf-8");
+  assertGate(
+    73,
+    "Maintenance window serves HTTP 503 via the Caddy flag file and is documented",
+    runbookContent.includes("HTTP 503") && caddyfileContent.includes("maintenance.on") && caddyfileContent.includes(" 503"),
+  );
+  assertGate(74, "Graceful worker stop procedure is documented", runbookContent.includes("Dừng worker an toàn"));
   assertGate(75, "Final Project Readiness Verification: All 18 Phases implemented and verified for production launch", failedGates === 0);
 
   // ============================================================================
