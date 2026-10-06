@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -25,6 +26,7 @@ import {
   AffiliatePayoutDto,
 } from "@nexus/contracts";
 
+@RequireFeature("affiliate")
 @Controller(["affiliates", "v1/affiliates"])
 export class AffiliatesController {
   constructor(private readonly affiliatesService: AffiliatesService) {}

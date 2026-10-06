@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { HostingProvider } from "@nexus/database";
 import { IHostingAdapter } from "./hosting-adapter.interface";
 import { MockHostingAdapter } from "./mock-hosting.adapter";
@@ -22,8 +22,17 @@ export class HostingAdapterFactory {
       case HostingProvider.DIRECTADMIN:
         return this.directAdminAdapter;
       case HostingProvider.MOCK:
-      default:
+        // The simulated adapter must never serve real customers.
+        if (process.env.NODE_ENV === "production") {
+          throw new ServiceUnavailableException(
+            "Simulated hosting provider is disabled in production",
+          );
+        }
         return this.mockAdapter;
+      default:
+        throw new ServiceUnavailableException(
+          `Unsupported hosting provider '${provider}'`,
+        );
     }
   }
 

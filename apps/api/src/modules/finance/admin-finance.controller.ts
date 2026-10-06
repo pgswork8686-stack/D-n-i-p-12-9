@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -22,6 +23,7 @@ import {
   FinancialSummaryReportDto,
 } from "@nexus/contracts";
 
+@RequireFeature("finance")
 @Controller(["admin/finance", "v1/admin/finance"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminFinanceController {

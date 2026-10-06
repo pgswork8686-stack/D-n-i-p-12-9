@@ -17,6 +17,12 @@ import {
 } from "./payment-provider.interface";
 
 export interface StripeConfig {
+  /**
+   * False only in production when Stripe is intentionally left unconfigured
+   * (no secret key and no webhook secret), e.g. a VND-only SePay deployment.
+   * Partial configuration still fails closed at boot.
+   */
+  enabled: boolean;
   isMock: boolean;
   secretKey?: string;
   webhookSecret?: string;
@@ -103,6 +109,15 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     );
 
     if (isProd) {
+      if (!mockFlag && !secretKey && !webhookSecret) {
+        return {
+          enabled: false,
+          isMock: false,
+          webhookToleranceSeconds: tolerance,
+          returnBaseUrl: "",
+          expectedLivemode: true,
+        };
+      }
       if (mockFlag) {
         throw new Error(
           "STRIPE_MOCK_CLIENT must not be true in production environment",
@@ -125,6 +140,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       }
       const returnBaseUrl = this.resolveReturnBaseUrl();
       return {
+        enabled: true,
         isMock: false,
         secretKey,
         webhookSecret,
@@ -139,6 +155,7 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
       mockFlag || !secretKey || secretKey.startsWith("sk_test_placeholder");
 
     return {
+      enabled: true,
       isMock,
       secretKey: secretKey || "sk_test_dummy_key",
       webhookSecret: webhookSecret || "whsec_dummy_key",
@@ -148,9 +165,20 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
     };
   }
 
+  /** Whether Stripe should be offered to customers at checkout. */
+  isEnabled(): boolean {
+    const config = this.resolveConfig();
+    if (!config.enabled) return false;
+    if (process.env.NODE_ENV === "production") return true;
+    return (
+      process.env.STRIPE_MOCK_CLIENT === "true" ||
+      Boolean(process.env.STRIPE_SECRET_KEY?.trim())
+    );
+  }
+
   private initStripe() {
     const config = this.resolveConfig();
-    if (config.secretKey) {
+    if (config.enabled && config.secretKey) {
       this.stripeClient = new Stripe(config.secretKey, {
         apiVersion: "2025-02-24.acacia" as any,
       });
@@ -201,6 +229,9 @@ export class StripePaymentProvider implements PaymentProviderAdapter {
   }): Promise<NormalizedPaymentSession> {
     const { order, payment, successUrl, cancelUrl } = params;
     const config = this.resolveConfig();
+    if (!config.enabled) {
+      throw new ForbiddenException("Stripe payment provider is not configured");
+    }
 
     if (config.isMock) {
       this.logger.log(

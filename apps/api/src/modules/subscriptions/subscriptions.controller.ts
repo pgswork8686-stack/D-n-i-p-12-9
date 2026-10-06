@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -20,6 +21,7 @@ import {
   CheckMembershipQuotaResponse,
 } from "@nexus/contracts";
 
+@RequireFeature("membership")
 @Controller(["subscriptions", "v1/subscriptions"])
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}

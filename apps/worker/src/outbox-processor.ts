@@ -1,4 +1,5 @@
 import { prisma, OutboxEventStatus, enqueueOrderPaidEmailJob } from "@nexus/database";
+import { isFeatureEnabled } from "@nexus/utils";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
 import {
   processAffiliateReferralForOrder,
@@ -160,20 +161,30 @@ export async function processOutboxEvents(
         await enqueueOrderPaidEmailJob(authoritativeOrderId);
 
         // Phase 13: Idempotently process affiliate referral commission
-        await processAffiliateReferralForOrder(authoritativeOrderId);
+        if (isFeatureEnabled("affiliate")) {
+          await processAffiliateReferralForOrder(authoritativeOrderId);
+        }
 
         // Phase 14: Idempotently provision hosting accounts for hosting items in order
-        await processHostingProvisioningForOrder(authoritativeOrderId, workerId);
+        if (isFeatureEnabled("hosting")) {
+          await processHostingProvisioningForOrder(authoritativeOrderId, workerId);
+        }
 
         // Phase 16: Idempotently generate invoice & record balanced double-entry ledger rows
-        await processFinancialLedgerForOrder(authoritativeOrderId, workerId);
+        if (isFeatureEnabled("finance")) {
+          await processFinancialLedgerForOrder(authoritativeOrderId, workerId);
+        }
       } else if (event.eventType === "ORDER_REFUNDED") {
         const authoritativeOrderId = event.aggregateId;
+        // Refund side-effects stay on even when a module is off: each is
+        // idempotent and a no-op when nothing was created for the order.
         await clawbackAffiliateReferralForOrder(authoritativeOrderId);
         // Phase 14: Suspend hosting accounts on order refund
         await suspendHostingAccountsForOrder(authoritativeOrderId, "Order refunded", workerId);
         // Phase 16: Record balanced refund ledger rows
-        await processFinancialLedgerForOrderRefund(authoritativeOrderId, workerId);
+        if (isFeatureEnabled("finance")) {
+          await processFinancialLedgerForOrderRefund(authoritativeOrderId, workerId);
+        }
       } else if (event.eventType === "ENTITLEMENT_REVOKED") {
         const entitlementId = event.aggregateId;
         await suspendHostingForRevokedEntitlement(

@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  ServiceUnavailableException,
   Logger,
 } from "@nestjs/common";
 import * as crypto from "crypto";
@@ -26,6 +27,7 @@ import {
   isValidDnsRecord,
   encryptHostingCredential,
   decryptHostingCredential,
+  resolveHostingEncryptionSecret,
 } from "@nexus/utils";
 import {
   HostingServerDto,
@@ -52,10 +54,7 @@ export class HostingService {
   constructor(private readonly adapterFactory: HostingAdapterFactory) {}
 
   private getEncryptionKey(): string {
-    const raw =
-      process.env.HOSTING_ENCRYPTION_KEY ||
-      process.env.JWT_SECRET ||
-      "nexus_phase14_hosting_infrastructure_secret_encryption_key_2026";
+    const raw = resolveHostingEncryptionSecret();
     return crypto.createHash("sha256").update(raw).digest("hex");
   }
 
@@ -762,15 +761,15 @@ export class HostingService {
         orderBy: { activeAccounts: "asc" },
       });
 
-      if (!server) {
-        // Fallback to any active server
-        server = await prisma.hostingServer.findFirst({
-          where: { isActive: true },
-          orderBy: { activeAccounts: "asc" },
-        });
+      // Never overfill a server. In production there is no simulated fallback:
+      // an operator must add capacity (a real cPanel/DirectAdmin server).
+      if (!server && process.env.NODE_ENV === "production") {
+        throw new ServiceUnavailableException(
+          "No hosting server with available capacity. Please contact support.",
+        );
       }
 
-      // If still no server in the entire system, provision a default mock server
+      // Local/test only: seed a simulated server so flows can be exercised.
       if (!server) {
         const encryptedMock = this.encryptToken("mock-system-token-default");
         server = await prisma.hostingServer.create({

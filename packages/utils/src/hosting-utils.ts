@@ -171,3 +171,27 @@ export function decryptHostingCredential(
   decrypted += decipher.final("utf8");
   return decrypted;
 }
+
+/**
+ * Resolves the AES-256 key material used to encrypt hosting panel credentials.
+ * Production requires a dedicated HOSTING_ENCRYPTION_KEY (>= 32 chars); the
+ * built-in development fallback is never accepted there.
+ */
+export function resolveHostingEncryptionSecret(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const configured = env.HOSTING_ENCRYPTION_KEY?.trim();
+  if (env.NODE_ENV === "production") {
+    if (!configured || configured.length < 32) {
+      throw new Error(
+        "HOSTING_ENCRYPTION_KEY (>= 32 characters) is required in production",
+      );
+    }
+    return configured;
+  }
+  return (
+    configured ||
+    env.JWT_SECRET ||
+    "nexus_phase14_hosting_infrastructure_secret_encryption_key_2026"
+  );
+}

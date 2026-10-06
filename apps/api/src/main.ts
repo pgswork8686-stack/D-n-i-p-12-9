@@ -4,37 +4,26 @@ import { ConfigService } from "@nestjs/config";
 import { AppModule } from "./app.module";
 import { AllExceptionsFilter } from "./common/filters/http-exception.filter";
 import { StructuredLoggingInterceptor } from "./common/interceptors/structured-logging.interceptor";
+import { resolveCorsOrigins } from "./common/cors";
+import { describeFeatureFlags } from "./common/feature-flags";
 
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
   const configService = app.get(ConfigService);
-  const webUrl = configService.get<string>("WEB_URL", "http://localhost:3000");
-  const portalUrl = configService.get<string>(
-    "PORTAL_URL",
-    "http://localhost:3001",
-  );
-  const adminUrl = configService.get<string>(
-    "ADMIN_URL",
-    "http://localhost:3002",
-  );
 
-  const allowedOrigins = Array.from(
-    new Set([
-      webUrl,
-      portalUrl,
-      adminUrl,
-      "http://localhost:3000",
-      "http://localhost:3001",
-      "http://localhost:3002",
-    ]),
-  );
+  // Fails closed in production on missing/insecure frontend origins.
+  const allowedOrigins = resolveCorsOrigins(process.env);
 
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
   });
+
+  // Behind Caddy/Cloudflare: trust the first proxy hop for client IPs.
+  app.getHttpAdapter().getInstance().set("trust proxy", 1);
+  app.enableShutdownHooks();
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -48,9 +37,10 @@ async function bootstrap() {
   app.useGlobalInterceptors(new StructuredLoggingInterceptor());
 
   const port = configService.get<number>("PORT", 4000);
-  await app.listen(port);
-  logger.log(`NEXUSTHEME API is running on: http://localhost:${port}`);
+  await app.listen(port, "0.0.0.0");
+  logger.log(`NEXUSTHEME API is running on port ${port}`);
   logger.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
+  logger.log(`Feature flags: ${describeFeatureFlags()}`);
 }
 
 bootstrap();

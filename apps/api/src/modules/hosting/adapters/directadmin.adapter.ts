@@ -121,25 +121,49 @@ export class DirectAdminHostingAdapter implements IHostingAdapter {
     }
     const text = await res.text();
     const match = text.match(/key=([a-zA-Z0-9]+)/);
-    const key = match ? match[1] : null;
-    return `${server.endpointUrl}/CMD_LOGIN?user=${username}&key=${key || "mock"}`;
+    if (!match) {
+      throw new Error("DirectAdmin login key response did not contain a key");
+    }
+    return `${server.endpointUrl}/CMD_LOGIN?user=${encodeURIComponent(username)}&key=${match[1]}`;
   }
 
   async getAccountUsage(server: any, username: string): Promise<UsageStats> {
-    try {
+    // DirectAdmin legacy API answers url-encoded key=value pairs (MB values).
+    const fetchKv = async (cmd: string): Promise<URLSearchParams> => {
       const res = await fetch(
-        `${server.endpointUrl}/CMD_API_SHOW_USER_USAGE?user=${encodeURIComponent(username)}`,
+        `${server.endpointUrl}/${cmd}?user=${encodeURIComponent(username)}`,
         { headers: this.buildHeaders(server) },
       );
       if (!res.ok) {
-        return { diskUsageMb: 0, diskLimitMb: 5120, bandwidthUsageMb: 0, bandwidthLimitMb: 51200 };
+        throw new Error(`DirectAdmin ${cmd} failed (${res.status})`);
       }
-      return { diskUsageMb: 256, diskLimitMb: 5120, bandwidthUsageMb: 1024, bandwidthLimitMb: 51200 };
-    } catch {
-      return { diskUsageMb: 0, diskLimitMb: 5120, bandwidthUsageMb: 0, bandwidthLimitMb: 51200 };
+      const text = await res.text();
+      if (/error=1/.test(text)) {
+        throw new Error(`DirectAdmin ${cmd} returned an error`);
+      }
+      return new URLSearchParams(text.trim());
+    };
+    const toMb = (raw: string | null): number => {
+      const value = Number.parseFloat(raw ?? "");
+      // "unlimited" (NaN) is reported as 0 = no enforced limit.
+      return Number.isFinite(value) ? Math.round(value) : 0;
+    };
+
+    try {
+      const usage = await fetchKv("CMD_API_SHOW_USER_USAGE");
+      const config = await fetchKv("CMD_API_SHOW_USER_CONFIG");
+      return {
+        diskUsageMb: toMb(usage.get("quota")),
+        diskLimitMb: toMb(config.get("quota")),
+        bandwidthUsageMb: toMb(usage.get("bandwidth")),
+        bandwidthLimitMb: toMb(config.get("bandwidth")),
+      };
+    } catch (err: any) {
+      // Never overwrite stored usage with fabricated numbers.
+      this.logger.error(`DirectAdmin usage sync failed for ${username}: ${err.message}`);
+      throw err;
     }
   }
-
   private buildHeaders(server: any): Record<string, string> {
     const creds = Buffer.from(`admin:${server.decryptedToken || ""}`).toString("base64");
     return {

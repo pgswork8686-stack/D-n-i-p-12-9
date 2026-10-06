@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  ServiceUnavailableException,
   Logger,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -35,6 +36,19 @@ export class SubscriptionsService {
   private readonly logger = new Logger(SubscriptionsService.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  /**
+   * Local/test-only billing simulator. It activates a subscription without a
+   * real payment, so it must never run in production and must be opted into
+   * explicitly (STRIPE_MOCK_CLIENT or ENABLE_TEST_PAYMENT_PROVIDER).
+   */
+  private isSimulatedBillingEnabled(): boolean {
+    if (this.config.get("NODE_ENV") === "production") return false;
+    return (
+      this.config.get("STRIPE_MOCK_CLIENT") === "true" ||
+      this.config.get("ENABLE_TEST_PAYMENT_PROVIDER") === "true"
+    );
+  }
 
   // --------------------------------------------------------
   // Public & Customer Endpoints
@@ -119,9 +133,7 @@ export class SubscriptionsService {
       );
     }
 
-    const isMock =
-      this.config.get("STRIPE_MOCK_CLIENT") === "true" ||
-      this.config.get("NODE_ENV") !== "production";
+    const isMock = this.isSimulatedBillingEnabled();
 
     if (isMock) {
       // Mock session creation: Creates ACTIVE subscription and linked Entitlement directly for dev/test
@@ -230,9 +242,11 @@ export class SubscriptionsService {
       };
     }
 
-    // In live mode with Stripe API:
-    // Generate Stripe checkout session with mode: 'subscription'
-    throw new BadRequestException("Live Stripe Subscription session requires configured Stripe live key");
+    // Recurring billing (Stripe subscription mode / SePay renewals) is not
+    // implemented yet; the module is feature-flagged off in production.
+    throw new ServiceUnavailableException(
+      "Membership checkout is not available yet",
+    );
   }
 
   async createCustomerPortalSession(
@@ -249,9 +263,7 @@ export class SubscriptionsService {
     }
 
     // Dev/Mock fallback
-    const isMock =
-      this.config.get("STRIPE_MOCK_CLIENT") === "true" ||
-      this.config.get("NODE_ENV") !== "production";
+    const isMock = this.isSimulatedBillingEnabled();
 
     if (isMock) {
       return {
@@ -259,7 +271,9 @@ export class SubscriptionsService {
       };
     }
 
-    throw new BadRequestException("Live Stripe Billing Portal requires livemode credentials");
+    throw new ServiceUnavailableException(
+      "Membership billing portal is not available yet",
+    );
   }
 
   // --------------------------------------------------------

@@ -15,6 +15,9 @@ import { publishDueScheduledContent } from "./content-scheduler";
 import { dispatchPendingAutomationJobs } from "./automation-dispatcher";
 import { reconcileHostingUsage } from "./hosting-processor";
 import { reconcileIdleTickets } from "./ticket-processor";
+import { reconcileMatureAffiliateReferrals } from "./affiliate-processor";
+import { reconcileExpiredSubscriptions } from "./subscription-reconciler";
+import { resolveFeatureFlags } from "@nexus/utils";
 
 
 // Load root .env file
@@ -39,6 +42,7 @@ console.log(
     service: "worker",
     workerId,
     pollIntervalMs,
+    features: resolveFeatureFlags(),
     message: `Starting BullMQ system worker connecting to ${url.hostname}:${url.port || 6379}...`,
   }),
 );
@@ -114,11 +118,25 @@ const runPollingTick = async () => {
     // 7. Authoritative claiming and dispatching of pending automation jobs to n8n
     await dispatchPendingAutomationJobs({ workerId });
 
-    // 8. Authoritative reconciliation of hosting accounts usage and metric sync
-    await reconcileHostingUsage({ workerId });
+    const features = resolveFeatureFlags();
+
+    // 8. Hosting usage sync from the real control panel (feature-flagged)
+    if (features.hosting) {
+      await reconcileHostingUsage({ workerId });
+    }
 
     // 9. Authoritative reconciliation of idle tickets (> 7 days inactive)
     await reconcileIdleTickets({ workerId });
+
+    // 10. Affiliate commission maturation (pending -> available after hold)
+    if (features.affiliate) {
+      await reconcileMatureAffiliateReferrals();
+    }
+
+    // 11. Membership expiry / entitlement revocation
+    if (features.membership) {
+      await reconcileExpiredSubscriptions();
+    }
   } catch (err: any) {
     console.error(
       JSON.stringify({

@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -19,6 +20,7 @@ import {
 } from "./dto/subscriptions.dto";
 import { SubscriptionPlanDto, SubscriptionDto } from "@nexus/contracts";
 
+@RequireFeature("membership")
 @Controller(["admin/subscriptions", "v1/admin/subscriptions"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminSubscriptionsController {

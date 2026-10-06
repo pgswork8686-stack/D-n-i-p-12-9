@@ -8,6 +8,7 @@ import { PaymentSessionController } from "./payment-session.controller";
 import { TestPaymentProvider } from "./test-payment.provider";
 import { StripePaymentProvider } from "./stripe-payment.provider";
 import { PaymentProviderFactory } from "./payment-provider.factory";
+import { SepayPaymentProvider } from "./sepay-payment.provider";
 
 @Module({
   imports: [AuditModule, AuthModule],
@@ -20,12 +21,14 @@ import { PaymentProviderFactory } from "./payment-provider.factory";
     PaymentsService,
     TestPaymentProvider,
     StripePaymentProvider,
+    SepayPaymentProvider,
     PaymentProviderFactory,
   ],
   exports: [
     PaymentsService,
     TestPaymentProvider,
     StripePaymentProvider,
+    SepayPaymentProvider,
     PaymentProviderFactory,
   ],
 })

@@ -20,11 +20,18 @@ import {
   TestPaymentCallbackResponse,
   ReconcilePaymentResponse,
   PaymentDto,
+  PaymentProvidersResponse,
 } from "@nexus/contracts";
 
 @Controller(["payments", "v1/payments"])
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
+
+  /** Public: payment methods currently offered at checkout. */
+  @Get("providers")
+  listProviders(): PaymentProvidersResponse {
+    return this.paymentsService.listPaymentProviders();
+  }
 
   @Get(":id")
   @UseGuards(AuthGuard)
@@ -41,6 +48,19 @@ export class PaymentsController {
     @Body() dto: TestPaymentCallbackDto,
   ): Promise<TestPaymentCallbackResponse> {
     return this.paymentsService.processTestCallback(dto, headers);
+  }
+
+  /**
+   * Owner-triggered status refresh (e.g. after a VietQR bank transfer).
+   * Only queries the provider; the shared authority decides any transition.
+   */
+  @Post(":id/refresh")
+  @UseGuards(AuthGuard)
+  async refreshPayment(
+    @Param("id") id: string,
+    @Req() req: any,
+  ): Promise<ReconcilePaymentResponse> {
+    return this.paymentsService.refreshOwnPayment(id, req.user.id);
   }
 
   @Post(":id/reconcile")

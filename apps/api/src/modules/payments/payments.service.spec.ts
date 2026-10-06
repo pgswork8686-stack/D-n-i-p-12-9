@@ -11,6 +11,7 @@ import {
   computeTestWebhookSignature,
 } from "./test-payment.provider";
 import { StripePaymentProvider } from "./stripe-payment.provider";
+import { SepayPaymentProvider } from "./sepay-payment.provider";
 import { PaymentProviderFactory } from "./payment-provider.factory";
 import { AuditService } from "../audit/audit.service";
 import {
@@ -76,6 +77,7 @@ describe("PaymentsService", () => {
         PaymentsService,
         TestPaymentProvider,
         StripePaymentProvider,
+        SepayPaymentProvider,
         PaymentProviderFactory,
         {
           provide: AuditService,
