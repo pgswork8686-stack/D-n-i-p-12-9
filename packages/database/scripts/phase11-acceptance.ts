@@ -912,11 +912,19 @@ async function runPhase11Acceptance() {
       adminToken,
     ),
   ]);
+  // Invariant: exactly one transition wins. The loser is rejected either by
+  // the CAS (409, interleaved) or by the state machine (400, it observed the
+  // winner's committed state) — both are correct, which one depends on timing.
   const statuses = [transA.status, transB.status];
-  const has200 = statuses.includes(200);
-  const has409 = statuses.includes(409);
-  if (!has200 || !has409) {
-    throw new Error(`Gate 53 failed: Expected one 200 and one 409, got [${statuses.join(", ")}]`);
+  const winners = statuses.filter((s) => s === 200).length;
+  const loser = statuses.find((s) => s !== 200);
+  if (winners !== 1 || (loser !== 409 && loser !== 400)) {
+    throw new Error(`Gate 53 failed: Expected exactly one 200 and one 409/400, got [${statuses.join(", ")}]`);
+  }
+  const winnerTarget = transA.status === 200 ? ContentStatus.PUBLISHED : ContentStatus.SCHEDULED;
+  const raceFinal = await prisma.contentPost.findUniqueOrThrow({ where: { id: racePost.id } });
+  if (raceFinal.status !== winnerTarget) {
+    throw new Error(`Gate 53 failed: Final status ${raceFinal.status} does not match the winning transition ${winnerTarget}`);
   }
   console.log("✓ Gate 53 passed: Optimistic concurrency CAS rejected conflicting transition with 409 Conflict");
 

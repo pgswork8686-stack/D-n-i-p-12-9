@@ -1,5 +1,7 @@
 import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -58,6 +60,7 @@ export class AdminSubscriptionsController {
   }
 
   @Post(":id/cancel")
+  @HttpCode(HttpStatus.OK)
   @RequirePermissions("subscription.manage")
   async cancelSubscription(
     @Param("id") id: string,

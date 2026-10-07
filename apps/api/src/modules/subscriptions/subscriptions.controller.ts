@@ -1,5 +1,7 @@
 import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -39,6 +41,7 @@ export class SubscriptionsController {
   }
 
   @Post("checkout-session")
+  @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard)
   async createCheckoutSession(
     @Body() dto: CreateSubscriptionSessionDto,
@@ -49,6 +52,7 @@ export class SubscriptionsController {
   }
 
   @Post("customer-portal")
+  @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard)
   async createPortalSession(
     @Body() dto: CreatePortalSessionDto,

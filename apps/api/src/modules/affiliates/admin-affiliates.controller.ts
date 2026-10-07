@@ -1,5 +1,7 @@
 import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Patch,
@@ -64,6 +66,7 @@ export class AdminAffiliatesController {
   }
 
   @Post("payouts/:id/process")
+  @HttpCode(HttpStatus.OK)
   @RequirePermissions("affiliate.manage")
   async processPayout(
     @Param("id") id: string,

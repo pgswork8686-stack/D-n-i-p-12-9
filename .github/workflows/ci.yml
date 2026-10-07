@@ -85,7 +85,9 @@ jobs:
         run: |
           pnpm db:generate
           pnpm db:migrate
-          pnpm db:seed:all
+          # system RBAC + dev users (dev-admin-token -> admin role) + catalog;
+          # Phase 5-7 need the seeded admin. seed:all omits dev users.
+          pnpm db:seed:local
 
       - name: Lint
         run: pnpm lint

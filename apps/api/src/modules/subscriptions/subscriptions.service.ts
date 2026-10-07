@@ -32,6 +32,12 @@ import {
   QuerySubscriptionsDto,
 } from "./dto/subscriptions.dto";
 
+/** Appends a query parameter whether or not the URL already has a query string. */
+function appendQueryParam(url: string, key: string, value: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
 @Injectable()
 export class SubscriptionsService {
   private readonly logger = new Logger(SubscriptionsService.name);
@@ -117,8 +123,11 @@ export class SubscriptionsService {
     const plan = await prisma.subscriptionPlan.findUnique({
       where: { id: dto.planId },
     });
-    if (!plan || !plan.isActive) {
-      throw new NotFoundException("Subscription plan not found or inactive");
+    if (!plan) {
+      throw new NotFoundException("Subscription plan not found");
+    }
+    if (!plan.isActive) {
+      throw new BadRequestException("Subscription plan is not available for purchase");
     }
 
     // Check if user already has an active subscription
@@ -238,7 +247,7 @@ export class SubscriptionsService {
       });
 
       return {
-        sessionUrl: `${dto.successUrl}?session_id=${mockSubId}`,
+        sessionUrl: appendQueryParam(dto.successUrl, "session_id", mockSubId),
         sessionId: mockSubId,
       };
     }
@@ -260,7 +269,9 @@ export class SubscriptionsService {
     });
 
     if (!sub) {
-      throw new NotFoundException("No subscription found for this user");
+      // No billing profile yet: send the customer back to their own billing
+      // page (the URL they supplied) instead of failing.
+      return { sessionUrl: dto.returnUrl };
     }
 
     // Dev/Mock fallback
@@ -268,7 +279,7 @@ export class SubscriptionsService {
 
     if (isMock) {
       return {
-        sessionUrl: `${dto.returnUrl}?mock_portal=1`,
+        sessionUrl: appendQueryParam(dto.returnUrl, "mock_portal", "1"),
       };
     }
 
@@ -298,8 +309,9 @@ export class SubscriptionsService {
       throw new NotFoundException("Entitlement not found");
     }
 
+    // Fail closed with an explicit denial (not an error) for the owner.
     if (entitlement.status !== EntitlementStatus.ACTIVE) {
-      throw new ForbiddenException("Entitlement is not active");
+      return this.deniedQuota();
     }
 
     if (entitlement.fulfillmentType !== FulfillmentType.MEMBERSHIP_ACCESS) {
@@ -314,7 +326,7 @@ export class SubscriptionsService {
 
     const sub = entitlement.subscription;
     if (!sub || sub.status !== SubscriptionStatus.ACTIVE) {
-      throw new ForbiddenException("Membership subscription is inactive or expired");
+      return this.deniedQuota();
     }
 
     const dailyLimit = sub.plan.dailyDownloadQuota;
@@ -329,13 +341,29 @@ export class SubscriptionsService {
     };
   }
 
+  private deniedQuota(): CheckMembershipQuotaResponse {
+    return {
+      allowed: false,
+      dailyLimit: 0,
+      usedToday: 0,
+      remainingToday: 0,
+      resetsAt: this.nextUtcMidnight(new Date()).toISOString(),
+    };
+  }
+
+  /** Quotas reset at 00:00 UTC regardless of the server time zone. */
+  private nextUtcMidnight(now: Date): Date {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  }
+
   private async getDailyQuotaUsage(
     userId: string,
     dailyLimit: number,
   ): Promise<{ usedToday: number; remainingToday: number; resetsAt: string }> {
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const nextReset = this.nextUtcMidnight(now);
+    const endOfDay = new Date(nextReset.getTime() - 1);
 
     const usedToday = await prisma.downloadEvent.count({
       where: {

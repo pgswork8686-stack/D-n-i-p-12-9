@@ -79,6 +79,10 @@ async function runPhase18Acceptance() {
 
   const degraded = await degradedService.checkReadiness();
   assertGate(8, "Readiness probe reports non-ok when a dependency is degraded", degraded.status !== "ok", `status=${degraded.status}`);
+  // Release the real Redis connections so the suite can exit.
+  for (const svc of [healthService, degradedService]) {
+    (svc as any).redisClient?.disconnect();
+  }
   const memoryStats = getMemoryUsageStats();
   assertGate(9, "System memory metrics probe returns RSS and Heap usage in megabytes", memoryStats.rssMb > 0 && memoryStats.heapUsedMb > 0);
   assertGate(10, "System memory metrics invariant: heapUsedMb <= heapTotalMb", memoryStats.heapUsedMb <= memoryStats.heapTotalMb);

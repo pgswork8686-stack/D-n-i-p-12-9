@@ -1734,6 +1734,7 @@ async function runPhase8Acceptance() {
   await sleep(1500);
 
   // Request B (t≈1.5s) -> allow (200)
+  const tBStart = Date.now();
   const reqB = await fetch("http://localhost:4006/v1/downloads/request", {
     method: "POST",
     headers: {
@@ -1788,6 +1789,7 @@ async function runPhase8Acceptance() {
   }
 
   // Immediate request E -> rate limited again (429)
+  const sinceB = Date.now() - tBStart;
   const reqE = await fetch("http://localhost:4006/v1/downloads/request", {
     method: "POST",
     headers: {
@@ -1800,8 +1802,18 @@ async function runPhase8Acceptance() {
       fileId: file1Id,
     }),
   });
-  if (reqE.status !== 429) {
-    throw new Error(`Expected 429 for immediate request E, got ${reqE.status}`);
+  // B entered the 4s window when its request started. On a slow host, B may
+  // already have aged out by the time E is sent; then E is legitimately allowed.
+  if (sinceB < 3600) {
+    if (reqE.status !== 429) {
+      throw new Error(`Expected 429 for immediate request E (B still in window, ${sinceB}ms), got ${reqE.status}`);
+    }
+  } else if (sinceB > 4400) {
+    if (reqE.status === 429) {
+      throw new Error(`Request B aged out (${sinceB}ms) yet request E was still rate limited`);
+    }
+  } else {
+    console.log(`  (request E sent at the window edge, ${sinceB}ms after B; either outcome is valid)`);
   }
 
   try {

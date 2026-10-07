@@ -23,12 +23,9 @@ import {
 import {
   normalizeAffiliateCode,
   isReservedAffiliateCode,
-  isValidAffiliateCode,
-  parseAffiliateCookie,
-  buildAffiliateCookie,
-  createAffiliateFingerprintHash,
-  calculateAffiliateCommission,
-  calculateAffiliateConversionRate,
+  parseReferralCookie,
+  buildReferralCookie,
+  hashClientFingerprint,
   MIN_COMMISSION_RATE_BP,
   MAX_COMMISSION_RATE_BP,
   DEFAULT_COMMISSION_RATE_BP,
@@ -511,21 +508,51 @@ async function runPhase13Acceptance() {
 
     // Gate 17: Provision associated entitlement with MEMBERSHIP_ACCESS
     // First get a product or create a dummy membership product
-    let testProduct = await prisma.product.findFirst();
-    if (!testProduct) {
-      testProduct = await prisma.product.create({
+    // Entitlements require a real purchase trail (order + order item + variant),
+    // so every fixture entitlement is backed by its own PAID order snapshot.
+    const testVariant = await prisma.productVariant.findFirst({ include: { product: true } });
+    if (!testVariant) {
+      throw new Error("Phase 13 requires a seeded catalog variant (run db:seed:local)");
+    }
+    const testProduct = testVariant.product;
+    let fixtureSeq = 0;
+    const purchaseFixture = async (userId: string) => {
+      fixtureSeq += 1;
+      const order = await prisma.order.create({
         data: {
-          name: "Test Membership Product",
-          slug: `prod-membership-${runId}`,
-          status: "PUBLISHED",
-          priceMinor: 0,
+          orderNumber: `ORD-P13-${runId}-${fixtureSeq}`,
+          userId,
+          status: "PAID",
+          currency: "VND",
+          subtotalAmount: 0,
+          discountAmount: 0,
+          totalAmount: 0,
         },
       });
-    }
+      const item = await prisma.orderItem.create({
+        data: {
+          orderId: order.id,
+          productId: testProduct.id,
+          variantId: testVariant.id,
+          productName: testProduct.name,
+          variantName: testVariant.name,
+          sku: testVariant.sku,
+          quantity: 1,
+          unitAmount: 0,
+          lineTotalAmount: 0,
+          currency: "VND",
+          productType: testProduct.productType,
+          fulfillmentType: FulfillmentType.MEMBERSHIP_ACCESS,
+        },
+      });
+      return { orderId: order.id, orderItemId: item.id, variantId: testVariant.id };
+    };
     const membershipEntitlement = await prisma.entitlement.create({
       data: {
         userId: buyerUserId,
+        ...(await purchaseFixture(buyerUserId)),
         productId: testProduct.id,
+        productType: testProduct.productType,
         fulfillmentType: FulfillmentType.MEMBERSHIP_ACCESS,
         status: EntitlementStatus.ACTIVE,
         subscriptionId: activeSub.id,
@@ -590,16 +617,34 @@ async function runPhase13Acceptance() {
     }
     recordPass(21, "Initial quota check returns allowed: true, 50 remaining out of 50");
 
-    // Gate 22: Simulate 5 download logs for today
-    for (let i = 0; i < 5; i++) {
-      await prisma.downloadLog.create({
+    // Download quota counts rows in download_events, which reference a real
+    // product version file; create one fixture version/file for this run.
+    const fixtureVersion = await prisma.productVersion.create({
+      data: { productId: testProduct.id, version: `13.0.${Date.now() % 100000}` },
+    });
+    const fixtureFile = await prisma.productVersionFile.create({
+      data: {
+        productVersionId: fixtureVersion.id,
+        storageKey: `acceptance/phase13/${runId}/membership.zip`,
+        fileName: "membership.zip",
+        sizeBytes: 1,
+        sha256: "0".repeat(64),
+      },
+    });
+    const recordFixtureDownload = () =>
+      prisma.downloadEvent.create({
         data: {
           entitlementId: membershipEntitlement.id,
           userId: buyerUserId,
           productId: testProduct.id,
-          ipAddress: "127.0.0.1",
+          productVersionId: fixtureVersion.id,
+          fileId: fixtureFile.id,
+          channel: "CUSTOMER_PORTAL",
         },
       });
+    // Gate 22: Simulate 5 download logs for today
+    for (let i = 0; i < 5; i++) {
+      await recordFixtureDownload();
     }
     recordPass(22, "Simulated 5 customer download events recorded in download_logs");
 
@@ -619,14 +664,7 @@ async function runPhase13Acceptance() {
 
     // Gate 25: Simulating quota exhaustion (insert remaining 45 downloads)
     for (let i = 0; i < 45; i++) {
-      await prisma.downloadLog.create({
-        data: {
-          entitlementId: membershipEntitlement.id,
-          userId: buyerUserId,
-          productId: testProduct.id,
-          ipAddress: "127.0.0.1",
-        },
-      });
+      await recordFixtureDownload();
     }
     const q25 = await apiGet(`/v1/subscriptions/quota/${membershipEntitlement.id}`, buyerToken);
     if (q25.data?.allowed !== false || q25.data?.remainingToday !== 0 || q25.data?.usedToday < 50) {
@@ -644,7 +682,9 @@ async function runPhase13Acceptance() {
     const revokedEnt = await prisma.entitlement.create({
       data: {
         userId: otherUserId,
+        ...(await purchaseFixture(otherUserId)),
         productId: testProduct.id,
+        productType: testProduct.productType,
         fulfillmentType: FulfillmentType.MEMBERSHIP_ACCESS,
         status: EntitlementStatus.REVOKED,
       },
@@ -659,7 +699,9 @@ async function runPhase13Acceptance() {
     const expiredEnt = await prisma.entitlement.create({
       data: {
         userId: otherUserId,
+        ...(await purchaseFixture(otherUserId)),
         productId: testProduct.id,
+        productType: testProduct.productType,
         fulfillmentType: FulfillmentType.MEMBERSHIP_ACCESS,
         status: EntitlementStatus.EXPIRED,
       },
@@ -726,7 +768,9 @@ async function runPhase13Acceptance() {
     const expiredEntTest = await prisma.entitlement.create({
       data: {
         userId: otherUserId,
+        ...(await purchaseFixture(otherUserId)),
         productId: testProduct.id,
+        productType: testProduct.productType,
         fulfillmentType: FulfillmentType.MEMBERSHIP_ACCESS,
         status: EntitlementStatus.ACTIVE,
         subscriptionId: expiredSubTest.id,
@@ -963,8 +1007,8 @@ async function runPhase13Acceptance() {
     recordPass(52, "Customer affiliate dashboard reflects totalClicks >= 1");
 
     // Gate 53: Cookie builder and parser utility tests
-    const cookieHeader = buildAffiliateCookie(partnerCode, 30);
-    const parsedCookie = parseAffiliateCookie(`foo=bar; ${cookieHeader}; baz=qux`);
+    const cookieHeader = buildReferralCookie(partnerCode, 30);
+    const parsedCookie = parseReferralCookie(`foo=bar; ${cookieHeader}; baz=qux`);
     if (parsedCookie !== partnerCode) {
       failGate(53, `Cookie parsing mismatch: expected ${partnerCode}, got ${parsedCookie}`);
     }
@@ -981,10 +1025,9 @@ async function runPhase13Acceptance() {
         userId: buyerUserId,
         orderNumber: `ORD-REF-${runId}-1`,
         status: "PAID",
-        paymentStatus: "PAID",
-        subtotalMinor: 10000, // $100.00
-        taxMinor: 0,
-        totalMinor: 10000,
+        subtotalAmount: 10000, // $100.00
+        discountAmount: 0,
+        totalAmount: 10000,
         currency: "USD",
         affiliateId: affiliateAccount.id,
         affiliateCode: partnerCode,
@@ -993,15 +1036,15 @@ async function runPhase13Acceptance() {
     recordPass(54, `Created referred order #${order1.orderNumber} with affiliate attribution`);
 
     // Gate 55: Commission calculation using commissionRateBp (2000 bp = 20%)
-    const commissionMinor = calculateCommissionMinor(order1.totalMinor, affiliateAccount.commissionRateBp);
+    const commissionMinor = calculateCommissionMinor(order1.totalAmount, affiliateAccount.commissionRateBp);
     if (commissionMinor !== 2000) { // 20% of 10000 = 2000 cents ($20.00)
       failGate(55, `Expected commission 2000 minor units, got ${commissionMinor}`);
     }
     recordPass(55, "Commission calculated accurately: 2000 bp of $100.00 = $20.00 (2000 cents)");
 
     // Gate 56: Minor-unit rounding precision check
-    const comm1 = calculateAffiliateCommission(9999, 1500); // 15% of 99.99 = 14.9985 -> 1500
-    const comm2 = calculateAffiliateCommission(10050, 2000); // 20% of 100.50 = 20.10 -> 2010
+    const comm1 = calculateCommissionMinor(9999, 1500); // 15% of 99.99 = 14.9985 -> 1500
+    const comm2 = calculateCommissionMinor(10050, 2000); // 20% of 100.50 = 20.10 -> 2010
     if (comm1 !== 1500 || comm2 !== 2010) {
       failGate(56, `Commission math precision error: comm1=${comm1}, comm2=${comm2}`);
     }
@@ -1014,7 +1057,7 @@ async function runPhase13Acceptance() {
         affiliateId: affiliateAccount.id,
         orderId: order1.id,
         customerUserId: buyerUserId,
-        orderAmountMinor: order1.totalMinor,
+        orderAmountMinor: order1.totalAmount,
         commissionAmountMinor: commissionMinor,
         status: ReferralStatus.PENDING,
         matureAt: matureAtDate,
@@ -1034,7 +1077,7 @@ async function runPhase13Acceptance() {
     const updatedAff1 = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (updatedAff1?.pendingBalanceMinor !== 2000 || updatedAff1.availableBalanceMinor !== 0) {
+    if (Number(updatedAff1?.pendingBalanceMinor) !== 2000 || Number(updatedAff1.availableBalanceMinor) !== 0) {
       failGate(58, `Pending balance mismatch: pending=${updatedAff1?.pendingBalanceMinor}, available=${updatedAff1?.availableBalanceMinor}`);
     }
     recordPass(58, "Pending balance incremented by $20.00; available balance remains strictly 0");
@@ -1052,7 +1095,10 @@ async function runPhase13Acceptance() {
     recordPass(59, "Affiliate dashboard reflects 1 total referral, 1 pending, and $20.00 pending balance");
 
     // Gate 60: Conversion rate calculation
-    const rate = calculateAffiliateConversionRate(d59.data.totalClicks, d59.data.totalReferrals);
+    const rate =
+      d59.data.totalClicks > 0
+        ? Math.round((d59.data.totalReferrals / d59.data.totalClicks) * 10000) / 100
+        : 0;
     if (rate <= 0 || rate > 100) {
       failGate(60, `Invalid conversion rate: ${rate}`);
     }
@@ -1071,8 +1117,8 @@ async function runPhase13Acceptance() {
     recordPass(61, "Anti-fraud engine strictly blocks self-referral with identical userId");
 
     // Gate 62: Self-referral attempt by matching IP/UA fingerprint detected
-    const affiliateIpHash = createAffiliateFingerprintHash("198.51.100.5", "Mozilla/5.0 AcceptanceTest");
-    const buyerIpHash = createAffiliateFingerprintHash("198.51.100.5", "Mozilla/5.0 AcceptanceTest");
+    const affiliateIpHash = hashClientFingerprint("198.51.100.5", "Mozilla/5.0 AcceptanceTest").ipHash;
+    const buyerIpHash = hashClientFingerprint("198.51.100.5", "Mozilla/5.0 AcceptanceTest").ipHash;
     const fraud2 = isSelfReferral("different-buyer-id", "affiliate-owner-id", buyerIpHash, affiliateIpHash);
     if (!fraud2.isFraud || fraud2.reason !== "MATCHING_IP_FINGERPRINT") {
       failGate(62, `Expected MATCHING_IP_FINGERPRINT fraud detection, got: ${JSON.stringify(fraud2)}`);
@@ -1085,10 +1131,9 @@ async function runPhase13Acceptance() {
         userId: partnerUserId, // Same as affiliate owner
         orderNumber: `ORD-SELF-${runId}`,
         status: "PAID",
-        paymentStatus: "PAID",
-        subtotalMinor: 5000,
-        taxMinor: 0,
-        totalMinor: 5000,
+        subtotalAmount: 5000,
+        discountAmount: 0,
+        totalAmount: 5000,
         currency: "USD",
         affiliateId: affiliateAccount.id,
       },
@@ -1103,7 +1148,7 @@ async function runPhase13Acceptance() {
           affiliateId: affiliateAccount.id,
           orderId: selfOrder.id,
           customerUserId: selfOrder.userId,
-          orderAmountMinor: selfOrder.totalMinor,
+          orderAmountMinor: selfOrder.totalAmount,
           commissionAmountMinor: 1000,
           status: ReferralStatus.PENDING,
           matureAt: new Date(),
@@ -1120,7 +1165,7 @@ async function runPhase13Acceptance() {
     const affAfterFraud = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (affAfterFraud?.pendingBalanceMinor !== 2000) {
+    if (Number(affAfterFraud?.pendingBalanceMinor) !== 2000) {
       failGate(64, `Pending balance corrupted by fraud attempt: ${affAfterFraud?.pendingBalanceMinor}`);
     }
     recordPass(64, "Affiliate pending balance unchanged after blocked fraud attempt");
@@ -1142,7 +1187,7 @@ async function runPhase13Acceptance() {
           affiliateId: affiliateAccount.id,
           orderId: order1.id, // Unique constraint violation
           customerUserId: buyerUserId,
-          orderAmountMinor: order1.totalMinor,
+          orderAmountMinor: order1.totalAmount,
           commissionAmountMinor: commissionMinor,
           status: ReferralStatus.PENDING,
           matureAt: matureAtDate,
@@ -1215,15 +1260,15 @@ async function runPhase13Acceptance() {
       where: { id: affiliateAccount.id },
     });
     if (
-      affAfterMature?.pendingBalanceMinor !== 0 ||
-      affAfterMature?.availableBalanceMinor !== 2000
+      Number(affAfterMature?.pendingBalanceMinor) !== 0 ||
+      Number(affAfterMature?.availableBalanceMinor) !== 2000
     ) {
       failGate(70, `Balance advancement error: pending=${affAfterMature?.pendingBalanceMinor}, available=${affAfterMature?.availableBalanceMinor}`);
     }
     recordPass(70, "Balances updated atomically: $20.00 moved from pending to available");
 
     // Gate 71: Total earned balance matches cumulative approved commissions
-    if (affAfterMature?.totalEarnedMinor !== 2000) {
+    if (Number(affAfterMature?.totalEarnedMinor) !== 2000) {
       failGate(71, `Total earned mismatch: expected 2000, got ${affAfterMature?.totalEarnedMinor}`);
     }
     recordPass(71, "Total earned balance accurately tracks cumulative approved commissions ($20.00)");
@@ -1293,7 +1338,7 @@ async function runPhase13Acceptance() {
     const affAfterPayoutReq = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (affAfterPayoutReq?.availableBalanceMinor !== 4000) {
+    if (Number(affAfterPayoutReq?.availableBalanceMinor) !== 4000) {
       failGate(76, `Available balance not deducted: expected 4000, got ${affAfterPayoutReq?.availableBalanceMinor}`);
     }
     recordPass(76, "Available balance atomically reduced from $100.00 to $40.00 via CAS");
@@ -1320,7 +1365,7 @@ async function runPhase13Acceptance() {
     const affAfterCompleted = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (affAfterCompleted?.withdrawnBalanceMinor !== 6000) {
+    if (Number(affAfterCompleted?.withdrawnBalanceMinor) !== 6000) {
       failGate(78, `Withdrawn balance not incremented: ${affAfterCompleted?.withdrawnBalanceMinor}`);
     }
     recordPass(78, "Admin completes payout: status COMPLETED, reference saved, withdrawn balance incremented");
@@ -1351,7 +1396,7 @@ async function runPhase13Acceptance() {
     const affAfterRejection = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (affAfterRejection?.availableBalanceMinor !== 5000) {
+    if (Number(affAfterRejection?.availableBalanceMinor) !== 5000) {
       failGate(79, `Rejected payout amount was not refunded to available balance: ${affAfterRejection?.availableBalanceMinor}`);
     }
     recordPass(79, "Rejected payout safely refunds requested amount back to available balance ($50.00)");
@@ -1376,10 +1421,9 @@ async function runPhase13Acceptance() {
         userId: buyerUserId,
         orderNumber: `ORD-REF-CLAW-${runId}`,
         status: "PAID",
-        paymentStatus: "PAID",
-        subtotalMinor: 8000,
-        taxMinor: 0,
-        totalMinor: 8000,
+        subtotalAmount: 8000,
+        discountAmount: 0,
+        totalAmount: 8000,
         currency: "USD",
         affiliateId: affiliateAccount.id,
       },
@@ -1389,7 +1433,7 @@ async function runPhase13Acceptance() {
         affiliateId: affiliateAccount.id,
         orderId: order2.id,
         customerUserId: buyerUserId,
-        orderAmountMinor: order2.totalMinor,
+        orderAmountMinor: order2.totalAmount,
         commissionAmountMinor: 1600, // $16.00
         status: ReferralStatus.PENDING,
         matureAt: calculateMatureDate(order2.createdAt, 30),
@@ -1432,7 +1476,7 @@ async function runPhase13Acceptance() {
     const affAfterClawback = await prisma.affiliateAccount.findUnique({
       where: { id: affiliateAccount.id },
     });
-    if (affAfterClawback?.pendingBalanceMinor !== 0) {
+    if (Number(affAfterClawback?.pendingBalanceMinor) !== 0) {
       failGate(83, `Pending balance not decremented on clawback: ${affAfterClawback?.pendingBalanceMinor}`);
     }
     recordPass(83, "Affiliate pending balance cleanly decremented by $16.00 clawback amount");

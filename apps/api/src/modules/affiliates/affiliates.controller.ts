@@ -1,5 +1,7 @@
 import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -49,6 +51,7 @@ export class AffiliatesController {
   }
 
   @Post("click")
+  @HttpCode(HttpStatus.OK)
   async recordClick(
     @Body() dto: RecordClickDto,
     @Ip() ip: string,
