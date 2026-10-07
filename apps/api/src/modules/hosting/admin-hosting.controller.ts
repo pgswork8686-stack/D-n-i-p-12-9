@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -24,6 +25,7 @@ import {
   HostingAccountStatus,
 } from "@nexus/contracts";
 
+@RequireFeature("hosting")
 @Controller(["admin/hosting", "v1/admin/hosting"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminHostingController {

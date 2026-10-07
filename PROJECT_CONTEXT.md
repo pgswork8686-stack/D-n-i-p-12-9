@@ -2,6 +2,13 @@
 
 Repo chính: `pgswork8686-stack/D-n-i-p-12-9`
 
+## Cập nhật production-readiness (2026-10-06)
+- **Sự thật về CI**: PR #17–#22 (Phase 13–18) được merge khi CI đỏ. Phase 13–14 có acceptance fail thật; CI của Phase 15–18 hỏng ngay ở bước *Setup Node* (pnpm 11 đòi Node ≥ 22.13) nên **các test của những phase này chưa từng chạy trên CI**. Mọi dòng "100% Green CI", "75/75 gates" bên dưới chỉ là tự khai báo. Từ nay chỉ còn một workflow `ci.yml` (Node 22), và nó phải xanh trước khi merge.
+- **Thanh toán VN**: thêm provider `sepay` (VietQR, webhook xác thực bằng API key, khớp chính xác số tiền và mã chuyển khoản, đối soát qua SePay API). Stripe là tuỳ chọn ở production.
+- **Feature flags** `FEATURE_HOSTING|MEMBERSHIP|AFFILIATE|FINANCE` mặc định **tắt** ở production: route trả 404, worker bỏ qua side-effect. Các module này còn dở (hosting trước đây đánh dấu ACTIVE mà không gọi panel, số liệu dung lượng là giả, membership không có billing thật).
+- **Storefront** (`apps/web`) được viết lại bằng tiếng Việt, đăng nhập Supabase thật, checkout gọi thẳng API. Đã gỡ coupon và thuế giả ở client, gỡ cổng test khỏi production.
+- **Triển khai**: `infra/docker/Dockerfile` + `production-compose.yml` + Caddy. Runbook: `docs/production-cutover-runbook.md`.
+
 ## Vai trò
 - Codex: code, test, push branch/PR.
 - ChatGPT: reviewer/architect; rà kiến trúc, business logic, security, test, consistency, đối chiếu spec.

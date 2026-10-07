@@ -121,20 +121,26 @@ export class CpanelHostingAdapter implements IHostingAdapter {
       )}`;
       const res = await fetch(url, { headers: this.buildHeaders(server) });
       if (!res.ok) {
-        return { diskUsageMb: 0, diskLimitMb: 5120, bandwidthUsageMb: 0, bandwidthLimitMb: 51200 };
+        throw new Error(`cPanel WHM accountsummary failed (${res.status})`);
       }
       const data: any = await res.json();
       const acct = data?.data?.acct?.[0];
-      const diskUsed = parseInt(acct?.diskused || "0", 10);
-      const diskLimit = parseInt(acct?.disklimit || "5120M", 10) || 5120;
+      if (!acct) {
+        throw new Error("cPanel WHM accountsummary returned no account");
+      }
+      const diskUsed = parseInt(acct.diskused || "0", 10) || 0;
+      const diskLimit = parseInt(acct.disklimit, 10);
       return {
         diskUsageMb: diskUsed,
-        diskLimitMb: diskLimit,
+        // "unlimited" parses to NaN: report 0 = no enforced limit.
+        diskLimitMb: Number.isFinite(diskLimit) ? diskLimit : 0,
         bandwidthUsageMb: 0,
-        bandwidthLimitMb: 51200,
+        bandwidthLimitMb: 0,
       };
-    } catch {
-      return { diskUsageMb: 0, diskLimitMb: 5120, bandwidthUsageMb: 0, bandwidthLimitMb: 51200 };
+    } catch (err: any) {
+      // Never overwrite stored usage with fabricated zeros.
+      this.logger.error(`cPanel usage sync failed for ${username}: ${err.message}`);
+      throw err;
     }
   }
 

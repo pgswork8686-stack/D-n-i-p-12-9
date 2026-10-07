@@ -473,6 +473,14 @@ async function runPhase14Acceptance() {
     let testDns: any;
 
     if (isDbLive) {
+      // Tenant fixture: hosting accounts reference users(id) via FK, so the
+      // fixed test tenant must exist before accounts are attached to it.
+      await prisma.user.upsert({
+        where: { id: "usr-tenant-1" },
+        update: {},
+        create: { id: "usr-tenant-1", email: "tenant-1@phase14.acceptance.test" },
+      });
+
       testServer = await prisma.hostingServer.create({
         data: {
           name: `Test Server ${runId}`,

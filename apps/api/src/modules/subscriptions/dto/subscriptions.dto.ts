@@ -69,8 +69,10 @@ export class AdminCreatePlanDto implements AdminCreatePlanRequest {
   @Min(0)
   priceMinor!: number;
 
+  /** Defaults to VND (primary market) when omitted. */
   @IsEnum(Currency)
-  currency!: Currency;
+  @IsOptional()
+  currency?: Currency;
 
   @IsInt()
   @Min(1)

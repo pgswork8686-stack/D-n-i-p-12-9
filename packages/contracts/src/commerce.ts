@@ -151,6 +151,16 @@ export interface CreatePaymentSessionRequest {
   cancelUrl?: string;
 }
 
+export interface BankTransferInstructionsDto {
+  bankCode: string;
+  accountNumber: string;
+  accountName: string;
+  amount: number;
+  currency: string;
+  transferContent: string;
+  qrImageUrl: string;
+}
+
 export interface PaymentSessionResponse {
   sessionId: string;
   sessionUrl: string;
@@ -160,6 +170,15 @@ export interface PaymentSessionResponse {
   orderId: string;
   amount: number;
   currency: Currency;
+  /** Bank-transfer (VietQR) instructions; only for providers such as `sepay`. */
+  instructions?: BankTransferInstructionsDto;
+}
+
+export interface PaymentProvidersResponse {
+  providers: Array<{
+    id: string;
+    currencies: Currency[];
+  }>;
 }
 
 export interface PaymentWebhookResponse {

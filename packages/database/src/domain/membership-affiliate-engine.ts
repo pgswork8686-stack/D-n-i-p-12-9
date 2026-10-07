@@ -95,7 +95,7 @@ export function isSelfReferral(
   if (customerUserId && affiliateUserId && customerUserId === affiliateUserId) {
     return {
       isFraud: true,
-      reason: "SELF_REFERRAL_SAME_USER",
+      reason: "SAME_USER",
     };
   }
 
@@ -107,7 +107,7 @@ export function isSelfReferral(
   ) {
     return {
       isFraud: true,
-      reason: "SELF_REFERRAL_SAME_IP",
+      reason: "MATCHING_IP_FINGERPRINT",
     };
   }
 
@@ -124,7 +124,8 @@ export function calculateCommissionMinor(
   if (orderAmountMinor <= 0 || commissionRateBp <= 0) {
     return 0;
   }
-  const rawCommission = Math.floor((orderAmountMinor * commissionRateBp) / 10000);
+  // Half-up rounding to the minor unit, consistent with tax rounding.
+  const rawCommission = Math.round((orderAmountMinor * commissionRateBp) / 10000);
   return Math.min(orderAmountMinor, Math.max(0, rawCommission));
 }
 

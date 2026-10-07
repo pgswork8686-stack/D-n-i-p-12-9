@@ -41,7 +41,12 @@ export function normalizeAffiliateCode(code: string): string {
   }
 
   const trimmed = code.trim().toUpperCase();
-  const sanitized = trimmed.replace(/[^A-Z0-9_-]/g, "");
+  // Reject rather than silently strip: a partner typing "REF@CODE" must not
+  // end up owning "REFCODE" without knowing it.
+  if (/[^A-Z0-9_-]/.test(trimmed)) {
+    throw new Error("Affiliate code may only contain letters, digits, '-' and '_'");
+  }
+  const sanitized = trimmed;
 
   if (sanitized.length < 3) {
     throw new Error("Affiliate code must be at least 3 characters long");

@@ -1,3 +1,4 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
   Controller,
   Get,
@@ -24,6 +25,7 @@ import {
   PurgeCacheResponseDto,
 } from "@nexus/contracts";
 
+@RequireFeature("hosting")
 @Controller(["hosting", "v1/hosting"])
 @UseGuards(AuthGuard)
 export class HostingController {

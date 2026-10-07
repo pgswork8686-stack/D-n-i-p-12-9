@@ -1,4 +1,7 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -20,6 +23,7 @@ import {
   CheckMembershipQuotaResponse,
 } from "@nexus/contracts";
 
+@RequireFeature("membership")
 @Controller(["subscriptions", "v1/subscriptions"])
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
@@ -37,6 +41,7 @@ export class SubscriptionsController {
   }
 
   @Post("checkout-session")
+  @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard)
   async createCheckoutSession(
     @Body() dto: CreateSubscriptionSessionDto,
@@ -47,6 +52,7 @@ export class SubscriptionsController {
   }
 
   @Post("customer-portal")
+  @HttpCode(HttpStatus.OK)
   @UseGuards(AuthGuard)
   async createPortalSession(
     @Body() dto: CreatePortalSessionDto,

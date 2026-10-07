@@ -11,6 +11,7 @@ import {
   generateHostingUsername,
   encryptHostingCredential,
   decryptHostingCredential,
+  resolveHostingEncryptionSecret,
 } from "@nexus/utils";
 import * as crypto from "crypto";
 
@@ -20,10 +21,7 @@ export interface HostingWorkerOptions {
 }
 
 function getEncryptionKey(): string {
-  const raw =
-    process.env.HOSTING_ENCRYPTION_KEY ||
-    process.env.JWT_SECRET ||
-    "nexus_phase14_hosting_infrastructure_secret_encryption_key_2026";
+  const raw = resolveHostingEncryptionSecret();
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
@@ -80,23 +78,38 @@ export async function processHostingProvisioningForOrder(
       `site-${order.orderNumber.toLowerCase()}-${ent.id.slice(0, 6)}.nexustheme.dev`;
     const cleanDomain = domain.trim().toLowerCase();
 
-    // Find active hosting server
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // Find an active hosting server with spare capacity. Never overfill a
+    // server, and never fall back to the simulated MOCK provider in production.
     let server = await prisma.hostingServer.findFirst({
       where: {
         isActive: true,
         activeAccounts: { lt: prisma.hostingServer.fields.maxAccounts },
+        ...(isProduction ? { provider: { not: HostingProvider.MOCK } } : {}),
       },
       orderBy: { activeAccounts: "asc" },
     });
 
-    if (!server) {
-      server = await prisma.hostingServer.findFirst({
-        where: { isActive: true },
-        orderBy: { activeAccounts: "asc" },
-      });
+    if (!server && isProduction) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          service: "worker",
+          event: "hosting_no_capacity",
+          workerId,
+          orderId,
+          entitlementId: ent.id,
+          message:
+            "No active hosting server with capacity; provisioning requires operator action",
+          timestamp: new Date().toISOString(),
+        }),
+      );
+      continue;
     }
 
     if (!server) {
+      // Local/test only: seed a simulated server so the flow can be exercised.
       const key = getEncryptionKey();
       const enc = encryptHostingCredential("mock-default-worker-token", key);
       server = await prisma.hostingServer.create({
@@ -133,7 +146,26 @@ export async function processHostingProvisioningForOrder(
         },
       });
 
-      // Execute provisioning
+      if (server.provider !== HostingProvider.MOCK) {
+        // Real control panels (cPanel/DirectAdmin) are provisioned by the API
+        // (HostingService.provisionAccountInternal via admin retry), which owns
+        // the panel adapters. Never mark ACTIVE without a real panel account.
+        console.log(
+          JSON.stringify({
+            level: "info",
+            service: "worker",
+            event: "hosting_account_awaiting_provisioning",
+            workerId,
+            orderId,
+            entitlementId: ent.id,
+            accountId: account.id,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+        continue;
+      }
+
+      // Simulated provisioning (MOCK provider, non-production only)
       await prisma.$transaction(async (tx) => {
         await tx.hostingAccount.update({
           where: { id: account.id },
@@ -369,19 +401,10 @@ export async function reconcileHostingUsage(options?: HostingWorkerOptions) {
   let reconciledCount = 0;
 
   for (const account of accounts) {
-    // In background sync, simulate or update metrics
-    const simulatedDisk = Math.min(account.diskLimitMb, account.diskUsageMb + 10);
-    const simulatedBandwidth = Math.min(account.bandwidthLimitMb, account.bandwidthUsageMb + 50);
-
-    await prisma.hostingAccount.update({
-      where: { id: account.id },
-      data: {
-        diskUsageMb: simulatedDisk,
-        bandwidthUsageMb: simulatedBandwidth,
-      },
-    });
-
-    if (isApproachingQuota(simulatedDisk, account.diskLimitMb, 90)) {
+    // Usage figures are written only by HostingService.syncAccountUsage, which
+    // reads them from the real control panel. The worker never fabricates
+    // metrics; it only evaluates quota alerts on the last synced values.
+    if (isApproachingQuota(account.diskUsageMb, account.diskLimitMb, 90)) {
       console.warn(
         JSON.stringify({
           level: "warn",
@@ -390,7 +413,7 @@ export async function reconcileHostingUsage(options?: HostingWorkerOptions) {
           workerId,
           accountId: account.id,
           domain: account.domain,
-          diskUsageMb: simulatedDisk,
+          diskUsageMb: account.diskUsageMb,
           diskLimitMb: account.diskLimitMb,
           timestamp: new Date().toISOString(),
         }),

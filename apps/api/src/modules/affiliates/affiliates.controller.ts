@@ -1,4 +1,7 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -25,6 +28,7 @@ import {
   AffiliatePayoutDto,
 } from "@nexus/contracts";
 
+@RequireFeature("affiliate")
 @Controller(["affiliates", "v1/affiliates"])
 export class AffiliatesController {
   constructor(private readonly affiliatesService: AffiliatesService) {}
@@ -47,6 +51,7 @@ export class AffiliatesController {
   }
 
   @Post("click")
+  @HttpCode(HttpStatus.OK)
   async recordClick(
     @Body() dto: RecordClickDto,
     @Ip() ip: string,

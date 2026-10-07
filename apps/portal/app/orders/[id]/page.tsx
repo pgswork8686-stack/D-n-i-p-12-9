@@ -44,25 +44,14 @@ export default function OrderDetailPage() {
     fetchOrderDetail();
   }, [fetchOrderDetail]);
 
+  // Payment (VietQR via SePay, or card via Stripe) is completed on the storefront
+  // order page, which lists the providers enabled on the backend.
   const handleRetryPayment = async () => {
-    if (!token || !order) return;
+    if (!order) return;
     setRetryingPayment(true);
     setRetryError(null);
-    try {
-      const client = getApiClient(token);
-      const session = await client.createPaymentSession(order.id, {
-        successUrl: `/payment/result?orderId=${order.id}`,
-        cancelUrl: `/orders/${order.id}`,
-      });
-      if (session && session.sessionUrl) {
-        window.location.href = session.sessionUrl;
-      } else {
-        throw new Error("No checkout URL returned from payment provider.");
-      }
-    } catch (err: any) {
-      setRetryError(err.message || "Failed to initiate payment retry");
-      setRetryingPayment(false);
-    }
+    const webUrl = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
+    window.location.href = `${webUrl}/orders/${order.id}`;
   };
 
   return (

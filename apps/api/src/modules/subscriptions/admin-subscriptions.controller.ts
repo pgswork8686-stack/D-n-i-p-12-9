@@ -1,4 +1,7 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Post,
@@ -19,6 +22,7 @@ import {
 } from "./dto/subscriptions.dto";
 import { SubscriptionPlanDto, SubscriptionDto } from "@nexus/contracts";
 
+@RequireFeature("membership")
 @Controller(["admin/subscriptions", "v1/admin/subscriptions"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminSubscriptionsController {
@@ -56,6 +60,7 @@ export class AdminSubscriptionsController {
   }
 
   @Post(":id/cancel")
+  @HttpCode(HttpStatus.OK)
   @RequirePermissions("subscription.manage")
   async cancelSubscription(
     @Param("id") id: string,

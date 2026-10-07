@@ -21,7 +21,12 @@ describe("affiliate-utils", () => {
       expect(normalizeAffiliateCode("  diep86  ")).toBe("DIEP86");
     });
 
-    it("should throw for codes shorter than 3 chars", () => {
+    it("should reject codes with symbols instead of silently stripping them", () => {
+    expect(() => normalizeAffiliateCode("REF@CODE!#$")).toThrow("may only contain");
+    expect(() => normalizeAffiliateCode("ab cd")).toThrow("may only contain");
+  });
+
+  it("should throw for codes shorter than 3 chars", () => {
       expect(() => normalizeAffiliateCode("ab")).toThrow("at least 3 characters");
     });
 

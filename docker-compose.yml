@@ -33,8 +33,10 @@ services:
       timeout: 5s
       retries: 5
 
+  # MinIO withdrew its public images (minio/minio, minio/mc). Chainguard
+  # rebuilds the same MinIO server from source; aws-cli creates the bucket.
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     container_name: nexustheme-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -46,23 +48,21 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   minio-init:
-    image: minio/mc:latest
+    image: amazon/aws-cli:latest
     container_name: nexustheme-minio-init
     depends_on:
-      minio:
-        condition: service_healthy
+      - minio
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: us-east-1
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
-      /usr/bin/mc mb --ignore-existing local/marketplace-dev;
-      /usr/bin/mc anonymous set download local/marketplace-dev/public;
+      for i in $$(seq 1 30); do aws --endpoint-url http://minio:9000 s3 ls >/dev/null 2>&1 && break; sleep 2; done;
+      aws --endpoint-url http://minio:9000 s3 mb s3://marketplace-dev 2>/dev/null || true;
+      aws --endpoint-url http://minio:9000 s3api put-bucket-policy --bucket marketplace-dev --policy '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::marketplace-dev/public/*\"]}]}';
       exit 0;
       "
 

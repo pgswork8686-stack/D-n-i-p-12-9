@@ -1,4 +1,5 @@
 import { Module, NestModule, MiddlewareConsumer } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
 import * as path from "path";
 import { HealthModule } from "./modules/health/health.module";
@@ -24,6 +25,7 @@ import { TicketsModule } from "./modules/tickets/tickets.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.middleware";
+import { FeatureFlagGuard, FeaturesController } from "./common/feature-flags";
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.
     AuthModule,
     QueueModule,
   ],
+  controllers: [FeaturesController],
+  providers: [{ provide: APP_GUARD, useClass: FeatureFlagGuard }],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

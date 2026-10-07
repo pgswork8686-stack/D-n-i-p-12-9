@@ -11,6 +11,7 @@ import { prisma, PaymentStatus, OrderStatus } from "@nexus/database";
 import {
   TestPaymentCallbackResponse,
   PaymentSessionResponse,
+  PaymentProvidersResponse,
   PaymentWebhookResponse,
   ReconcilePaymentResponse,
   PaymentDto,
@@ -42,6 +43,9 @@ interface AuthoritativePaymentEvidence {
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
+  /** Per-payment throttle for customer-triggered provider queries. */
+  private readonly lastRefreshAt = new Map<string, number>();
+  private static readonly REFRESH_MIN_INTERVAL_MS = 10_000;
 
   constructor(
     private readonly auditService: AuditService,
@@ -479,6 +483,9 @@ export class PaymentsService {
         orderId: order.id,
         amount: payment.amount,
         currency: payment.currency,
+        ...(existingSession.instructions
+          ? { instructions: existingSession.instructions }
+          : {}),
       };
     }
 
@@ -525,7 +532,12 @@ export class PaymentsService {
       orderId: order.id,
       amount: payment.amount,
       currency: payment.currency,
+      ...(session.instructions ? { instructions: session.instructions } : {}),
     };
+  }
+
+  listPaymentProviders(): PaymentProvidersResponse {
+    return { providers: this.providerFactory.listAvailableProviders() };
   }
 
   async handleWebhook(
@@ -1005,6 +1017,39 @@ export class PaymentsService {
       orderStatus: result.orderStatus,
       message: result.message,
     };
+  }
+
+  async refreshOwnPayment(
+    paymentId: string,
+    userId: string,
+  ): Promise<ReconcilePaymentResponse> {
+    const payment = await prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { order: true },
+    });
+    // Anti-enumeration: foreign payments look identical to missing ones.
+    if (!payment || payment.order.userId !== userId) {
+      throw new NotFoundException(`Payment '${paymentId}' not found`);
+    }
+    const now = Date.now();
+    const last = this.lastRefreshAt.get(paymentId) ?? 0;
+    if (
+      payment.status === PaymentStatus.PENDING &&
+      now - last < PaymentsService.REFRESH_MIN_INTERVAL_MS
+    ) {
+      return {
+        success: true,
+        transitioned: false,
+        paymentStatus: payment.status,
+        orderStatus: payment.order.status,
+        message: "Refresh throttled; please retry shortly",
+      };
+    }
+    this.lastRefreshAt.set(paymentId, now);
+    if (this.lastRefreshAt.size > 10_000) this.lastRefreshAt.clear();
+    return this.reconcilePayment(paymentId, {
+      reason: PaymentReconcileReason.AUTHORITATIVE_QUERY,
+    });
   }
 
   async getPayment(id: string, user?: AuthUser): Promise<PaymentDto> {

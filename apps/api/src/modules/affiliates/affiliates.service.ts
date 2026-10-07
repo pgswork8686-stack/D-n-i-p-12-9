@@ -71,7 +71,13 @@ export class AffiliatesService {
       throw new ConflictException("User already has an affiliate account");
     }
 
-    const normalizedCode = normalizeAffiliateCode(dto.code);
+    let normalizedCode: string;
+    try {
+      normalizedCode = normalizeAffiliateCode(dto.code);
+    } catch (err: any) {
+      // Invalid user input (length/charset/reserved) is a 400, not a 500.
+      throw new BadRequestException(err?.message || "Invalid affiliate code");
+    }
 
     const existingCode = await prisma.affiliateAccount.findUnique({
       where: { code: normalizedCode },
@@ -246,7 +252,8 @@ export class AffiliatesService {
       where: { userId },
     });
     if (!account) {
-      throw new NotFoundException("Affiliate account not found");
+      // Not an affiliate: there are simply no referrals to show.
+      return [];
     }
 
     const where: any = { affiliateId: account.id };
@@ -267,7 +274,7 @@ export class AffiliatesService {
       where: { userId },
     });
     if (!account) {
-      throw new NotFoundException("Affiliate account not found");
+      return [];
     }
 
     const payouts = await prisma.affiliatePayout.findMany({

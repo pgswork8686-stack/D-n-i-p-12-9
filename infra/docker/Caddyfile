@@ -1,0 +1,59 @@
+{
+	email {$ACME_EMAIL}
+}
+
+(common) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+# Maintenance window: create infra/docker/flags/maintenance.on to serve 503.
+# The API stays reachable so payment webhooks keep being recorded.
+(maintenance) {
+	@maintenance file {
+		root /srv/flags
+		try_files /maintenance.on
+	}
+	handle @maintenance {
+		header Retry-After 900
+		header Content-Type "text/plain; charset=utf-8"
+		respond "NexusTheme đang bảo trì, vui lòng quay lại sau ít phút." 503
+	}
+}
+
+{$WEB_DOMAIN} {
+	import common
+	import maintenance
+	reverse_proxy web:3000
+}
+
+www.{$WEB_DOMAIN} {
+	redir https://{$WEB_DOMAIN}{uri} permanent
+}
+
+{$PORTAL_DOMAIN} {
+	import common
+	import maintenance
+	reverse_proxy portal:3001
+}
+
+{$ADMIN_DOMAIN} {
+	import common
+	import maintenance
+	header X-Robots-Tag "noindex, nofollow"
+	reverse_proxy admin:3002
+}
+
+{$API_DOMAIN} {
+	import common
+	# Payment webhooks need the untouched raw body; keep request size bounded.
+	request_body {
+		max_size 60MB
+	}
+	reverse_proxy api:4000
+}

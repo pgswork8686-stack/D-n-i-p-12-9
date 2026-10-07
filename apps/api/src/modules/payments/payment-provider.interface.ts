@@ -28,10 +28,22 @@ export interface PaymentProvider {
   ): Promise<PaymentEventVerificationResult>;
 }
 
+export interface BankTransferInstructions {
+  bankCode: string;
+  accountNumber: string;
+  accountName: string;
+  amount: number;
+  currency: string;
+  transferContent: string;
+  qrImageUrl: string;
+}
+
 export interface NormalizedPaymentSession {
   sessionId: string;
   sessionUrl: string;
   providerReference: string;
+  /** Present for bank-transfer providers (e.g. SePay VietQR). */
+  instructions?: BankTransferInstructions;
 }
 
 export interface NormalizedPaymentEvent {

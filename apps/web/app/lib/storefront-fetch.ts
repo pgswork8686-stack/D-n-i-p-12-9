@@ -1,10 +1,10 @@
-import { resolveApiUrl } from "@nexus/utils";
+import { serverApiUrl } from "./server-api";
 
 export async function fetchProductBySlug(
   slug: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<any | null> {
-  const apiUrl = resolveApiUrl();
+  const apiUrl = serverApiUrl();
   let res: Response;
   try {
     res = await fetchFn(`${apiUrl}/products/${encodeURIComponent(slug)}`, {
@@ -29,7 +29,7 @@ export async function fetchArticleBySlug(
   slug: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<any | null> {
-  const apiUrl = resolveApiUrl();
+  const apiUrl = serverApiUrl();
   let res: Response;
   try {
     res = await fetchFn(

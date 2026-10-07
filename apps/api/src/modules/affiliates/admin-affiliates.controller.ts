@@ -1,4 +1,7 @@
+import { RequireFeature } from "../../common/feature-flags";
 import {
+  HttpCode,
+  HttpStatus,
   Controller,
   Get,
   Patch,
@@ -24,6 +27,7 @@ import {
   AffiliatePayoutDto,
 } from "@nexus/contracts";
 
+@RequireFeature("affiliate")
 @Controller(["admin/affiliates", "v1/admin/affiliates"])
 @UseGuards(AuthGuard, PermissionsGuard)
 export class AdminAffiliatesController {
@@ -62,6 +66,7 @@ export class AdminAffiliatesController {
   }
 
   @Post("payouts/:id/process")
+  @HttpCode(HttpStatus.OK)
   @RequirePermissions("affiliate.manage")
   async processPayout(
     @Param("id") id: string,

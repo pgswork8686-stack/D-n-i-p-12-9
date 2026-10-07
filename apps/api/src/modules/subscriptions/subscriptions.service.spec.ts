@@ -242,7 +242,7 @@ describe("SubscriptionsService", () => {
       expect(res.remainingToday).toBe(0);
     });
 
-    it("throws ForbiddenException when subscription is canceled or unpaid", async () => {
+    it("denies quota (allowed: false) when subscription is canceled or unpaid", async () => {
       const mockEntitlement = {
         id: "ent-1",
         userId: "user-1",
@@ -257,8 +257,18 @@ describe("SubscriptionsService", () => {
 
       jest.spyOn(prisma.entitlement, "findUnique").mockResolvedValue(mockEntitlement as any);
 
+      const res = await service.checkMembershipQuota("user-1", "ent-1");
+      expect(res.allowed).toBe(false);
+      expect(res.remainingToday).toBe(0);
+      expect(new Date(res.resetsAt).getUTCHours()).toBe(0);
+    });
+
+    it("still hides other users' entitlements (404)", async () => {
+      jest
+        .spyOn(prisma.entitlement, "findUnique")
+        .mockResolvedValue({ id: "ent-1", userId: "someone-else" } as any);
       await expect(service.checkMembershipQuota("user-1", "ent-1")).rejects.toThrow(
-        ForbiddenException,
+        NotFoundException,
       );
     });
   });
