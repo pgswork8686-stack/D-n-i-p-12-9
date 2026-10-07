@@ -63,8 +63,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Same infrastructure steps as the last green workflow (phase12-ci.yml):
-      # MinIO images come from quay.io, not Docker Hub.
+      # MinIO withdrew its public images (Docker Hub minio/minio and
+      # quay.io/minio/* no longer resolve). Chainguard rebuilds the same MinIO
+      # server from source; aws-cli replaces the withdrawn `mc` client.
       - name: Start PostgreSQL and Redis
         run: |
           docker compose up -d postgres redis
@@ -84,7 +85,7 @@ jobs:
             -p 9000:9000 -p 9001:9001 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:latest server /data --console-address ':9001'
+            cgr.dev/chainguard/minio:latest server /data --console-address ':9001'
           for i in {1..40}; do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               exit 0
@@ -96,10 +97,9 @@ jobs:
 
       - name: Create private MinIO bucket
         run: |
-          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c '
-            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
-            mc mb --ignore-existing local/marketplace-dev
-          '
+          docker run --rm --network host \
+            -e AWS_ACCESS_KEY_ID=minioadmin -e AWS_SECRET_ACCESS_KEY=minioadmin -e AWS_DEFAULT_REGION=us-east-1 \
+            amazon/aws-cli:latest --endpoint-url http://127.0.0.1:9000 s3 mb s3://marketplace-dev
 
       - name: Setup test database
         run: |
