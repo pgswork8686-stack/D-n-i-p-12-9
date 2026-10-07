@@ -58,6 +58,8 @@ async function ensureApiRunning(): Promise<void> {
       },
     },
   );
+  apiProcess.stdout?.resume();
+  apiProcess.stderr?.resume();
 
   const startTime = Date.now();
   while (Date.now() - startTime < 30000) {
@@ -91,6 +93,8 @@ async function ensureWorkerRunning(): Promise<void> {
       },
     },
   );
+  workerProcess.stdout?.resume();
+  workerProcess.stderr?.resume();
 
   await sleep(1500);
 }

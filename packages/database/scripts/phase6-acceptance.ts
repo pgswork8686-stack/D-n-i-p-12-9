@@ -37,6 +37,8 @@ async function ensureApiRunning(): Promise<void> {
     stdio: "pipe",
     env: { ...process.env, PORT: TEST_PORT, API_URL: API_BASE },
   });
+  apiProcess.stdout?.resume();
+  apiProcess.stderr?.resume();
 
   const startTime = Date.now();
   while (Date.now() - startTime < 30000) {
@@ -65,6 +67,8 @@ async function ensureWorkerRunning(): Promise<void> {
       OUTBOX_POLL_INTERVAL_MS: "500",
     },
   });
+  workerProcess.stdout?.resume();
+  workerProcess.stderr?.resume();
 
   await sleep(1500);
 }

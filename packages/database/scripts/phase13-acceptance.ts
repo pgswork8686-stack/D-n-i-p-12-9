@@ -828,6 +828,12 @@ async function runPhase13Acceptance() {
     // =========================================================================
     console.log("\n--- [Sub-System 5] Affiliate Registration & Code Governance ---");
 
+    // Clean up any existing affiliate account for partnerUserId to guarantee test isolation
+    await prisma.affiliateClick.deleteMany({ where: { affiliate: { userId: partnerUserId } } });
+    await prisma.affiliateReferral.deleteMany({ where: { affiliate: { userId: partnerUserId } } });
+    await prisma.affiliatePayout.deleteMany({ where: { affiliate: { userId: partnerUserId } } });
+    await prisma.affiliateAccount.deleteMany({ where: { userId: partnerUserId } });
+
     // Gate 37: Unauthenticated access to /affiliates/me returns 401
     const a37 = await apiGet("/v1/affiliates/me");
     if (a37.status !== 401) {

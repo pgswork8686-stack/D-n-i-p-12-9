@@ -31,6 +31,8 @@ async function ensureApiRunning(): Promise<void> {
     stdio: "pipe",
     env: { ...process.env, PORT: TEST_PORT, API_URL: API_BASE },
   });
+  apiProcess.stdout?.resume();
+  apiProcess.stderr?.resume();
 
   const startTime = Date.now();
   while (Date.now() - startTime < 30000) {

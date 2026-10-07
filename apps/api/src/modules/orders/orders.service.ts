@@ -119,8 +119,8 @@ export class OrdersService {
     userId: string,
     key: string,
     requestFingerprint: string,
-    maxWaitMs: number = 4000,
-    intervalMs: number = 25,
+    maxWaitMs: number = 8000,
+    intervalMs: number = 50,
   ): Promise<CheckoutResponse> {
     const startTime = Date.now();
     while (Date.now() - startTime < maxWaitMs) {
