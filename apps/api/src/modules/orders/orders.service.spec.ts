@@ -141,7 +141,19 @@ describe("OrdersService", () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it("creates Order, immutable OrderItem snapshots, and Payment atomically via CAS cart claim", async () => {
+    // The initial Payment is tagged TEST only when the local test provider is
+    // explicitly enabled; otherwise it is UNASSIGNED until a real provider
+    // session (sepay/stripe) binds it. Set the flag explicitly so the result
+    // does not depend on the runner's environment (turbo filters env vars).
+    it.each([
+      { testProvider: true, expectedProvider: "TEST" },
+      { testProvider: false, expectedProvider: "UNASSIGNED" },
+    ])(
+      "creates Order, immutable OrderItem snapshots, and Payment atomically via CAS cart claim (test provider enabled: $testProvider)",
+      async ({ testProvider, expectedProvider }) => {
+      const previousFlag = process.env.ENABLE_TEST_PAYMENT_PROVIDER;
+      process.env.ENABLE_TEST_PAYMENT_PROVIDER = testProvider ? "true" : "false";
+      try {
       const mockCart = {
         id: "cart-1",
         userId: "user-1",
@@ -277,7 +289,7 @@ describe("OrdersService", () => {
         expect.objectContaining({
           data: expect.objectContaining({
             orderId: "order-123",
-            provider: "TEST",
+            provider: expectedProvider,
             status: "PENDING",
             amount: 11800,
             currency: Currency.USD,
@@ -299,7 +311,15 @@ describe("OrdersService", () => {
       expect(response.order.status).toBe(OrderStatus.PENDING_PAYMENT);
       expect(response.order.totalAmount).toBe(11800);
       expect(response.payment.status).toBe("PENDING");
-      expect(response.testPaymentAction?.paymentId).toBe("pay-123");
+      if (testProvider) {
+        expect(response.testPaymentAction?.paymentId).toBe("pay-123");
+      } else {
+        expect(response.testPaymentAction).toBeUndefined();
+      }
+      } finally {
+        if (previousFlag === undefined) delete process.env.ENABLE_TEST_PAYMENT_PROVIDER;
+        else process.env.ENABLE_TEST_PAYMENT_PROVIDER = previousFlag;
+      }
     });
 
     it("throws ConflictException if cart claim CAS loses race (count == 0)", async () => {
