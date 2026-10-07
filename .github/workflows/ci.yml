@@ -63,23 +63,43 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Start infrastructure
+      # Same infrastructure steps as the last green workflow (phase12-ci.yml):
+      # MinIO images come from quay.io, not Docker Hub.
+      - name: Start PostgreSQL and Redis
         run: |
           docker compose up -d postgres redis
-          docker run -d --name nexustheme-minio -p 9000:9000 -p 9001:9001 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2024-11-07T00-52-28Z server /data --console-address ":9001"
-          for i in $(seq 1 60); do
-            docker compose exec -T postgres pg_isready -U postgres && break
-            sleep 1
+          for i in {1..40}; do
+            if docker exec nexustheme-postgres pg_isready -U postgres -d marketplace >/dev/null 2>&1 && \
+               docker exec nexustheme-redis redis-cli ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 2
           done
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:9000/minio/health/live && break
-            sleep 1
+          docker compose ps
+          exit 1
+
+      - name: Start private MinIO
+        run: |
+          docker run -d --name nexustheme-minio \
+            -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            quay.io/minio/minio:latest server /data --console-address ':9001'
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
           done
-          docker run --rm --network host \
-            -e MC_HOST_local=http://minioadmin:minioadmin@localhost:9000 \
-            minio/mc:RELEASE.2024-11-05T11-41-28Z mb local/marketplace-dev || true
+          docker logs nexustheme-minio
+          exit 1
+
+      - name: Create private MinIO bucket
+        run: |
+          docker run --rm --network host --entrypoint /bin/sh quay.io/minio/mc:latest -c '
+            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
+            mc mb --ignore-existing local/marketplace-dev
+          '
 
       - name: Setup test database
         run: |
