@@ -41,8 +41,9 @@
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "turbo": "^2.4.4",
+    "@next/swc-wasm-nodejs": "14.2.26",
     "prettier": "^3.5.2",
+    "turbo": "^2.4.4",
     "typescript": "^5.8.2"
   }
 }

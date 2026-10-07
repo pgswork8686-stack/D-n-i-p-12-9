@@ -56,9 +56,8 @@ async function ensureApiRunning(): Promise<void> {
     env: { ...process.env, PORT: TEST_PORT, API_URL: API_BASE },
   });
 
-  apiProcess.stderr?.on("data", (data) => {
-    // console.error(`[api-err] ${data.toString()}`);
-  });
+  apiProcess.stdout?.resume();
+  apiProcess.stderr?.resume();
 
   const startTime = Date.now();
   while (Date.now() - startTime < 30000) {

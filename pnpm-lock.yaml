@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@next/swc-wasm-nodejs':
+        specifier: 14.2.26
+        version: 14.2.26
       prettier:
         specifier: ^3.5.2
         version: 3.9.6
@@ -1176,6 +1179,9 @@ packages:
     cpu: [x64]
     os: [linux]
     libc: [musl]
+
+  '@next/swc-wasm-nodejs@14.2.26':
+    resolution: {integrity: sha512-j32Zuuv46/Mzu1Axddwp+WDktkiTlCTCiEx7a+qiYQKvSCnEPZpMJqt32uE7myG7NvUCoRQwv6ypmKs74/bsow==}
 
   '@next/swc-win32-arm64-msvc@14.2.26':
     resolution: {integrity: sha512-5auwsMVzT7wbB2CZXQxDctpWbdEnEW/e66DyXO1DcgHxIyhP06awu+rHKshZE+lPLIGiwtjo7bsyeuubewwxMw==}
@@ -5500,6 +5506,8 @@ snapshots:
 
   '@next/swc-linux-x64-musl@14.2.26':
     optional: true
+
+  '@next/swc-wasm-nodejs@14.2.26': {}
 
   '@next/swc-win32-arm64-msvc@14.2.26':
     optional: true

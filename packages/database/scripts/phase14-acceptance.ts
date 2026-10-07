@@ -74,6 +74,8 @@ async function ensureApiRunning(): Promise<boolean> {
         },
       },
     );
+    apiProcess.stdout?.resume();
+    apiProcess.stderr?.resume();
 
     const start = Date.now();
     while (Date.now() - start < 10000) {
