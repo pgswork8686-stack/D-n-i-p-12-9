@@ -216,7 +216,16 @@ async function runPhase18Acceptance() {
 
   const backupScriptContent = backupScriptExists ? fs.readFileSync(backupScriptPath, "utf-8") : "";
   assertGate(38, "Backup script enforces strict bash error handling (set -euo pipefail)", backupScriptContent.includes("set -euo pipefail"));
-  assertGate(39, "Backup script specifies maximum gzip compression (gzip -9)", backupScriptContent.includes("gzip -9"));
+  // Production runs pg_dump through the private Docker network; compression level is
+  // deliberately configurable for reasonable CPU usage, not hardcoded to gzip -9.
+  assertGate(
+    39,
+    "Backup streams private Docker Postgres into a compressed and integrity-checked archive",
+    backupScriptContent.includes('compose exec -T postgres') &&
+      /gzip -[1-9]/.test(backupScriptContent) &&
+      backupScriptContent.includes('gzip -t "$TEMP_FILE"') &&
+      backupScriptContent.includes('set -euo pipefail'),
+  );
   assertGate(40, "Backup script generates SHA256 checksum file alongside backup", backupScriptContent.includes("sha256") || backupScriptContent.includes("shasum"));
   assertGate(41, "Backup script enforces retention cleanup policy (mtime +30)", backupScriptContent.includes("-mtime +30"));
 
@@ -225,7 +234,16 @@ async function runPhase18Acceptance() {
   assertGate(42, "Restore script infra/scripts/restore-db.sh exists on disk", restoreScriptExists);
 
   const restoreScriptContent = restoreScriptExists ? fs.readFileSync(restoreScriptPath, "utf-8") : "";
-  assertGate(43, "Restore script verifies cryptographic SHA256 checksum before execution", restoreScriptContent.includes("EXPECTED_SUM") && restoreScriptContent.includes("ACTUAL_SUM"));
+  assertGate(
+    43,
+    "Production restore rejects missing or mismatched SHA256 checksum before running psql",
+    restoreScriptContent.includes('BACKUP_FILE.sha256') &&
+      restoreScriptContent.includes('EXPECTED=') &&
+      restoreScriptContent.includes('ACTUAL=') &&
+      restoreScriptContent.includes('"$EXPECTED" == "$ACTUAL"') &&
+      restoreScriptContent.includes('refusing production restore') &&
+      restoreScriptContent.indexOf('checksum mismatch') < restoreScriptContent.indexOf('gzip -dc "$BACKUP_FILE"'),
+  );
   assertGate(44, "Restore script executes restoration in a single atomic transaction (--single-transaction)", restoreScriptContent.includes("--single-transaction"));
 
   const verifyScriptPath = path.join(repoRoot, "infra/scripts/verify-backup.sh");
