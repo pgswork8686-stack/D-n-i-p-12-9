@@ -109,6 +109,14 @@ jobs:
           # Phase 5-7 need the seeded admin. seed:all omits dev users.
           pnpm db:seed:local
 
+      - name: Verify operational shell scripts
+        run: |
+          bash -n infra/scripts/backup-db.sh
+          bash -n infra/scripts/restore-db.sh
+          bash -n infra/scripts/verify-backup.sh
+          bash -n infra/scripts/production-preflight.sh
+          bash -n infra/scripts/staging-smoke.sh
+
       - name: Lint
         run: pnpm lint
 
