@@ -28,13 +28,18 @@ B3 và B4 có thể chạy song song sau B2; B5 song song với B4.
 
 ## 3. Chế độ mô phỏng (B7)
 
-### 3.1. Cách làm
+### 3.1. Cách làm (theo spec §6)
 
-- Bật bằng `NEXT_PUBLIC_DEMO_MODE=1`, chỉ trong `pnpm dev:demo` (script mới) — không bao giờ trong `build` production.
-- Dùng **MSW** (Mock Service Worker) để chặn request của `@nexus/sdk` (SDK gọi `fetch` toàn cục — `packages/sdk/src/client.ts:205`) và trả fixture. Không sửa SDK, không dựng backend thứ hai. Trang Server Component của web (`lib/server-api.ts`) cần MSW phía Node qua `instrumentation.ts` — **rủi ro kỹ thuật**, sẽ thử trước trong B7; nếu không ổn định thì dùng adapter fixture ở tầng `server-api.ts` khi bật demo.
-- Fixture cố định, có hạt giống (seed) để tái lập; nút **Đặt lại** xóa trạng thái trong bộ nhớ.
-- Thanh công cụ demo nổi ở mọi trang: badge **DỮ LIỆU MÔ PHỎNG**, chọn persona (khách chưa mua · khách đã mua theme + UI kit · admin · content editor · khách bị 403), chọn tình huống theo màn (vd. ST06: chờ → đã xác nhận / sai số tiền; PT03: tải được / hết hạn cập nhật / rate limit / lỗi storage), nút đặt lại.
-- Màn `DEMO_ONLY` nằm dưới `/demo/*` và luôn có nhãn nêu lý do (vd. "Chưa có API gửi yêu cầu tư vấn — không có yêu cầu nào được gửi").
+Ba chế độ: `INTEGRATED_LOCAL` (API/DB/Redis/MinIO local thật + `pnpm db:seed:local`) · `DEMO_SIMULATION` · `PRODUCTION`.
+
+- **Ưu tiên 1 — dùng stack local thật** cho mọi luồng đã có API (đa số 50 màn). Thanh toán chỉ qua test provider sẵn có (đã bị chặn ở production).
+- **Ưu tiên 2 — một demo API dùng chung** (`apps/demo-api` hoặc `tools/demo-api`, quyết định ở B7) cho phần thiếu backend và cho các tình huống khó dựng trên stack thật (lỗi storage, rate limit, sai số tiền). Một server stateful duy nhất cho cả 3 app để dữ liệu liên thông (khách tạo ticket ở Portal → Admin thấy). Server này **mô phỏng chuỗi** payment verified → order PAID → entitlement; React không bao giờ tự đặt trạng thái. **Không** dùng MSW riêng từng app (spec §6.1 cấm). Chỉ tồn tại khi dev, không có Dockerfile production.
+- Cờ `FRONTEND_DEMO_MODE` (mới, mặc định `false`); chỉ có hiệu lực khi `NODE_ENV !== 'production'`. Khi bật, các app trỏ API base URL sang demo API.
+- State demo tách theo `demoSessionId`; **Đặt lại** xóa namespace đó, có xác nhận.
+- **Demo Control Center** tại web `/dev/showcase` (đã kiểm tra: web chưa có route `/dev`), không tính là màn 51: badge **DỮ LIỆU MÔ PHỎNG**, card ngang Storefront 13 · Portal 14 · Admin 20 · System 3 (trạng thái Đã code / Chỉ demo / Đang thiếu), persona (Khách chưa mua · Khách đã mua · Nhân sự có quyền · Nhân sự không đủ quyền), tình huống (Default · Empty · Loading · Error · Forbidden · Conflict · Expired — chỉ hiện cái có nghĩa cho từng màn), 50 link theo registry, nhật ký sự kiện demo.
+- Fixture theo spec §6.3 (8–12 sản phẩm, 5 bài published + 2 draft, 2 khách + 1 không quyền, 1 payment pending / 1 paid / 1 sai số tiền, …), mọi tên có nhãn `DEMO`.
+- 16 kịch bản SIM01–SIM16 (spec §6.4), mỗi kịch bản có Playwright test + screenshot ở B8.
+- Màn `DEMO_ONLY` luôn có nhãn nêu lý do (vd. "Chưa có API gửi yêu cầu tư vấn — không có yêu cầu nào được gửi").
 
 ### 3.2. Điều demo không làm
 
@@ -42,8 +47,8 @@ Không gọi API thật khi bật demo; không webhook thanh toán; không seed 
 
 ### 3.3. Hàng rào production
 
-- `next.config` ném lỗi khi `NODE_ENV=production` và `NEXT_PUBLIC_DEMO_MODE=1`.
-- Mã demo nạp bằng `import()` động sau kiểm tra cờ, để không lọt vào bundle production; B8 thêm kiểm tra grep bundle production không chứa chuỗi `DỮ LIỆU MÔ PHỎNG`.
+- `next.config` ném lỗi khi `NODE_ENV=production` và `FRONTEND_DEMO_MODE=true`.
+- Mã demo (control center, badge) nạp bằng `import()` động sau kiểm tra cờ, để không lọt vào bundle production; `/dev/showcase` trả 404 ở production. B8 thêm kiểm tra grep bundle production không chứa chuỗi `DỮ LIỆU MÔ PHỎNG`.
 
 ### 3.4. Kiểm thử tích hợp thật (tách khỏi demo)
 
@@ -55,7 +60,7 @@ E2E chạy trên stack local hiện có (`docker-compose.yml`, `pnpm db:seed:loc
 |---|---|---|---|
 | `lucide-react` cho portal/admin | B4, B5 | thay emoji; web đã dùng `^0.460.0` | cùng phiên bản với web |
 | `@radix-ui/react-dialog`, `react-dropdown-menu` | B1 | focus trap/Escape cho ConfirmDialog, Drawer | MIT; kiểm tra advisory khi thêm |
-| `msw` | B7 | mô phỏng request | chỉ devDependency |
+| (framework cho demo API) | B7 | server mô phỏng dùng chung | chọn ở B7, ưu tiên thứ đã có trong repo; chỉ dev |
 | `@playwright/test`, `@axe-core/playwright` | B8 | E2E + a11y | devDependency |
 
 TanStack Query/Table, React Hook Form, Zod: **chưa thêm** — các trang hiện dùng state cục bộ ổn; chỉ đề xuất nếu một batch cụ thể cần, kèm lý do trong PR.
@@ -64,9 +69,9 @@ TanStack Query/Table, React Hook Form, Zod: **chưa thêm** — các trang hiệ
 
 | # | Câu hỏi | Chặn batch | Đề xuất |
 |---|---|---|---|
-| Q1 | Ảnh tham chiếu ST01 chưa có trong repo. Cần chép vào `docs/frontend/references/ST01-homepage.png` (desktop) và bản mobile nếu có. | B2 | — |
+| Q1 | ~~Ảnh tham chiếu ST01~~ — **đã có** (`references/ST01-homepage.png`, ghi chú ở `references/ST01-layout-notes.md`). Còn thiếu: bản gốc độ phân giải cao (ảnh hiện chỉ 374 px rộng) và bản mobile 390 nếu có. | B2 (độ chính xác chi tiết) | Xuất lại từ Stitch ở 1440 px |
 | Q2 | Admin đang có hai cây route: `/admin/products`, `/admin/orders` và `/content`, `/automation` (kèm alias `/admin/content`). Chọn một chuẩn? | B5, B6 | Chuẩn hóa về `/admin/*`, route gốc cũ chuyển hướng 308 để không gãy link. |
 | Q3 | ST07: kết quả thanh toán đang có ở hai nơi — web `/orders/[id]` và portal `/payment/result`. | B3 | Web `/orders/[id]` là ST07 (luồng mua kết thúc trên storefront); portal `/payment/result` giữ nguyên làm trang quay về sau Stripe. |
 | Q4 | Khoảng trống backend (route-audit §4): tư vấn, trang `PAGE`, sửa hồ sơ, hàng đợi đối soát, media, `total`. Có muốn mở PR backend riêng cho mục nào không? | không chặn — mặc định `DEMO_ONLY` | Ưu tiên endpoint public `PAGE` (ST13 cần cho chính sách thật) và `total` cho list khách hàng. |
 | Q5 | Supabase MFA có được bật cho dự án không? | PT14 (phần 2FA) | Giữ `BLOCKED` tới khi xác nhận. |
-| Q6 | Phần spec sau PT11 bị cắt khi dán (AD01–AD20, SY, chi tiết mô phỏng, QA). | B5–B8 | Gửi lại phần còn lại; tới lúc đó AD/SY dựng theo bảng §5.0 của spec + API thực tế. |
+| Q6 | ~~Spec bị cắt~~ — **đã có bản đầy đủ** (`NEXUSTHEME_CLAUDE_CODE_50_SCREENS_FULL_SYSTEM_IMPLEMENTATION.md`, 2016 dòng); §3 kế hoạch này đã cập nhật theo spec §6. | — | — |
