@@ -17,9 +17,14 @@ export function serverApiUrl(): string {
   return resolveApiUrl();
 }
 
-async function getJson<T>(path: string, fallback: T): Promise<T> {
+/** Pass `{ revalidate }` for data shared by every page (layout nav). */
+type CacheOption = { revalidate?: number };
+
+async function getJson<T>(path: string, fallback: T, cache: CacheOption = {}): Promise<T> {
   try {
-    const res = await fetch(`${serverApiUrl()}${path}`, { cache: "no-store" });
+    const init: RequestInit & { next?: { revalidate: number } } =
+      cache.revalidate !== undefined ? { next: { revalidate: cache.revalidate } } : { cache: "no-store" };
+    const res = await fetch(`${serverApiUrl()}${path}`, init);
     if (!res.ok) return fallback;
     return (await res.json()) as T;
   } catch {
@@ -38,8 +43,8 @@ export function listProducts(params: Record<string, string | undefined>) {
   );
 }
 
-export function listCategories() {
-  return getJson<CategoryDto[]>("/categories", []);
+export function listCategories(cache: CacheOption = {}) {
+  return getJson<CategoryDto[]>("/categories", [], cache);
 }
 
 export function listPosts(params: Record<string, string | undefined>) {

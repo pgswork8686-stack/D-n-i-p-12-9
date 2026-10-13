@@ -1,13 +1,11 @@
 import Link from "next/link";
 import { Package } from "lucide-react";
 import type { PublicProductListItemDto } from "@nexus/contracts";
-import { money, productTypeLabel, DEFAULT_CURRENCY } from "../lib/format";
+import { money, productTypeLabel } from "../lib/format";
+import { pickPrice } from "../lib/home-catalog";
 
 export function ProductCard({ product }: { product: PublicProductListItemDto }) {
-  const price =
-    product.minPricesByCurrency?.[DEFAULT_CURRENCY] ??
-    (product.minPrice?.currency === DEFAULT_CURRENCY ? product.minPrice.amount : undefined);
-  const fallbackPrice = price === undefined && product.minPrice ? product.minPrice : null;
+  const price = pickPrice(product);
 
   return (
     <Link
@@ -44,13 +42,7 @@ export function ProductCard({ product }: { product: PublicProductListItemDto }) 
         )}
         <div className="mt-auto pt-3">
           <span className="text-xs text-muted">Từ </span>
-          <span className="text-lg font-bold text-ink">
-            {price !== undefined
-              ? money(price, DEFAULT_CURRENCY)
-              : fallbackPrice
-                ? money(fallbackPrice.amount, fallbackPrice.currency)
-                : "Liên hệ"}
-          </span>
+          <span className="text-lg font-bold text-ink">{price ? money(price.amount, price.currency) : "Liên hệ"}</span>
         </div>
       </div>
     </Link>

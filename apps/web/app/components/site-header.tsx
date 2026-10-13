@@ -7,17 +7,30 @@ import { LogOut, Menu, Search, ShoppingBag, User, X } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCart } from "../lib/cart";
 import { Logo } from "./logo";
-
-const NAV = [
-  { href: "/products", label: "Sản phẩm" },
-  { href: "/products?productType=LICENSED_SOFTWARE", label: "Plugin & phần mềm" },
-  { href: "/products?productType=DOWNLOADABLE_ASSET", label: "Theme & UI Kit" },
-  { href: "/blog", label: "Blog" },
-];
+import type { NavCategory } from "../lib/home-catalog";
 
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
 
-export function SiteHeader() {
+interface NavItem {
+  href: string;
+  label: string;
+  /** Category links only fit on wide screens; the mobile drawer lists all. */
+  wideOnly?: boolean;
+  /** Shown only from 2xl (≥1536px) so the header never overflows at 1280px. */
+  extraWideOnly?: boolean;
+}
+
+export function SiteHeader({ categories = [] }: { categories?: NavCategory[] }) {
+  const NAV: NavItem[] = [
+    { href: "/products", label: "Sản phẩm" },
+    ...categories.map((c, i) => ({
+      href: `/products?category=${encodeURIComponent(c.slug)}`,
+      label: c.name,
+      wideOnly: true,
+      extraWideOnly: i >= 5,
+    })),
+    { href: "/blog", label: "Blog" },
+  ];
   const { user, logout } = useAuth();
   const { cart } = useCart();
   const pathname = usePathname();
@@ -41,19 +54,19 @@ export function SiteHeader() {
       <div className="container-site flex h-16 items-center gap-4">
         <Logo />
 
-        <nav aria-label="Điều hướng chính" className="ml-4 hidden items-center gap-1 lg:flex">
+        <nav aria-label="Điều hướng chính" className="ml-4 hidden items-center gap-0.5 lg:flex">
           {NAV.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className="rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-brand-soft hover:text-brand"
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-body transition-colors hover:bg-brand-soft hover:text-brand ${item.extraWideOnly ? "hidden 2xl:inline-flex" : item.wideOnly ? "hidden xl:inline-flex" : "inline-flex"}`}
             >
               {item.label}
             </Link>
           ))}
         </nav>
 
-        <form onSubmit={submitSearch} role="search" className="ml-auto hidden max-w-xs flex-1 md:block">
+        <form onSubmit={submitSearch} role="search" className="ml-auto hidden max-w-xs flex-1 md:block xl:hidden">
           <label htmlFor="site-search" className="sr-only">
             Tìm sản phẩm
           </label>
@@ -70,7 +83,14 @@ export function SiteHeader() {
           </div>
         </form>
 
-        <div className="ml-auto flex items-center gap-1 md:ml-2">
+        <div className="ml-auto flex items-center gap-1 md:ml-2 xl:ml-auto">
+          <Link
+            href="/products"
+            aria-label="Tìm sản phẩm"
+            className="hidden h-11 w-11 items-center justify-center rounded-xl text-ink transition-colors hover:bg-brand-soft xl:inline-flex"
+          >
+            <Search aria-hidden className="h-5 w-5" />
+          </Link>
           <Link
             href="/cart"
             aria-label={`Giỏ hàng, ${count} sản phẩm`}

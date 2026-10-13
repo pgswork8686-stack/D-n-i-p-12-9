@@ -4,6 +4,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 import { SiteHeader } from "./components/site-header";
 import { SiteFooter } from "./components/site-footer";
+import { listCategories } from "./lib/server-api";
+import { navCategories } from "./lib/home-catalog";
 
 const sans = Be_Vietnam_Pro({
   subsets: ["vietnamese", "latin"],
@@ -27,7 +29,10 @@ export const viewport: Viewport = {
   themeColor: "#3155D9",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Nav groups come from the catalog (Admin → Danh mục), cached for 5 minutes
+  // so pages that are otherwise static are not forced to render dynamically.
+  const categories = navCategories(await listCategories({ revalidate: 300 }));
   return (
     <html lang="vi" className={sans.variable}>
       <body className="flex min-h-screen flex-col antialiased">
@@ -38,11 +43,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           Bỏ qua tới nội dung
         </a>
         <Providers>
-          <SiteHeader />
+          <SiteHeader categories={categories} />
           <main id="main" className="flex-1">
             {children}
           </main>
-          <SiteFooter />
+          <SiteFooter categories={categories} />
         </Providers>
       </body>
     </html>
