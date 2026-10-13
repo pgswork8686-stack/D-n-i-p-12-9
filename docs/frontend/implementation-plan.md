@@ -2,13 +2,27 @@
 
 Dựa trên [route-audit.md](route-audit.md) và [screen-registry.md](screen-registry.md). Mỗi batch = một PR riêng vào `main`, CI (`ci.yml`) phải xanh trước khi merge. Không batch nào sửa `apps/api`, `apps/worker`, `packages/database` hay quyền RBAC.
 
+**Nguồn thiết kế:** file Figma "Hệ Thống Figma PGS" — trang `01 · Demo — Luồng tương tác` có đủ 50 màn (+3 overlay xác nhận) và 17 flow prototype; trang `00 · Design System` chứa token và component. Code bám theo Figma; chỗ Figma và API thực tế khác nhau thì API thắng và ghi lại trong PR.
+
+### Definition of Done cho mỗi màn
+
+Một màn chỉ được tính "xong" khi đủ cả 5 điều:
+
+1. Có **route chạy thật** trong app tương ứng (hoặc route `DEMO_ONLY` có nhãn, nếu thiếu API).
+2. **Responsive** ở 1440 / 768 / 390 px, không cuộn ngang toàn trang.
+3. Đủ trạng thái **loading / empty / error / 403–404** áp dụng cho màn đó.
+4. Có **kiểm thử**: test hành vi (Jest/Testing Library) cho logic mới + Playwright smoke mở route và chụp ảnh ở 2 kích thước.
+5. `lint`, `typecheck`, `test`, `build` đều xanh — log đính kèm PR.
+
+Thiết kế Figma xong **không** được tính là màn đã triển khai.
+
 ## 1. Thứ tự batch
 
 | Batch | Nội dung | Màn | Phụ thuộc | Điều kiện xong |
 |---|---|---|---|---|
 | **B0** | Audit + registry + kế hoạch (PR này) | — | — | Chủ dự án duyệt §5 |
-| **B1** | Nền tảng giao diện: preset Tailwind chung (token ST01, Be Vietnam Pro) cho cả 3 app; chuyển `EmptyState`, `ErrorState`, `Skeleton`, `StatusBadge` từ portal lên `packages/ui`; thêm `PageHeader`, `SectionHeader`, `DataTable` (bảng → list trên mobile), `ConfirmDialog`, `FormField` + `ErrorSummary`, `ResponsiveDrawer`, `Toast`; trang hệ thống 403/404/500 | SY01–SY03 | B0 | 3 app build; axe không có lỗi nghiêm trọng trên SY01–03 |
-| **B2** | **Pilot ST01** — dựng trang chủ theo ảnh Stitch, gửi ảnh chụp desktop 1440 + mobile 390 để duyệt **trước khi** làm tiếp | ST01 | B1, ảnh tham chiếu | Chủ dự án duyệt pilot |
+| **B1** | Nền tảng giao diện: preset Tailwind chung (token ST01, Be Vietnam Pro) cho cả 3 app; component mới trong `packages/ui` (`PageHeader`, `SectionHeader`, `SummaryStrip`, `DataTable`, `Pagination`, `StatusBadge`, `Notice`, `EmptyState`, `ErrorState`, `Skeleton`, `ConfirmDialog`, `ResponsiveDrawer`, `FormField`, `ErrorSummary`, `Toast`, `SystemPage`); trang hệ thống 403/404/500 ở cả 3 app. Các component cũ trong `apps/portal/app/components` giữ nguyên tới B4 (đang được test dùng) | SY01–SY03 | B0 | 3 app build; axe không có lỗi nghiêm trọng trên SY01–03 |
+| **B2** | **Pilot ST01** — dựng trang chủ theo Figma `ST01 · Trang chủ` (bản đã có Web App / Mobile App / Chatbot AI), chụp desktop 1440 + mobile 390 để duyệt **trước khi** làm tiếp | ST01 | B1 | Chủ dự án duyệt pilot |
 | **B3** | Storefront còn lại + ST10 khôi phục mật khẩu | ST02–ST12 | B2 đã duyệt | Luồng mua: ST02 → ST03 → ST04 → ST05 → ST06 chạy được trên stack local |
 | **B4** | Portal: Việt hóa toàn bộ, shell mới (icon Lucide thay emoji, sidebar thu gọn được), 14 màn + PT14 đổi mật khẩu | PT01–PT14 | B1 | Không còn chuỗi tiếng Anh; không hiển thị số tổng tự tính |
 | **B5** | Admin phần 1: shell admin (sidebar theo domain, ẩn mục theo permission từ `/auth/me`), thay trang chẩn đoán, chuyển `fetch()` thô sang SDK; catalog + đơn hàng | AD01–AD09 | B1, Q2 | Trang dev (nút token giả) chỉ còn khi `isDevAuthToolsEnabled()` |
@@ -54,12 +68,26 @@ Không gọi API thật khi bật demo; không webhook thanh toán; không seed 
 
 E2E chạy trên stack local hiện có (`docker-compose.yml`, `pnpm db:seed:local`, test payment provider vốn đã bị chặn ở production) — đây mới là bằng chứng backend hoạt động; demo thì không chứng minh điều đó.
 
+### 3.5. Luồng demo bắt buộc chạy được: sản phẩm → giỏ → thanh toán giả lập → đơn → license → tải file
+
+| Bước | Màn | Ở `INTEGRATED_LOCAL` | Ở `DEMO_SIMULATION` |
+|---|---|---|---|
+| Chọn sản phẩm | ST02 → ST03 | `GET /products`, `GET /products/:slug` | fixture catalog (nhãn DEMO) |
+| Giỏ hàng | ST04 | `POST/GET /cart` | demo API giữ giỏ theo `demoSessionId` |
+| Đặt hàng | ST05 | `POST /checkout` — máy chủ tính giá, đơn `PENDING_PAYMENT` | demo API tạo đơn chờ |
+| Thanh toán giả lập | ST06 → ST07 | **test payment provider sẵn có**, gọi qua webhook ký bằng `TEST_PAYMENT_WEBHOOK_SECRET`; backend tự xác thực rồi chuyển `PAID` + outbox. Provider này đã bị chặn khi `NODE_ENV=production` | nút "Mô phỏng ngân hàng báo có" trong Demo Control Center → demo API chạy chuỗi verified → PAID → entitlement |
+| Xem đơn | PT08 → PT09 | `GET /orders`, `GET /orders/:id` | demo API |
+| License | PT05 → PT06 | worker cấp `InternalLicense`; key che, `POST /licenses/:id/reveal` | key giả dạng `NXS-DEMO-…` |
+| Tải file | PT03 | `POST /v1/downloads/request` → URL ký số MinIO local | URL tới file mẫu nằm trong demo API, không có file production |
+
+Frontend ở cả hai chế độ chỉ **gọi API rồi đọc lại trạng thái**; không chỗ nào trong React đặt `PAID` hay tạo entitlement. Không webhook nào trỏ tới domain production.
+
 ## 4. Thư viện dự kiến thêm
 
 | Thư viện | Batch | Lý do | Ghi chú |
 |---|---|---|---|
 | `lucide-react` cho portal/admin | B4, B5 | thay emoji; web đã dùng `^0.460.0` | cùng phiên bản với web |
-| `@radix-ui/react-dialog`, `react-dropdown-menu` | B1 | focus trap/Escape cho ConfirmDialog, Drawer | MIT; kiểm tra advisory khi thêm |
+| ~~`@radix-ui/react-dialog`~~ | B1 | **không thêm** — `ConfirmDialog`/`ResponsiveDrawer` dùng `<dialog>` gốc (`showModal()` đã khóa focus, Escape, trả focus) | |
 | (framework cho demo API) | B7 | server mô phỏng dùng chung | chọn ở B7, ưu tiên thứ đã có trong repo; chỉ dev |
 | `@playwright/test`, `@axe-core/playwright` | B8 | E2E + a11y | devDependency |
 
@@ -70,8 +98,8 @@ TanStack Query/Table, React Hook Form, Zod: **chưa thêm** — các trang hiệ
 | # | Câu hỏi | Chặn batch | Đề xuất |
 |---|---|---|---|
 | Q1 | ~~Ảnh tham chiếu ST01~~ — **đã có** (`references/ST01-homepage.png`, ghi chú ở `references/ST01-layout-notes.md`). Còn thiếu: bản gốc độ phân giải cao (ảnh hiện chỉ 374 px rộng) và bản mobile 390 nếu có. | B2 (độ chính xác chi tiết) | Xuất lại từ Stitch ở 1440 px |
-| Q2 | Admin đang có hai cây route: `/admin/products`, `/admin/orders` và `/content`, `/automation` (kèm alias `/admin/content`). Chọn một chuẩn? | B5, B6 | Chuẩn hóa về `/admin/*`, route gốc cũ chuyển hướng 308 để không gãy link. |
-| Q3 | ST07: kết quả thanh toán đang có ở hai nơi — web `/orders/[id]` và portal `/payment/result`. | B3 | Web `/orders/[id]` là ST07 (luồng mua kết thúc trên storefront); portal `/payment/result` giữ nguyên làm trang quay về sau Stripe. |
+| Q2 | ~~Hai cây route Admin~~ — **đã chốt** (chủ dự án giao tự quyết): chuẩn hóa về `/admin/*`, route gốc cũ chuyển hướng 308. | B5, B6 | — |
+| Q3 | ~~Hai trang kết quả thanh toán~~ — **đã chốt**: web `/orders/[id]` là ST07; portal `/payment/result` giữ nguyên làm trang quay về sau Stripe. | B3 | — |
 | Q4 | Khoảng trống backend (route-audit §4): tư vấn, trang `PAGE`, sửa hồ sơ, hàng đợi đối soát, media, `total`. Có muốn mở PR backend riêng cho mục nào không? | không chặn — mặc định `DEMO_ONLY` | Ưu tiên endpoint public `PAGE` (ST13 cần cho chính sách thật) và `total` cho list khách hàng. |
 | Q5 | Supabase MFA có được bật cho dự án không? | PT14 (phần 2FA) | Giữ `BLOCKED` tới khi xác nhận. |
 | Q6 | ~~Spec bị cắt~~ — **đã có bản đầy đủ** (`NEXUSTHEME_CLAUDE_CODE_50_SCREENS_FULL_SYSTEM_IMPLEMENTATION.md`, 2016 dòng); §3 kế hoạch này đã cập nhật theo spec §6. | — | — |
