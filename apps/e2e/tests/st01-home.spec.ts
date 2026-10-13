@@ -7,6 +7,9 @@ type Category = { slug: string; name: string; parentId?: string | null; sortOrde
 // Section headings in the order of the Figma ST01 frame. Topic rows are only
 // rendered when the catalog has a matching category, so the seeded demo data
 // (apps/e2e/fixtures) must be present.
+/** Which ST01 consultation block the stack under test serves: `cta` (production default) or `demo` (FEATURE_CONSULT_FORM_DEMO=true). */
+const CONSULT_MODE = process.env.E2E_CONSULT_MODE === "demo" ? "demo" : "cta";
+
 const SECTION_ORDER = [
   "hero-heading",
   "latest-heading",
@@ -136,7 +139,18 @@ test.describe("ST01 · Trang chủ", () => {
     }
   });
 
+  test("production mode: no simulated form, the consultation CTA goes to a real channel", async ({ page }) => {
+    test.skip(CONSULT_MODE !== "cta", "stack runs with FEATURE_CONSULT_FORM_DEMO=true (E2E_CONSULT_MODE=demo)");
+    await page.goto("/");
+    const section = page.locator("section[aria-labelledby=consult-heading]");
+    await expect(section.locator("form")).toHaveCount(0);
+    await expect(section.getByText("Mô phỏng")).toHaveCount(0);
+    const cta = section.getByRole("link", { name: /Gửi yêu cầu tư vấn/ });
+    await expect(cta).toHaveAttribute("href", /\/tickets$/);
+  });
+
   test("consultation form validates and never sends a request", async ({ page }) => {
+    test.skip(CONSULT_MODE !== "demo", "simulated form is off (FEATURE_CONSULT_FORM_DEMO not true) — production configuration");
     const writes: string[] = [];
     page.on("request", (r) => r.method() !== "GET" && !r.url().includes("/_next/") && writes.push(`${r.method()} ${r.url()}`));
     await page.goto("/");

@@ -62,7 +62,7 @@ Còn mở / chưa kiểm tra:
 | # | Mức | Nội dung |
 |---|---|---|
 | O1 | Major (ra mắt) | **Không có API quản lý ảnh sản phẩm** → trên production, mọi thẻ sẽ là hình thay thế. Không chặn duyệt code ST01 nhưng chặn ra mắt storefront (đề xuất P2) |
-| O2 | Quyết định | Form tư vấn hiện vẫn hiển thị ở production với nhãn "Mô phỏng". Cần chọn: ẩn đến khi có API (P3) hay giữ nhãn |
+| O2 | ~~Quyết định~~ **Đã xử lý (vòng 2)** | Chủ dự án quyết định production không hiển thị form mô phỏng → cờ `FEATURE_CONSULT_FORM_DEMO` (xem §8) |
 | O3 | Chưa test | Safari/Firefox, thiết bị thật, Lighthouse/Core Web Vitals |
 | O4 | Minor | Ảnh dùng `<img>` (không phải `next/image`); thẻ sản phẩm có `width/height` và khung tỉ lệ cố định nên không gây CLS, nhưng chưa có ảnh responsive nhiều kích thước (phụ thuộc P2) |
 
@@ -129,3 +129,67 @@ Trạng thái rỗng/lỗi kiểm tra ở tầng render (`home-page-states.spec.
 5. Ghi nhận **O1** (API media) là điều kiện **ra mắt** storefront, không phải điều kiện duyệt code ST01.
 
 Khi đủ 1–4: ST01 chuyển "Approved" trong `progress.md` và mới bắt đầu B3.
+
+---
+
+## 8. Vòng xác nhận cuối (vòng 2) — 13/10/2026
+
+**Trạng thái: vẫn REVIEW.** Không tự đánh dấu Approved.
+
+### 8.1. D1–D7 — đề xuất nghiệm thu
+
+| # | Khác Figma | Lý do | Ảnh đối chiếu | Khuyến nghị |
+|---|---|---|---|---|
+| D1 | Header: 5 nhóm hiện ngang + nút "Sản phẩm ▾" mở menu chứa **đủ** nhóm; Figma hiện 7 nhóm ngang | Tên nhóm thật dài hơn nhãn Figma ("Theme WordPress" vs "Themes"). Đo: cần 892 px, chỉ có 807 px; khung trang cố định 1280 px nên màn rộng hơn không thêm chỗ. Mọi nhóm vẫn truy cập được, không link nào bị cắt hay ẩn mà còn nhận focus | `st01-review/figma-vs-code-header.jpg` | **Giữ.** Nếu muốn đủ 7 nhóm ngang: thêm trường "nhãn menu ngắn" cho danh mục ở Admin (việc backend nhỏ, chưa có trong backlog) |
+| D2 | Chip "Phổ biến" ở hero là tên danh mục; Figma là từ khóa ("Theme bán hàng", "App đặt lịch"…) | Không có dữ liệu từ khóa tìm kiếm phổ biến; không hardcode từ khóa | `st01-review/figma-vs-code-hero.jpg` | **Giữ** đến khi có thống kê tìm kiếm |
+| D3 | Showcase "Mới phát hành" + "Vừa cập nhật"; Figma "Theme nổi bật 2026" + "Top tài nguyên" + dòng gói license | API không có cờ nổi bật; danh sách không trả thông tin gói | `st01-review/figma-vs-code-showcase.jpg` | **Giữ tạm**, sửa khi xong BL-2 (P1) |
+| D4 | Lưới sản phẩm không có ô "Sắp xếp" | Sắp xếp thuộc trang danh mục ST02; trang chủ có "Xem tất cả" | `st01-review/figma-vs-code-latest.jpg` | **Giữ** |
+| D5 | Plugins/UI Kits: mỗi dòng là tên + giá thật; Figma là ✓ + mô tả | Dữ liệu thật hữu ích hơn mô tả tĩnh | `st01-review/figma-vs-code-tools.jpg` | **Giữ** |
+| D6 | Số 01–03 ở "Quy trình" màu `#8794AB`; Figma nhạt hơn | Màu Figma ~1.3 : 1, axe báo lỗi tương phản; `#8794AB` là màu nhạt nhất đạt 3 : 1 cho chữ lớn | `st01-review/figma-vs-code-steps.jpg` | **Giữ** (yêu cầu accessibility) |
+| D7 | Footer không có link chính sách; Figma có cột "Chính sách & tài khoản" | ST13 chưa có nội dung pháp lý được duyệt, không có trang thật để link | `st01-review/figma-vs-code-footer.jpg` | **Giữ** đến khi có BL-5 |
+
+Đề xuất: **chấp nhận D1–D7 như trên**; không điểm nào cần sửa code trước khi duyệt.
+
+### 8.2. Form tư vấn trên production — `FEATURE_CONSULT_FORM_DEMO`
+
+| Giá trị | Hiển thị | Dùng ở |
+|---|---|---|
+| không đặt / khác `true` (mặc định) | **Không có form mô phỏng.** Khối R8 hiện CTA "Gửi yêu cầu tư vấn" → `PORTAL/tickets` (kênh hỗ trợ có thật) + "Tự xem sản phẩm" | **Production** |
+| `true` | Form demo, có kiểm tra lỗi, nhãn "Mô phỏng" thường trực, không gửi/không lưu | Dev, staging khi cần demo |
+
+Cờ đọc phía server lúc chạy (không phải `NEXT_PUBLIC_`), vì staging cũng chạy `NODE_ENV=production`. Đã thêm vào `infra/docker/production-compose.yml` (mặc định `false`), `.env.production.example`, `docs/deployment/environment-matrix.md`. Ảnh: `screenshots/ST01-consult-cta-production.jpg`.
+
+### 8.3. E2E trên staging gần production
+
+Cấu hình: web `next build` + `next start` (`NODE_ENV=production`), API `NODE_ENV=production` (Supabase, R2, SePay cấu hình kiểu staging — fail-closed thật), Postgres/Redis riêng, HTTPS qua Caddy (`web.staging.test`, `api.staging.test`, `img.staging.test`, chứng chỉ nội bộ), `FEATURE_CONSULT_FORM_DEMO` không đặt. Dữ liệu demo tạo qua Admin API trong lần khởi động development, sau đó API khởi động lại ở production và **từ chối dev token (401)** — đã kiểm tra tự động trong script dựng staging.
+
+| Lượt | Môi trường | Kết quả |
+|---|---|---|
+| Staging (cấu hình production) | `E2E_CONSULT_MODE=cta` | **35 đạt · 0 trượt · 7 bỏ qua** |
+| Dev (`FEATURE_CONSULT_FORM_DEMO=true`) | `E2E_CONSULT_MODE=demo` | **35 đạt · 0 trượt · 7 bỏ qua** |
+
+Test bị bỏ qua trên staging và lý do:
+
+| Test | Kích thước | Lý do |
+|---|---|---|
+| Form tư vấn mô phỏng: kiểm tra lỗi, không gửi request | 1440, 768, 390 | Form mô phỏng tắt — đúng cấu hình production. Đã chạy và đạt ở lượt Dev |
+| Menu "Sản phẩm" đủ nhóm, Esc đóng | 768, 390 | Menu ngang chỉ có từ 1024 px; đã chạy và đạt ở 1440 |
+| Header không cắt, trang không tràn 1024–1920 px | 768, 390 | Test tự quét các độ rộng desktop; đã chạy và đạt ở 1440 |
+
+Gộp hai lượt: **mọi test đều đã chạy và đạt ít nhất một lần ở chế độ áp dụng**. Test "chế độ production: không có form mô phỏng, CTA tới kênh thật" đạt ở cả 3 kích thước trên staging.
+
+### 8.4. CI và PR
+
+| Mục | Trạng thái |
+|---|---|
+| CI cục bộ sạch (không chép `.env` local) theo `ci.yml` | lint 11/11 · typecheck 17/17 · test 17/17 (**754 test**) · build 11/11 |
+| Phát hiện trong vòng này | Các lần chạy CI cục bộ trước có chép file `.env` local vào container; lần chạy sạch cho cùng kết quả nên không có lỗi bị che. Script đã loại `.env*` |
+| PR GitHub | **Chưa tạo được** — token của `gh` cho `pgswork8686-stack` đã hết hiệu lực, phiên làm việc không có connector GitHub |
+| GitHub CI | **Chưa xác nhận được** (chưa có PR) |
+
+### 8.5. Release blockers còn lại (Storefront)
+
+| # | Blocker | Theo dõi |
+|---|---|---|
+| 1 | API quản lý ảnh sản phẩm | `backlog.md` BL-1 (P2) |
+| 2 | CI GitHub xanh trên PR của nhánh | chờ cấp lại quyền GitHub CLI |

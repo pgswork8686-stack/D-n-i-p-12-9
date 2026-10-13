@@ -18,6 +18,8 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
     locale: "vi-VN",
     trace: "retain-on-failure",
+    // Staging behind a reverse proxy with an internal CA (e.g. Caddy `tls internal`).
+    ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === "true",
     screenshot: "only-on-failure",
   },
   projects: [

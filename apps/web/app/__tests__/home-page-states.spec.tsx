@@ -83,10 +83,36 @@ describe("ST01 homepage states", () => {
     expect(html).toContain('<option value="chatbot-ai">Chatbot AI</option>');
   });
 
-  it("always labels the consultation form as a simulation", async () => {
-    mocked.tryListProducts.mockResolvedValue({ ok: true, data: page([]) } as never);
-    mocked.listCategories.mockResolvedValue([]);
-    const html = await render();
-    expect(html).toContain("Mô phỏng — kênh nhận yêu cầu tư vấn chưa hoạt động");
+  describe("consultation block (FEATURE_CONSULT_FORM_DEMO)", () => {
+    const original = process.env.FEATURE_CONSULT_FORM_DEMO;
+    afterEach(() => {
+      if (original === undefined) delete process.env.FEATURE_CONSULT_FORM_DEMO;
+      else process.env.FEATURE_CONSULT_FORM_DEMO = original;
+    });
+    beforeEach(() => {
+      mocked.tryListProducts.mockResolvedValue({ ok: true, data: page([]) } as never);
+      mocked.listCategories.mockResolvedValue([]);
+    });
+
+    it("by default (production) shows no simulated form, only a working support CTA", async () => {
+      delete process.env.FEATURE_CONSULT_FORM_DEMO;
+      const html = await render();
+      expect(html).not.toContain('id="consult-name"');
+      expect(html).not.toContain("Mô phỏng");
+      expect(html).toContain("/tickets");
+      expect(html).toContain("Gửi yêu cầu tư vấn");
+    });
+
+    it("treats any value other than 'true' as off", async () => {
+      process.env.FEATURE_CONSULT_FORM_DEMO = "1";
+      expect(await render()).not.toContain('id="consult-name"');
+    });
+
+    it("with the flag on (dev/staging) shows the form, always labelled as a simulation", async () => {
+      process.env.FEATURE_CONSULT_FORM_DEMO = "true";
+      const html = await render();
+      expect(html).toContain('id="consult-name"');
+      expect(html).toContain("Mô phỏng — kênh nhận yêu cầu tư vấn chưa hoạt động");
+    });
   });
 });

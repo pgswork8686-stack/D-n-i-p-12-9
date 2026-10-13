@@ -14,6 +14,8 @@ E2E_API_URL=http://localhost:4000 pnpm --filter @nexus/e2e seed:demo
 E2E_BASE_URL=http://localhost:3000 E2E_API_URL=http://localhost:4000 pnpm --filter @nexus/e2e test:e2e
 ```
 
+`E2E_CONSULT_MODE=cta` (mặc định — cấu hình production, `FEATURE_CONSULT_FORM_DEMO` tắt) hoặc `demo` (stack bật `FEATURE_CONSULT_FORM_DEMO=true`): chọn bộ test của khối tư vấn ST01; test của chế độ còn lại bị bỏ qua có ghi lý do.
+
 Trình duyệt chạy trong container mà trang tham chiếu origin của máy host: dùng `E2E_REWRITE="http://localhost:4000=http://<api-host>:4000,http://localhost:9232=http://host.docker.internal:9232"`.
 
 Trên máy Windows có Application Control chặn binary Chromium, chạy trong image `mcr.microsoft.com/playwright:v1.48.0-jammy` (cùng phiên bản `@playwright/test`).

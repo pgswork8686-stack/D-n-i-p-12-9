@@ -59,6 +59,7 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `FEATURE_MEMBERSHIP` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API membership trả về 404 |
 | `FEATURE_AFFILIATE` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API affiliate trả về 404 |
 | `FEATURE_FINANCE` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API finance trả về 404 |
+| `FEATURE_CONSULT_FORM_DEMO` | Web | FEATURE_FLAG | PUBLIC | `true` (chỉ staging, để demo) | `.env.production` | Mặc định `false`: trang chủ hiện CTA gửi yêu cầu hỗ trợ thật thay cho form mô phỏng. **Production phải để `false`** — chưa có API nhận yêu cầu tư vấn |
 | `ENABLE_TEST_PAYMENT_PROVIDER` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Bị cấm bởi `NODE_ENV === "production"` |
 | `STRIPE_MOCK_CLIENT` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Ném lỗi crash nếu bật trong production |
 | `SEED_DEV_USERS` | DB seed | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Không tạo user mock |

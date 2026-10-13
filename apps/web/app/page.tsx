@@ -4,6 +4,8 @@ import type { CategoryDto, PaginatedResponse, PublicProductListItemDto } from "@
 import { EmptyState, ErrorState, SectionHeader } from "@nexus/ui";
 import { ProductCard } from "./components/product-card";
 import { ConsultForm } from "./components/consult-form";
+import { ConsultCta } from "./components/consult-cta";
+import { consultFormDemoEnabled } from "./lib/flags";
 import { listCategories, listPosts, listProducts, tryListProducts } from "./lib/server-api";
 import { flattenCategories, findTopicCategory, navCategories, pickPrice, type HomeTopicKey } from "./lib/home-catalog";
 import { formatDate, money, productTypeLabel } from "./lib/format";
@@ -427,9 +429,7 @@ export default async function HomePage() {
           <p className="mt-3 max-w-xl text-base leading-7 text-white/75">
             Để lại nhu cầu, đội ngũ kỹ thuật sẽ gợi ý theme, app hoặc chatbot và gói license phù hợp với website của bạn.
           </p>
-          <div className="mt-8 w-full max-w-3xl">
-            <ConsultForm />
-          </div>
+          <div className="mt-8 w-full max-w-3xl">{consultFormDemoEnabled() ? <ConsultForm /> : <ConsultCta />}</div>
         </div>
       </section>
 
