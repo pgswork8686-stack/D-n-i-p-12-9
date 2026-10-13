@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { ArrowRight, Bot, Download, Figma, MonitorSmartphone, Package, Plug, QrCode, Search, Smartphone, Sparkles } from "lucide-react";
 import type { CategoryDto, PaginatedResponse, PublicProductListItemDto } from "@nexus/contracts";
-import { EmptyState, SectionHeader } from "@nexus/ui";
+import { EmptyState, ErrorState, SectionHeader } from "@nexus/ui";
 import { ProductCard } from "./components/product-card";
 import { ConsultForm } from "./components/consult-form";
-import { listCategories, listPosts, listProducts } from "./lib/server-api";
+import { listCategories, listPosts, listProducts, tryListProducts } from "./lib/server-api";
 import { flattenCategories, findTopicCategory, navCategories, pickPrice, type HomeTopicKey } from "./lib/home-catalog";
 import { formatDate, money, productTypeLabel } from "./lib/format";
 
@@ -37,14 +37,28 @@ function PriceText({ product, className = "" }: { product: PublicProductListItem
   return <span className={className}>{p ? money(p.amount, p.currency) : "Liên hệ"}</span>;
 }
 
-function TopicColumn({ topic }: { topic: Topic }) {
+function TopicColumn({ topic, withCover = false }: { topic: Topic; withCover?: boolean }) {
   const { category, products, icon: Icon } = topic;
+  // Cover = newest product image in the group (categories have no image field).
+  const coverProduct = withCover ? products.items.find((p) => p.thumbnailUrl) : undefined;
   return (
-    <article aria-labelledby={`topic-${category.slug}`} className="card flex flex-col p-6">
+    <article aria-labelledby={`topic-${category.slug}`} className="card flex flex-col overflow-hidden">
+      {coverProduct && (
+        <div className="relative aspect-[16/8] overflow-hidden bg-brand-soft">
+          <ProductVisual product={coverProduct} />
+          <span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-brand shadow-card">
+            <Icon aria-hidden className="h-3.5 w-3.5" />
+            {category.name}
+          </span>
+        </div>
+      )}
+      <div className="flex flex-1 flex-col p-6">
       <div className="flex items-start gap-4">
-        <span aria-hidden className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
-          <Icon className="h-6 w-6" />
-        </span>
+        {!coverProduct && (
+          <span aria-hidden className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
+            <Icon className="h-6 w-6" />
+          </span>
+        )}
         <div>
           <h3 id={`topic-${category.slug}`} className="text-lg font-bold text-ink">
             {category.name}
@@ -70,13 +84,14 @@ function TopicColumn({ topic }: { topic: Topic }) {
         Xem tất cả {products.total > 0 ? `${products.total} sản phẩm` : category.name}
         <ArrowRight aria-hidden className="h-4 w-4" />
       </Link>
+      </div>
     </article>
   );
 }
 
 export default async function HomePage() {
-  const [latest, tree, posts] = await Promise.all([
-    listProducts({ limit: "10", sort: "newest", currency: "VND" }),
+  const [latestResult, tree, posts] = await Promise.all([
+    tryListProducts({ limit: "10", sort: "newest", currency: "VND" }),
     listCategories(),
     listPosts({ limit: "3" }),
   ]);
@@ -103,6 +118,8 @@ export default async function HomePage() {
   const pluginsAndKits = [byKey("plugins"), byKey("uiKits")].filter((t): t is Topic => !!t);
   const solutions = [byKey("webApp"), byKey("mobileApp"), byKey("chatbot")].filter((t): t is Topic => !!t);
 
+  const latest = latestResult.data;
+  const catalogDown = !latestResult.ok;
   const [featured, ...rest] = latest.items;
   const topPicks = rest.slice(0, 4);
   const grid = latest.items.slice(0, 6);
@@ -187,7 +204,7 @@ export default async function HomePage() {
             <Link href={`/products/${featured.slug}`} className="group card flex flex-col gap-5 bg-canvas p-6 transition-shadow hover:shadow-lift sm:p-7">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <span className="inline-flex rounded-full border border-warm px-2.5 py-0.5 text-xs font-semibold text-warm">Mới phát hành</span>
+                  <span className="inline-flex rounded-full border border-warning/40 px-2.5 py-0.5 text-xs font-semibold text-warning">Mới phát hành</span>
                   <h2 className="mt-3 text-xl font-bold leading-snug text-ink group-hover:text-brand sm:text-2xl">{featured.name}</h2>
                   <p className="mt-1 text-sm text-muted">
                     {[featured.categories[0]?.name, productTypeLabel(featured.productType)].filter(Boolean).join(" · ")}
@@ -267,8 +284,18 @@ export default async function HomePage() {
             </ul>
           </nav>
         )}
-        {grid.length > 0 ? (
-          <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-3">
+        {catalogDown ? (
+          <ErrorState
+            title="Chưa tải được danh sách sản phẩm"
+            description="Máy chủ cửa hàng đang không phản hồi. Vui lòng thử lại sau ít phút."
+            action={
+              <a href="/" className="btn-ghost">
+                Thử lại
+              </a>
+            }
+          />
+        ) : grid.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3">
             {grid.map((p) => (
               <ProductCard key={p.id} product={p} />
             ))}
@@ -355,10 +382,15 @@ export default async function HomePage() {
               eyebrow="Giải pháp số đóng gói sẵn"
               title="Web App · Mobile App · Chatbot AI"
               description="Mã nguồn hoàn chỉnh kèm license — triển khai nhanh cho doanh nghiệp và agency."
+              action={
+                <Link href="/products" className="link inline-flex items-center gap-1 text-sm">
+                  Xem tất cả giải pháp <ArrowRight aria-hidden className="h-4 w-4" />
+                </Link>
+              }
             />
             <div className={`grid gap-6 md:grid-cols-2 ${solutions.length > 2 ? "lg:grid-cols-3" : ""}`}>
               {solutions.map((t) => (
-                <TopicColumn key={t.key} topic={t} />
+                <TopicColumn key={t.key} topic={t} withCover />
               ))}
             </div>
           </div>
@@ -371,7 +403,8 @@ export default async function HomePage() {
         <ol className="grid gap-6 md:grid-cols-3">
           {STEPS.map((s, i) => (
             <li key={s.title} className="card relative p-6">
-              <span aria-hidden className="absolute right-5 top-4 text-4xl font-extrabold text-line">
+              {/* #8794AB: lightest grey that still meets 3:1 for large text on white (Figma uses a lighter tint). */}
+              <span aria-hidden className="absolute right-5 top-4 text-4xl font-extrabold text-[#8794AB]">
                 0{i + 1}
               </span>
               <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-soft text-brand">

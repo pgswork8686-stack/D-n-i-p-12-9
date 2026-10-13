@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { LogOut, Menu, Search, ShoppingBag, User, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, LogOut, Menu, Search, ShoppingBag, User, X } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCart } from "../lib/cart";
 import { Logo } from "./logo";
@@ -11,26 +11,23 @@ import type { NavCategory } from "../lib/home-catalog";
 
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
 
-interface NavItem {
-  href: string;
-  label: string;
-  /** Category links only fit on wide screens; the mobile drawer lists all. */
-  wideOnly?: boolean;
-  /** Shown only from 2xl (≥1536px) so the header never overflows at 1280px. */
-  extraWideOnly?: boolean;
-}
+const categoryHref = (slug: string) => `/products?category=${encodeURIComponent(slug)}`;
+
+/**
+ * Inline category links from 1280px. The container is capped at 1280px, so
+ * wider screens get no extra room: 5 groups fit with real (long) names at any
+ * width ≥1280 (measured). Every group is always in the "Sản phẩm" menu.
+ */
+const INLINE_AT_XL = 5;
 
 export function SiteHeader({ categories = [] }: { categories?: NavCategory[] }) {
-  const NAV: NavItem[] = [
+  const NAV = [
     { href: "/products", label: "Sản phẩm" },
-    ...categories.map((c, i) => ({
-      href: `/products?category=${encodeURIComponent(c.slug)}`,
-      label: c.name,
-      wideOnly: true,
-      extraWideOnly: i >= 5,
-    })),
+    ...categories.map((c) => ({ href: categoryHref(c.slug), label: c.name })),
     { href: "/blog", label: "Blog" },
   ];
+  const [productsOpen, setProductsOpen] = useState(false);
+  const productsMenuRef = useRef<HTMLDivElement>(null);
   const { user, logout } = useAuth();
   const { cart } = useCart();
   const pathname = usePathname();
@@ -41,7 +38,30 @@ export function SiteHeader({ categories = [] }: { categories?: NavCategory[] }) 
   const onAuthPage = pathname?.startsWith("/login") || pathname?.startsWith("/register");
   const loginHref = onAuthPage ? "/login" : `/login?next=${encodeURIComponent(pathname || "/")}`;
 
-  useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => {
+    setOpen(false);
+    setProductsOpen(false);
+  }, [pathname]);
+
+  // Products menu: close on Escape (focus back on the button) and on outside click.
+  useEffect(() => {
+    if (!productsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setProductsOpen(false);
+        productsMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!productsMenuRef.current?.contains(e.target as Node)) setProductsOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onClick);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onClick);
+    };
+  }, [productsOpen]);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,16 +74,49 @@ export function SiteHeader({ categories = [] }: { categories?: NavCategory[] }) 
       <div className="container-site flex h-16 items-center gap-4">
         <Logo />
 
-        <nav aria-label="Điều hướng chính" className="ml-4 hidden items-center gap-0.5 lg:flex">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-body transition-colors hover:bg-brand-soft hover:text-brand ${item.extraWideOnly ? "hidden 2xl:inline-flex" : item.wideOnly ? "hidden xl:inline-flex" : "inline-flex"}`}
+        <nav aria-label="Điều hướng chính" className="ml-2 hidden min-w-0 items-center gap-0.5 lg:flex">
+          <div ref={productsMenuRef} className="relative">
+            <button
+              type="button"
+              aria-expanded={productsOpen}
+              aria-controls="products-menu"
+              onClick={() => setProductsOpen((v) => !v)}
+              className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${productsOpen ? "bg-brand-soft text-brand" : "text-body hover:bg-brand-soft hover:text-brand"}`}
             >
-              {item.label}
+              Sản phẩm
+              <ChevronDown aria-hidden className={`h-4 w-4 transition-transform ${productsOpen ? "rotate-180" : ""}`} />
+            </button>
+            {productsOpen && (
+              <div id="products-menu" className="absolute left-0 top-full z-50 mt-2 w-72 rounded-2xl border border-line bg-surface p-2 shadow-lift">
+                <ul>
+                  {categories.map((c) => (
+                    <li key={c.slug}>
+                      <Link href={categoryHref(c.slug)} className="block rounded-lg px-3 py-2.5 text-sm font-medium text-ink hover:bg-brand-soft hover:text-brand">
+                        {c.name}
+                      </Link>
+                    </li>
+                  ))}
+                  <li className="mt-1 border-t border-line pt-1">
+                    <Link href="/products" className="block rounded-lg px-3 py-2.5 text-sm font-semibold text-brand hover:bg-brand-soft">
+                      Tất cả sản phẩm
+                    </Link>
+                  </li>
+                </ul>
+              </div>
+            )}
+          </div>
+          {categories.slice(0, INLINE_AT_XL).map((c) => (
+            <Link
+              key={c.slug}
+              href={categoryHref(c.slug)}
+              className="hidden shrink-0 whitespace-nowrap rounded-lg px-2.5 py-2 text-sm font-medium text-body transition-colors hover:bg-brand-soft hover:text-brand xl:inline-flex"
+            >
+              {c.name}
             </Link>
           ))}
+          <Link href="/blog" className="inline-flex shrink-0 whitespace-nowrap rounded-lg px-2.5 py-2 text-sm font-medium text-body transition-colors hover:bg-brand-soft hover:text-brand">
+            Blog
+          </Link>
         </nav>
 
         <form onSubmit={submitSearch} role="search" className="ml-auto hidden max-w-xs flex-1 md:block xl:hidden">
@@ -83,7 +136,7 @@ export function SiteHeader({ categories = [] }: { categories?: NavCategory[] }) 
           </div>
         </form>
 
-        <div className="ml-auto flex items-center gap-1 md:ml-2 xl:ml-auto">
+        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-2 xl:ml-auto">
           <Link
             href="/products"
             aria-label="Tìm sản phẩm"

@@ -10,7 +10,7 @@ Definition of Done của một màn: xem [implementation-plan.md](implementation
 |---|---|---|---|
 | B0 Audit + kế hoạch | Xong, chờ PR | `docs/frontend-route-audit` | Còn nợ: `api-matrix.md`, `permissions-matrix.md` (thông tin hiện nằm trong `route-audit.md`) |
 | B1 Nền tảng + SY01–03 | Xong, chờ PR | `feat/frontend-b1-foundation` (nối tiếp B0) | lint / typecheck / test / build xanh — xem mục dưới |
-| B2 Pilot ST01 | Xong, **chờ chủ dự án duyệt** | `feat/frontend-b2-st01` (nối tiếp B1) | Ảnh: `screenshots/ST01-*.jpg` |
+| B2 Pilot ST01 | **REVIEW — vòng nghiệm thu 1 xong, chờ duyệt** | `feat/frontend-b2-st01` (nối tiếp B1) | Báo cáo: [st01-acceptance.md](st01-acceptance.md); đề xuất backend: [backend-proposals.md](backend-proposals.md). B3 chưa bắt đầu |
 | B3 Storefront | Chưa bắt đầu | — | Sau khi B2 được duyệt |
 | B4 Portal | Chưa bắt đầu | — | Thêm `lucide-react` khi dùng |
 | B5 Admin 1 | Chưa bắt đầu | — | Q2 đã chốt: `/admin/*` |
@@ -24,7 +24,7 @@ Design: Figma "Hệ Thống Figma PGS". QA: `Not run / Failed / Passed / Approve
 
 | ID | Design | Code | QA |
 |---|---|---|---|
-| ST01 | Figma xong | Route `/` chạy thật (B2); header/footer dùng danh mục từ API; form tư vấn DEMO_ONLY có nhãn | Unit test xanh; kiểm tra Playwright 1440/768/390 đạt (script ngoài repo) — **chưa đủ DoD**: E2E trong repo ở B8 |
+| ST01 | Figma xong | Route `/` chạy thật; header/footer theo danh mục API; form tư vấn DEMO_ONLY có nhãn | **Passed** (chưa Approved): unit 30/30, E2E trong repo `apps/e2e` 35 đạt / 4 bỏ qua có chủ đích — chờ chủ dự án duyệt điều kiện trong `st01-acceptance.md` §7 |
 | ST02–ST13 | Figma xong, chờ duyệt | Chưa (ST13 Demo-only) | Not run |
 | PT01–PT14 | Figma xong, chờ duyệt | Chưa | Not run |
 | AD01–AD20 | Figma xong, chờ duyệt | Chưa | Not run |

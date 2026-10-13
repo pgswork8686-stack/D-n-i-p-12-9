@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Info } from "lucide-react";
 import { ErrorSummary, FormField, Notice } from "@nexus/ui";
 import { validateConsult, type ConsultErrors, type ConsultInput } from "../lib/home-catalog";
 
@@ -48,10 +49,10 @@ export function ConsultForm() {
         />
         <div className="grid gap-5 md:grid-cols-2">
           <FormField id="consult-name" label="Họ và tên" required error={errors.name}>
-            <input className="field-input" autoComplete="name" value={values.name} onChange={(e) => set("name", e.target.value)} />
+            <input className="field-input" autoComplete="name" placeholder="Nguyễn Văn A" value={values.name} onChange={(e) => set("name", e.target.value)} />
           </FormField>
           <FormField id="consult-email" label="Email liên hệ" required error={errors.email}>
-            <input className="field-input" type="email" autoComplete="email" value={values.email} onChange={(e) => set("email", e.target.value)} />
+            <input className="field-input" type="email" autoComplete="email" placeholder="ban@congty.vn" value={values.email} onChange={(e) => set("email", e.target.value)} />
           </FormField>
           <FormField id="consult-type" label="Loại website cần làm">
             <select className="field-input" value={values.websiteType} onChange={(e) => set("websiteType", e.target.value)}>
@@ -61,7 +62,7 @@ export function ConsultForm() {
             </select>
           </FormField>
           <FormField id="consult-phone" label="Số điện thoại" hint="Không bắt buộc" error={errors.phone}>
-            <input className="field-input" type="tel" autoComplete="tel" value={values.phone} onChange={(e) => set("phone", e.target.value)} />
+            <input className="field-input" type="tel" autoComplete="tel" placeholder="0901 234 567" value={values.phone} onChange={(e) => set("phone", e.target.value)} />
           </FormField>
         </div>
         <FormField id="consult-message" label="Mô tả nhu cầu">
@@ -100,8 +101,9 @@ export function ConsultForm() {
               Kênh nhận yêu cầu tư vấn trực tuyến đang được hoàn thiện. Thông tin bạn nhập không được lưu hay gửi đi.
             </Notice>
           ) : (
-            <p className="text-center text-xs text-muted">
-              Tính năng đang hoàn thiện: yêu cầu hiện chưa được gửi tới đội ngũ tư vấn.
+            <p className="flex items-start justify-center gap-2 text-center text-[13px] font-medium text-warning">
+              <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+              Mô phỏng — kênh nhận yêu cầu tư vấn chưa hoạt động, nên chưa có yêu cầu nào được gửi đi.
             </p>
           )}
         </div>
