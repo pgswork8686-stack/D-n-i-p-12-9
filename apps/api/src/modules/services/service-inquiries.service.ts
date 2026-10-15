@@ -38,6 +38,7 @@ import { InquiryRateLimiter } from "./inquiry-rate-limiter";
 import { UploadedServiceFile, hashClientIp, validateServiceFile } from "./service-files";
 import { ServiceFileStore } from "./service-file-store";
 import { ActorContext } from "./service-catalog.service";
+import { withUniqueCodeRetry } from "./unique-code";
 import { toAdminInquiryDto, toInquiryDto } from "./services.mappers";
 import { loadAdminProject } from "./service-projects.service";
 
@@ -123,7 +124,7 @@ export class ServiceInquiriesService {
     const uploaded = await this.files.uploadAll("inquiries", inquiryId, validated);
 
     try {
-      const created = await prisma.$transaction(async (tx) => {
+      const created = await withUniqueCodeRetry("inquiry_number", "inquiryNumber", () => prisma.$transaction(async (tx) => {
         const row = await tx.serviceInquiry.create({
           data: {
             id: inquiryId,
@@ -165,7 +166,7 @@ export class ServiceInquiriesService {
           userAgent: ctx.userAgent,
         });
         return row;
-      });
+      }));
       return { inquiryNumber: created.inquiryNumber, status: created.status };
     } catch (err) {
       await this.files.deleteObjects(uploaded.map((f) => f.storageKey));
@@ -332,7 +333,7 @@ export class ServiceInquiriesService {
 
     let projectId: string;
     try {
-      projectId = await prisma.$transaction(async (tx) => {
+      projectId = await withUniqueCodeRetry("project_code", "projectCode", () => prisma.$transaction(async (tx) => {
         const claimed = await tx.serviceInquiry.updateMany({
           where: { id, status: ServiceInquiryStatus.QUALIFIED },
           data: { status: ServiceInquiryStatus.CONVERTED, reviewedById: actor.userId, reviewedAt: new Date() },
@@ -371,7 +372,7 @@ export class ServiceInquiriesService {
           userAgent: actor.userAgent,
         });
         return project.id;
-      });
+      }));
     } catch (err) {
       // Lost a race against a concurrent conversion: return the winner's project.
       const existing = await prisma.serviceProject.findUnique({ where: { inquiryId: id }, select: { id: true } });
