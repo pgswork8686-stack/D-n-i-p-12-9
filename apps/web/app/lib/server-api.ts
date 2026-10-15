@@ -4,6 +4,7 @@ import type {
   PaginatedResponse,
   PublicProductListItemDto,
   PublicContentListItemDto,
+  ServiceDto,
 } from "@nexus/contracts";
 
 /**
@@ -49,4 +50,26 @@ export function listPosts(params: Record<string, string | undefined>) {
     `/v1/content/posts?${qs.toString()}`,
     EMPTY_PAGE,
   );
+}
+
+/** Returns null when the services module is disabled (API answers 404). */
+export async function listServices(): Promise<ServiceDto[] | null> {
+  try {
+    const res = await fetch(`${serverApiUrl()}/v1/services`, { cache: "no-store" });
+    if (res.status === 404) return null;
+    if (!res.ok) return [];
+    return (await res.json()) as ServiceDto[];
+  } catch {
+    return [];
+  }
+}
+
+export async function getService(slug: string): Promise<ServiceDto | null> {
+  try {
+    const res = await fetch(`${serverApiUrl()}/v1/services/${encodeURIComponent(slug)}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as ServiceDto;
+  } catch {
+    return null;
+  }
 }
