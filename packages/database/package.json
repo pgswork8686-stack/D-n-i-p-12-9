@@ -16,6 +16,7 @@
     "seed:dev": "ts-node src/seed.ts --dev-users",
     "seed:catalog": "ts-node src/seed.ts --catalog",
     "seed:local": "ts-node src/seed.ts --local-all",
+    "seed:services": "ts-node src/seed.ts --services",
     "acceptance:phase4": "ts-node --transpile-only scripts/phase4-acceptance.ts",
     "acceptance:phase5": "ts-node --transpile-only scripts/phase5-acceptance.ts",
     "acceptance:phase6": "ts-node --transpile-only scripts/phase6-acceptance.ts",
