@@ -126,3 +126,47 @@ describe("NexusApiClient", () => {
   });
 });
 
+
+describe("NexusApiClient services", () => {
+  const mockFetch = jest.fn();
+  let client: NexusApiClient;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (global as any).fetch = mockFetch;
+    client = new NexusApiClient({ baseUrl: "https://api.example.com", token: "tok" });
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ inquiryNumber: "SI-1", status: "NEW" }) });
+  });
+
+  it("submits inquiries as multipart without forcing a JSON content type", async () => {
+    await client.submitServiceInquiry(
+      {
+        serviceSlug: "api-integration",
+        companyName: "ABC",
+        contactName: "A",
+        contactEmail: "a@example.com",
+        requirements: "x",
+        desiredFeatures: ["SSO", "Báo cáo"],
+      },
+      [new Blob(["%PDF-1.7"], { type: "application/pdf" })],
+    );
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://api.example.com/v1/service-inquiries");
+    expect(init.headers["Content-Type"]).toBeUndefined();
+    expect(init.headers.Authorization).toBe("Bearer tok");
+    const form = init.body as FormData;
+    expect(JSON.parse(form.get("desiredFeatures") as string)).toEqual(["SSO", "Báo cáo"]);
+    expect(form.getAll("files")).toHaveLength(1);
+  });
+
+  it("builds admin list queries and skips empty filters", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ items: [], total: 0, page: 1, limit: 20 }) });
+    await client.adminListServiceInquiries({ status: "NEW", search: "", page: 2 });
+    expect(mockFetch.mock.calls[0][0]).toBe("https://api.example.com/v1/admin/service-inquiries?status=NEW&page=2");
+  });
+
+  it("surfaces API errors with the server message", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 429, json: async () => ({ message: "Bạn đã gửi quá nhiều yêu cầu." }) });
+    await expect(client.listMyServiceProjects()).rejects.toMatchObject({ status: 429, message: "Bạn đã gửi quá nhiều yêu cầu." });
+  });
+});

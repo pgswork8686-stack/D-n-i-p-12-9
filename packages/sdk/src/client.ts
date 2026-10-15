@@ -126,7 +126,39 @@ import {
   QueryLedgerRequest,
   LedgerEntryDto,
   FinancialSummaryReportDto,
+  ServiceDto,
+  CreateServiceRequest,
+  UpdateServiceRequest,
+  CreateServiceInquiryRequest,
+  CreateServiceInquiryResponse,
+  ServiceInquiryDto,
+  AdminServiceInquiryDto,
+  AdminUpdateInquiryRequest,
+  ConvertInquiryRequest,
+  ServiceProjectSummaryDto,
+  ServiceProjectDto,
+  AdminServiceProjectDto,
+  AdminUpdateProjectRequest,
+  AssignProjectMemberRequest,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  PostProjectMessageRequest,
+  ServiceDocumentVisibility,
+  ServiceFileDownloadResponse,
+  StaffUserDto,
+  ServiceListQuery,
+  PaginatedList,
 } from "@nexus/contracts";
+
+function toQuery(query?: object): string {
+  if (!query) return "";
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
 
 
 export class NexusApiError extends Error {
@@ -2442,6 +2474,206 @@ export class NexusApiClient {
       await handleCmsError(res, "Admin get financial summary failed");
     }
     return (await res.json()) as FinancialSummaryReportDto;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Services Foundation (catalog, inquiries, projects)
+  // ---------------------------------------------------------------------------
+
+  listServices(): Promise<ServiceDto[]> {
+    return this.requestJson("GET", "/v1/services", "List services failed");
+  }
+
+  getService(slug: string): Promise<ServiceDto> {
+    return this.requestJson("GET", `/v1/services/${encodeURIComponent(slug)}`, "Get service failed");
+  }
+
+  /**
+   * Submits the public inquiry form. Files are only accepted for signed-in
+   * users; the client never chooses storage keys.
+   */
+  submitServiceInquiry(req: CreateServiceInquiryRequest, files: Blob[] = []): Promise<CreateServiceInquiryResponse> {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(req)) {
+      if (value === undefined || value === null || value === "") continue;
+      if (Array.isArray(value)) {
+        form.append(key, JSON.stringify(value));
+      } else {
+        form.append(key, String(value));
+      }
+    }
+    for (const file of files) {
+      form.append("files", file, (file as File).name || "file");
+    }
+    return this.requestForm("POST", "/v1/service-inquiries", form, "Submit inquiry failed");
+  }
+
+  listMyServiceInquiries(query?: ServiceListQuery): Promise<PaginatedList<ServiceInquiryDto>> {
+    return this.requestJson("GET", `/v1/me/service-inquiries${toQuery(query)}`, "List inquiries failed");
+  }
+
+  getMyServiceInquiry(id: string): Promise<ServiceInquiryDto> {
+    return this.requestJson("GET", `/v1/me/service-inquiries/${encodeURIComponent(id)}`, "Get inquiry failed");
+  }
+
+  getMyInquiryAttachmentUrl(inquiryId: string, attachmentId: string): Promise<ServiceFileDownloadResponse> {
+    return this.requestJson(
+      "GET",
+      `/v1/me/service-inquiries/${encodeURIComponent(inquiryId)}/attachments/${encodeURIComponent(attachmentId)}/url`,
+      "Get attachment failed",
+    );
+  }
+
+  listMyServiceProjects(query?: ServiceListQuery): Promise<PaginatedList<ServiceProjectSummaryDto>> {
+    return this.requestJson("GET", `/v1/me/service-projects${toQuery(query)}`, "List projects failed");
+  }
+
+  getMyServiceProject(id: string): Promise<ServiceProjectDto> {
+    return this.requestJson("GET", `/v1/me/service-projects/${encodeURIComponent(id)}`, "Get project failed");
+  }
+
+  postMyProjectMessage(projectId: string, req: PostProjectMessageRequest): Promise<ServiceProjectDto> {
+    return this.requestJson("POST", `/v1/me/service-projects/${encodeURIComponent(projectId)}/messages`, "Send message failed", req);
+  }
+
+  uploadMyProjectDocument(projectId: string, file: Blob): Promise<ServiceProjectDto> {
+    const form = new FormData();
+    form.append("file", file, (file as File).name || "file");
+    return this.requestForm("POST", `/v1/me/service-projects/${encodeURIComponent(projectId)}/documents`, form, "Upload document failed");
+  }
+
+  getMyProjectDocumentUrl(projectId: string, documentId: string): Promise<ServiceFileDownloadResponse> {
+    return this.requestJson(
+      "GET",
+      `/v1/me/service-projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}/url`,
+      "Get document failed",
+    );
+  }
+
+  adminListServices(query?: ServiceListQuery): Promise<PaginatedList<ServiceDto>> {
+    return this.requestJson("GET", `/v1/admin/services${toQuery(query)}`, "Admin list services failed");
+  }
+
+  adminGetService(id: string): Promise<ServiceDto> {
+    return this.requestJson("GET", `/v1/admin/services/${encodeURIComponent(id)}`, "Admin get service failed");
+  }
+
+  adminCreateService(req: CreateServiceRequest): Promise<ServiceDto> {
+    return this.requestJson("POST", "/v1/admin/services", "Admin create service failed", req);
+  }
+
+  adminUpdateService(id: string, req: UpdateServiceRequest): Promise<ServiceDto> {
+    return this.requestJson("PATCH", `/v1/admin/services/${encodeURIComponent(id)}`, "Admin update service failed", req);
+  }
+
+  adminListServiceInquiries(query?: ServiceListQuery): Promise<PaginatedList<AdminServiceInquiryDto>> {
+    return this.requestJson("GET", `/v1/admin/service-inquiries${toQuery(query)}`, "Admin list inquiries failed");
+  }
+
+  adminGetServiceInquiry(id: string): Promise<AdminServiceInquiryDto> {
+    return this.requestJson("GET", `/v1/admin/service-inquiries/${encodeURIComponent(id)}`, "Admin get inquiry failed");
+  }
+
+  adminUpdateServiceInquiry(id: string, req: AdminUpdateInquiryRequest): Promise<AdminServiceInquiryDto> {
+    return this.requestJson("PATCH", `/v1/admin/service-inquiries/${encodeURIComponent(id)}`, "Admin update inquiry failed", req);
+  }
+
+  adminConvertServiceInquiry(id: string, req: ConvertInquiryRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson("POST", `/v1/admin/service-inquiries/${encodeURIComponent(id)}/convert`, "Convert inquiry failed", req);
+  }
+
+  adminGetInquiryAttachmentUrl(inquiryId: string, attachmentId: string): Promise<ServiceFileDownloadResponse> {
+    return this.requestJson(
+      "GET",
+      `/v1/admin/service-inquiries/${encodeURIComponent(inquiryId)}/attachments/${encodeURIComponent(attachmentId)}/url`,
+      "Get attachment failed",
+    );
+  }
+
+  adminListServiceProjects(
+    query?: ServiceListQuery,
+  ): Promise<PaginatedList<ServiceProjectSummaryDto & { customerEmail: string | null }>> {
+    return this.requestJson("GET", `/v1/admin/service-projects${toQuery(query)}`, "Admin list projects failed");
+  }
+
+  adminGetServiceProject(id: string): Promise<AdminServiceProjectDto> {
+    return this.requestJson("GET", `/v1/admin/service-projects/${encodeURIComponent(id)}`, "Admin get project failed");
+  }
+
+  adminUpdateServiceProject(id: string, req: AdminUpdateProjectRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson("PATCH", `/v1/admin/service-projects/${encodeURIComponent(id)}`, "Admin update project failed", req);
+  }
+
+  adminAssignProjectMember(id: string, req: AssignProjectMemberRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson("POST", `/v1/admin/service-projects/${encodeURIComponent(id)}/members`, "Assign member failed", req);
+  }
+
+  adminRemoveProjectMember(id: string, userId: string): Promise<AdminServiceProjectDto> {
+    return this.requestJson(
+      "DELETE",
+      `/v1/admin/service-projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+      "Remove member failed",
+    );
+  }
+
+  adminCreateMilestone(id: string, req: CreateMilestoneRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson("POST", `/v1/admin/service-projects/${encodeURIComponent(id)}/milestones`, "Create milestone failed", req);
+  }
+
+  adminUpdateMilestone(id: string, milestoneId: string, req: UpdateMilestoneRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson(
+      "PATCH",
+      `/v1/admin/service-projects/${encodeURIComponent(id)}/milestones/${encodeURIComponent(milestoneId)}`,
+      "Update milestone failed",
+      req,
+    );
+  }
+
+  adminPostProjectMessage(id: string, req: PostProjectMessageRequest): Promise<AdminServiceProjectDto> {
+    return this.requestJson("POST", `/v1/admin/service-projects/${encodeURIComponent(id)}/messages`, "Send message failed", req);
+  }
+
+  adminUploadProjectDocument(id: string, file: Blob, visibility: ServiceDocumentVisibility): Promise<AdminServiceProjectDto> {
+    const form = new FormData();
+    form.append("visibility", visibility);
+    form.append("file", file, (file as File).name || "file");
+    return this.requestForm("POST", `/v1/admin/service-projects/${encodeURIComponent(id)}/documents`, form, "Upload document failed");
+  }
+
+  adminGetProjectDocumentUrl(id: string, documentId: string): Promise<ServiceFileDownloadResponse> {
+    return this.requestJson(
+      "GET",
+      `/v1/admin/service-projects/${encodeURIComponent(id)}/documents/${encodeURIComponent(documentId)}/url`,
+      "Get document failed",
+    );
+  }
+
+  adminListServiceStaff(): Promise<StaffUserDto[]> {
+    return this.requestJson("GET", "/v1/admin/service-staff", "List staff failed");
+  }
+
+  private async requestJson<T>(method: string, path: string, errorPrefix: string, body?: unknown): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: this.buildHeaders(),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      await handleCmsError(res, errorPrefix);
+    }
+    return (await res.json()) as T;
+  }
+
+  /** Multipart request: the browser sets the multipart boundary header itself. */
+  private async requestForm<T>(method: string, path: string, form: FormData, errorPrefix: string): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    const res = await fetch(`${this.baseUrl}${path}`, { method, headers, body: form, cache: "no-store" });
+    if (!res.ok) {
+      await handleCmsError(res, errorPrefix);
+    }
+    return (await res.json()) as T;
   }
 
   private buildHeaders(): Record<string, string> {
