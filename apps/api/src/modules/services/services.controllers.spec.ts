@@ -28,7 +28,7 @@ const ALL = [
   AdminServiceStaffController,
 ];
 
-const ADMIN = [AdminServicesController, AdminServiceInquiriesController, AdminServiceProjectsController, AdminServiceStaffController];
+const ADMIN: any[] = [AdminServicesController, AdminServiceInquiriesController, AdminServiceProjectsController, AdminServiceStaffController];
 
 function handlerNames(ctrl: any): string[] {
   return Object.getOwnPropertyNames(ctrl.prototype).filter((n) => n !== "constructor");

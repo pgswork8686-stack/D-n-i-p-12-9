@@ -2,6 +2,7 @@ import { BadRequestException } from "@nestjs/common";
 import { SERVICE_FILE_MAX_BYTES } from "@nexus/contracts";
 import {
   buildServiceStorageKey,
+  decodeMultipartFileName,
   hashClientIp,
   sanitizeFileName,
   sniffMimeType,
@@ -63,6 +64,16 @@ describe("service file validation", () => {
     expect(sanitizeFileName("C:\\Users\\a\\Báo giá.pdf")).toBe("Báo giá.pdf");
     expect(sanitizeFileName("a\u0000b\r\n<c>.pdf")).toBe("abc.pdf");
     expect(sanitizeFileName("")).toBe("file");
+  });
+
+  it("restores UTF-8 file names that multipart parsing decoded as latin1", () => {
+    const mojibake = Buffer.from("Yêu cầu.pdf", "utf8").toString("latin1");
+    expect(decodeMultipartFileName(mojibake)).toBe("Yêu cầu.pdf");
+    expect(sanitizeFileName(mojibake)).toBe("Yêu cầu.pdf");
+    // Already-correct names and genuine latin1 names are left untouched.
+    expect(decodeMultipartFileName("Yêu cầu.pdf")).toBe("Yêu cầu.pdf");
+    expect(decodeMultipartFileName("café.pdf")).toBe("café.pdf");
+    expect(decodeMultipartFileName("plain.pdf")).toBe("plain.pdf");
   });
 
   it("generates storage keys server-side without the client file name", () => {

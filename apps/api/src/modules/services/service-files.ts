@@ -64,9 +64,23 @@ function isPlainUtf8Text(buffer: Buffer): boolean {
   return !text.includes("�");
 }
 
+/**
+ * Busboy (via multer) decodes multipart file names as latin1, which turns
+ * UTF-8 names such as "Yêu cầu.pdf" into mojibake. Re-decode as UTF-8 when the
+ * name is a valid latin1 encoding of UTF-8 bytes; leave anything else as is.
+ */
+export function decodeMultipartFileName(name: string): string {
+  if (!name) return name;
+  const codes = Array.from(name, (ch) => ch.codePointAt(0) ?? 0);
+  // Only strings made purely of latin1 code points, with at least one high byte, can be mis-decoded UTF-8.
+  if (codes.some((c) => c > 0xff) || !codes.some((c) => c >= 0x80)) return name;
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  return decoded.includes("�") ? name : decoded;
+}
+
 /** Keeps a display-safe base name: no path segments, control characters or quotes. */
 export function sanitizeFileName(name: string): string {
-  const base = path.basename(String(name || "").replace(/\\/g, "/"));
+  const base = path.basename(decodeMultipartFileName(String(name || "")).replace(/\\/g, "/"));
   const withoutControls = Array.from(base.normalize("NFC"))
     .filter((ch) => {
       const code = ch.charCodeAt(0);
