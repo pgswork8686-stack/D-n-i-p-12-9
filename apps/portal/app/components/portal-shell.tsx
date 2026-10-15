@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "../context/auth-context";
 import { Badge, Button } from "@nexus/ui";
 
-type FeatureKey = "hosting" | "membership" | "affiliate" | "finance";
+type FeatureKey = "hosting" | "membership" | "affiliate" | "finance" | "services";
 
 const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureKey }[] = [
   { label: "Dashboard", href: "/", icon: "📊" },
@@ -19,6 +19,7 @@ const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureK
   { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝", feature: "affiliate" },
   { label: "Membership", href: "/subscription", icon: "👑", feature: "membership" },
   { label: "Invoices & Billing", href: "/invoices", icon: "🧾", feature: "finance" },
+  { label: "Service Projects", href: "/services", icon: "🧩", feature: "services" },
   { label: "Support Tickets", href: "/tickets", icon: "🎫" },
   { label: "Notifications", href: "/notifications", icon: "🔔" },
   { label: "Account Profile", href: "/account", icon: "👤" },
