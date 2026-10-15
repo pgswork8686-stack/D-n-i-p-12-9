@@ -57,7 +57,7 @@ function freePort(): Promise<number> {
   });
 }
 
-async function startApi(): Promise<ChildProcess> {
+async function startApi(overrides: Record<string, string> = {}): Promise<ChildProcess> {
   const port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
   const entry = path.resolve(__dirname, "../../../apps/api/dist/main.js");
@@ -67,10 +67,11 @@ async function startApi(): Promise<ChildProcess> {
       PORT: String(port),
       NODE_ENV: "test",
       FEATURE_SERVICES: "true",
-      // Generous limits so functional gates are not throttled; the rate-limit gate lowers its own window.
+      // Per-IP quota of 4 is exercised by the rate-limit gate; the per-email quota stays out of the way.
       SERVICE_INQUIRY_RATE_LIMIT_PER_IP: "4",
       SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL: "50",
       SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS: "3600",
+      ...overrides,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -302,6 +303,41 @@ async function run() {
     gate("Existing marketplace endpoints still respond (GET /products)", (await call("GET", "/products")).status === 200);
   } finally {
     api.kill();
+  }
+
+  // ------------------------------------------------------- feature flag OFF
+  console.log("\n--- FEATURE_SERVICES=false (separate API process) ---");
+  const off = await startApi({ FEATURE_SERVICES: "false" });
+  try {
+    const features = await call("GET", "/v1/features");
+    gate("GET /v1/features reports services=false so frontends hide navigation", features.status === 200 && features.body.services === false, features.body);
+    const offStatuses = {
+      publicList: (await call("GET", "/v1/services")).status,
+      publicLegacy: (await call("GET", "/services")).status,
+      publicSubmit: (await call("POST", "/v1/service-inquiries", { form: inquiryForm(validFields()) })).status,
+      customerInquiries: (await call("GET", "/v1/me/service-inquiries", { token: CUSTOMER_A })).status,
+      customerProjects: (await call("GET", "/v1/me/service-projects", { token: CUSTOMER_A })).status,
+      adminServices: (await call("GET", "/v1/admin/services", { token: ADMIN })).status,
+      adminInquiries: (await call("GET", "/v1/admin/service-inquiries", { token: ADMIN })).status,
+      adminProjects: (await call("GET", "/v1/admin/service-projects", { token: ADMIN })).status,
+      adminStaff: (await call("GET", "/v1/admin/service-staff", { token: ADMIN })).status,
+    };
+    gate("Every services route (public, customer, admin) returns 404 while the flag is off", Object.values(offStatuses).every((s) => s === 404), offStatuses);
+    gate("Marketplace keeps working with the flag off (GET /products)", (await call("GET", "/products")).status === 200);
+  } finally {
+    off.kill();
+  }
+
+  // ------------------------------------------------------- Redis unavailable
+  console.log("\n--- Redis unreachable (separate API process) ---");
+  const noRedis = await startApi({ REDIS_URL: "redis://127.0.0.1:1" });
+  try {
+    const blocked = await call("POST", "/v1/service-inquiries", { form: inquiryForm(validFields({ contactEmail: "redis-down@example.com" })) });
+    gate("Public submissions fail closed with 503 when the rate limiter is unavailable", blocked.status === 503, blocked);
+    gate("No inquiry is stored when the limiter is unavailable", (await prisma.serviceInquiry.count({ where: { contactEmail: "redis-down@example.com" } })) === 0);
+    gate("Catalog reads do not depend on Redis", (await call("GET", "/v1/services")).status === 200);
+  } finally {
+    noRedis.kill();
   }
 
   const failed = results.filter((r) => !r.passed);
