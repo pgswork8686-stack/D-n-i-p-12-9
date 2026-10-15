@@ -117,7 +117,7 @@ export default function AdminInquiryDetailPage() {
       ) : !inquiry ? (
         <p className="text-sm text-gray-500">Loading…</p>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="space-y-6 min-w-0">
             <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
               <div className="flex items-start justify-between gap-4">

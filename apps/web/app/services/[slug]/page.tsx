@@ -36,7 +36,7 @@ export default async function ServiceDetailPage({ params }: Props) {
         </Link>
       </nav>
 
-      <div className="mt-6 grid gap-10 lg:grid-cols-[1fr_440px]">
+      <div className="mt-6 grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_440px]">
         <div className="min-w-0 space-y-8">
           <div>
             <span className="rounded-full bg-brand-soft px-3 py-1 text-sm font-medium text-brand">

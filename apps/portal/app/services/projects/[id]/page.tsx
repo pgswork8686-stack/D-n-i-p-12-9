@@ -150,7 +150,7 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
-              <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="space-y-6 min-w-0">
                   <section aria-labelledby="ms-heading" className="bg-white border border-slate-200 rounded-2xl p-6">
                     <h2 id="ms-heading" className="text-lg font-bold text-slate-900">

@@ -87,7 +87,7 @@ export default function MyServicesPage() {
                     description="Once we confirm your request, the project, its milestones and documents appear here."
                   />
                 ) : (
-                  <div className="grid gap-3">
+                  <div className="grid grid-cols-1 gap-3">
                     {projects.map((p) => {
                       const pct = p.milestoneProgress.total
                         ? Math.round((p.milestoneProgress.done / p.milestoneProgress.total) * 100)
@@ -98,7 +98,7 @@ export default function MyServicesPage() {
                           href={`/services/projects/${p.id}`}
                           className="block p-5 bg-white border border-slate-200 rounded-xl hover:border-blue-400 hover:shadow-sm transition group"
                         >
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                             <div className="space-y-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-mono text-xs font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
@@ -151,7 +151,7 @@ export default function MyServicesPage() {
                     No open requests.
                   </p>
                 ) : (
-                  <div className="grid gap-3">
+                  <div className="grid grid-cols-1 gap-3">
                     {openInquiries.map((i) => (
                       <Link
                         key={i.id}
