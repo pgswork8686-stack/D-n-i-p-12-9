@@ -180,7 +180,7 @@ export interface ConvertInquiryRequest {
 
 export interface ServiceProjectMemberDto {
   id: string;
-  userId: string;
+  userId: string | null;
   displayName: string | null;
   email: string | null;
   role: ServiceProjectMemberRole;

@@ -295,7 +295,8 @@ export class ServiceProjectsService {
         create: { projectId, userId: dto.userId, role, assignedById: actor.userId },
       });
       await tx.serviceProjectEvent.create({
-        data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_ASSIGNED, details: { userId: dto.userId, role } },
+        // Staffing changes reference internal user ids: keep them out of the customer history.
+        data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_ASSIGNED, isInternal: true, details: { userId: dto.userId, role } },
       });
       await this.audit.logActionWithClient(tx, {
         action: "SERVICE_PROJECT_MEMBER_ASSIGNED",
@@ -316,7 +317,7 @@ export class ServiceProjectsService {
       const res = await tx.serviceProjectMember.deleteMany({ where: { projectId, userId } });
       if (res.count === 0) throw new NotFoundException("Member not found");
       await tx.serviceProjectEvent.create({
-        data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_REMOVED, details: { userId } },
+        data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_REMOVED, isInternal: true, details: { userId } },
       });
       await this.audit.logActionWithClient(tx, {
         action: "SERVICE_PROJECT_MEMBER_REMOVED",
@@ -363,6 +364,7 @@ export class ServiceProjectsService {
   }
 
   async updateMilestone(projectId: string, milestoneId: string, dto: UpdateMilestoneDto, actor: ActorContext): Promise<AdminServiceProjectDto> {
+    await this.requireOpenProject(projectId);
     const milestone = await prisma.serviceMilestone.findFirst({ where: { id: milestoneId, projectId } });
     if (!milestone) throw new NotFoundException("Milestone not found");
 
@@ -411,12 +413,21 @@ export class ServiceProjectsService {
   }
 
   async staffPostMessage(projectId: string, dto: PostProjectMessageDto, actor: ActorContext): Promise<AdminServiceProjectDto> {
-    await this.requireProject(projectId);
+    await this.requireOpenProject(projectId);
     const body = this.cleanBody(dto.body);
     const isInternalNote = dto.isInternalNote === true;
     await prisma.$transaction(async (tx) => {
-      await tx.serviceProjectMessage.create({
+      const message = await tx.serviceProjectMessage.create({
         data: { projectId, senderId: actor.userId, senderType: ServiceSenderType.STAFF, isInternalNote, body },
+      });
+      await this.audit.logActionWithClient(tx, {
+        action: "SERVICE_PROJECT_MESSAGE_POSTED",
+        entity: "ServiceProject",
+        entityId: projectId,
+        actorId: actor.userId,
+        details: { messageId: message.id, internal: isInternalNote },
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
       });
       await tx.serviceProjectEvent.create({
         data: {
@@ -438,7 +449,7 @@ export class ServiceProjectsService {
     visibility: ServiceDocumentVisibility | undefined,
     actor: ActorContext,
   ): Promise<AdminServiceProjectDto> {
-    await this.requireProject(projectId);
+    await this.requireOpenProject(projectId);
     if (!file) throw new BadRequestException("Missing document file");
     await this.storeDocument(projectId, file, visibility ?? ServiceDocumentVisibility.INTERNAL, ServiceSenderType.STAFF, actor);
     return loadAdminProject(projectId);
@@ -455,6 +466,15 @@ export class ServiceProjectsService {
   private async requireProject(id: string) {
     const project = await prisma.serviceProject.findUnique({ where: { id }, select: { id: true, status: true } });
     if (!project) throw new NotFoundException("Project not found");
+    return project;
+  }
+
+  /** Completed and cancelled projects are read-only for staff as well as customers. */
+  private async requireOpenProject(id: string) {
+    const project = await this.requireProject(id);
+    if (isProjectClosed(project.status)) {
+      throw new BadRequestException("Project is closed; reopen is not supported");
+    }
     return project;
   }
 

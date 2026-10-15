@@ -34,6 +34,11 @@ type UserWithProfile = { id: string; email: string | null; profile?: { displayNa
 const displayNameOf = (u: UserWithProfile | null | undefined): string | null =>
   u?.profile?.displayName || u?.email || null;
 
+/** Customer-facing staff name: never falls back to the staff member's email. */
+const STAFF_FALLBACK_NAME = "PGS team";
+const staffNameForCustomer = (u: UserWithProfile | null | undefined): string =>
+  u?.profile?.displayName || STAFF_FALLBACK_NAME;
+
 export function toServiceDto(s: any): ServiceDto {
   const productSlug =
     s.pricingMode === "DIRECT_CHECKOUT" && s.product && s.product.status === "ACTIVE" ? s.product.slug : null;
@@ -124,6 +129,24 @@ function toDocumentDto(d: any): ServiceProjectDocumentDto {
   return { ...toFileDto(d), visibility: d.visibility, uploaderType: d.uploaderType };
 }
 
+function toCustomerMemberDto(m: any): ServiceProjectMemberDto {
+  return {
+    id: m.id,
+    userId: null,
+    displayName: staffNameForCustomer(m.user),
+    email: null,
+    role: m.role,
+    createdAt: m.createdAt.toISOString(),
+  };
+}
+
+function toCustomerMessageDto(m: any): ServiceProjectMessageDto {
+  return {
+    ...toMessageDto(m),
+    senderName: m.senderType === "STAFF" ? staffNameForCustomer(m.sender) : displayNameOf(m.sender),
+  };
+}
+
 function toMessageDto(m: any): ServiceProjectMessageDto {
   return {
     id: m.id,
@@ -175,11 +198,12 @@ export function toCustomerProjectDto(p: any): ServiceProjectDto {
     ...toProjectSummaryDto(p),
     summary: p.summary ?? null,
     inquiryNumber: p.inquiry?.inquiryNumber ?? null,
-    members: (p.members || []).map(toMemberDto).map((m: ServiceProjectMemberDto) => ({ ...m, email: null })),
+    members: (p.members || []).map(toCustomerMemberDto),
     milestones: (p.milestones || []).map(toMilestoneDto),
     documents: (p.documents || []).filter((d: any) => d.visibility === "CUSTOMER").map(toDocumentDto),
-    messages: (p.messages || []).filter((m: any) => !m.isInternalNote).map(toMessageDto),
-    events: (p.events || []).filter((e: any) => !e.isInternal).map(toEventDto),
+    messages: (p.messages || []).filter((m: any) => !m.isInternalNote).map(toCustomerMessageDto),
+    // Event details may carry internal ids; customers get type/status/time only.
+    events: (p.events || []).filter((e: any) => !e.isInternal).map((e: any) => ({ ...toEventDto(e), details: null })),
   };
 }
 

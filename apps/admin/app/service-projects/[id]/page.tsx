@@ -307,7 +307,7 @@ export default function AdminProjectDetailPage() {
                         <div className="font-medium text-gray-900 truncate">{m.displayName || m.email}</div>
                         <div className="text-xs text-gray-500">{m.role}</div>
                       </div>
-                      <Button variant="ghost" className="text-xs text-red-600" disabled={busy} onClick={() => run(() => client().adminRemoveProjectMember(project.id, m.userId))}>
+                      <Button variant="ghost" className="text-xs text-red-600" disabled={busy} onClick={() => run(() => client().adminRemoveProjectMember(project.id, m.userId!))}>
                         Remove
                       </Button>
                     </li>

@@ -273,3 +273,30 @@ describe("ServiceInquiriesService", () => {
     expect(res.inquiryNumber).toBe("SI-202610-AAAAAA");
   });
 });
+
+describe("ServiceInquiriesService configuration", () => {
+  const original = { ...process.env };
+  afterEach(() => {
+    process.env = { ...original };
+  });
+  const build = (env: Record<string, string | undefined>) =>
+    new ServiceInquiriesService({} as any, {} as any, {} as any, { get: (k: string) => env[k] } as any);
+
+  it("refuses to start in production with the module enabled and no IP salt", () => {
+    process.env.NODE_ENV = "production";
+    process.env.FEATURE_SERVICES = "true";
+    expect(() => build({ NODE_ENV: "production" })).toThrow(/SERVICE_INQUIRY_IP_SALT/);
+  });
+
+  it("still boots in production while the module is disabled", () => {
+    process.env.NODE_ENV = "production";
+    process.env.FEATURE_SERVICES = "false";
+    expect(() => build({ NODE_ENV: "production" })).not.toThrow();
+  });
+
+  it("boots in production when the salt is configured", () => {
+    process.env.NODE_ENV = "production";
+    process.env.FEATURE_SERVICES = "true";
+    expect(() => build({ NODE_ENV: "production", SERVICE_INQUIRY_IP_SALT: "x".repeat(32) })).not.toThrow();
+  });
+});

@@ -17,7 +17,7 @@ import {
   canCustomerAccessInquiry,
   isManualInquiryTransition,
 } from "@nexus/database";
-import { generateTicketNumber, sanitizeTicketContent } from "@nexus/utils";
+import { generateTicketNumber, isFeatureEnabled, sanitizeTicketContent } from "@nexus/utils";
 import {
   AdminServiceInquiryDto,
   AdminServiceProjectDto,
@@ -64,7 +64,13 @@ export class ServiceInquiriesService {
     private readonly files: ServiceFileStore,
     config: ConfigService,
   ) {
-    this.ipSalt = config.get<string>("SERVICE_INQUIRY_IP_SALT") || "pgs-service-inquiry";
+    const salt = config.get<string>("SERVICE_INQUIRY_IP_SALT")?.trim();
+    // Fail closed when the module is live in production: a known salt makes stored IP hashes
+    // reversible. While FEATURE_SERVICES is off the API must still boot for the marketplace.
+    if (!salt && config.get<string>("NODE_ENV") === "production" && isFeatureEnabled("services")) {
+      throw new Error("[Services] SERVICE_INQUIRY_IP_SALT is required in production when FEATURE_SERVICES is enabled");
+    }
+    this.ipSalt = salt || "local-dev-only-salt";
   }
 
   // ---------------------------------------------------------- submission

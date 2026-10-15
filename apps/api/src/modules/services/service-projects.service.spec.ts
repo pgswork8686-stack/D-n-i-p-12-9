@@ -226,12 +226,14 @@ describe("ServiceProjectsService", () => {
   describe("milestones", () => {
     it("rejects invalid milestone transitions", async () => {
       const { service } = makeService();
+      jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue({ id: "prj-1", status: "IN_PROGRESS" } as any);
       jest.spyOn(prisma.serviceMilestone, "findFirst").mockResolvedValue({ id: "ms1", projectId: "prj-1", status: "DONE", title: "x" } as any);
       await expect(service.updateMilestone("prj-1", "ms1", { status: "CANCELLED" as any }, actor)).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it("scopes milestone lookups to the project in the URL", async () => {
       const { service } = makeService();
+      jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue({ id: "prj-1", status: "IN_PROGRESS" } as any);
       const find = jest.spyOn(prisma.serviceMilestone, "findFirst").mockResolvedValue(null);
       await expect(service.updateMilestone("prj-1", "ms-other", { title: "x" }, actor)).rejects.toBeInstanceOf(NotFoundException);
       expect(find).toHaveBeenCalledWith({ where: { id: "ms-other", projectId: "prj-1" } });
@@ -256,5 +258,71 @@ describe("ServiceProjectsService", () => {
 
     expect((msg.mock.calls[0][0] as any).data.isInternalNote).toBe(true);
     expect((event.mock.calls[0][0] as any).data.isInternal).toBe(true);
+  });
+});
+
+describe("ServiceProjectsService hardening", () => {
+  const actor = { userId: "admin-1" };
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.spyOn(prisma, "$transaction").mockImplementation(async (cb: any) => cb(prisma));
+  });
+
+  it("never falls back to staff emails or exposes staff ids/event details to customers", async () => {
+    const { service } = makeService();
+    const noName = { id: "staff-9", email: "secret.staff@pgs.vn", profile: null };
+    jest.spyOn(prisma.serviceProject, "findFirst").mockResolvedValue(
+      projectRow({
+        members: [{ id: "m9", userId: "staff-9", role: "MEMBER", createdAt: new Date(), user: noName }],
+        messages: [{ id: "x", senderType: "STAFF", isInternalNote: false, body: "hi", createdAt: new Date(), sender: noName }],
+        events: [{ id: "e1", type: "MILESTONE_UPDATED", isInternal: false, fromStatus: null, toStatus: null, details: { milestoneId: "ms1" }, createdAt: new Date() }],
+      }) as any,
+    );
+    const dto = await service.getMine("cust-1", "prj-1");
+    expect(JSON.stringify(dto)).not.toContain("secret.staff@pgs.vn");
+    expect(JSON.stringify(dto)).not.toContain("staff-9");
+    expect(dto.members[0]).toMatchObject({ displayName: "PGS team", userId: null, email: null });
+    expect(dto.messages[0].senderName).toBe("PGS team");
+    expect(dto.events[0].details).toBeNull();
+  });
+
+  it("records staffing changes as internal history", async () => {
+    const { service } = makeService();
+    jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValueOnce({ id: "prj-1", status: "PLANNING" } as any);
+    jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "staff-2", userRoles: [{ role: { name: "ops" } }] } as any);
+    jest.spyOn(prisma.serviceProjectMember, "upsert").mockResolvedValue({} as any);
+    const event = jest.spyOn(prisma.serviceProjectEvent, "create").mockResolvedValue({} as any);
+    jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue(projectRow() as any);
+    await service.assignMember("prj-1", { userId: "staff-2" }, actor);
+    expect((event.mock.calls[0][0] as any).data.isInternal).toBe(true);
+  });
+
+  it("audits staff messages, including internal notes", async () => {
+    const { service, audit } = makeService();
+    jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValueOnce({ id: "prj-1", status: "IN_PROGRESS" } as any);
+    jest.spyOn(prisma.serviceProjectMessage, "create").mockResolvedValue({ id: "msg-9" } as any);
+    jest.spyOn(prisma.serviceProjectEvent, "create").mockResolvedValue({} as any);
+    jest.spyOn(prisma.serviceProject, "update").mockResolvedValue({} as any);
+    jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue(projectRow() as any);
+    await service.staffPostMessage("prj-1", { body: "note", isInternalNote: true }, actor);
+    expect(audit.logActionWithClient).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ action: "SERVICE_PROJECT_MESSAGE_POSTED", details: { messageId: "msg-9", internal: true } }),
+    );
+  });
+
+  it.each([
+    ["staffPostMessage", (s: ServiceProjectsService) => s.staffPostMessage("prj-1", { body: "x" }, actor)],
+    ["updateMilestone", (s: ServiceProjectsService) => s.updateMilestone("prj-1", "ms1", { title: "x" }, actor)],
+    [
+      "staffUploadDocument",
+      (s: ServiceProjectsService) =>
+        s.staffUploadDocument("prj-1", { originalname: "a.pdf", mimetype: "application/pdf", size: PDF.length, buffer: PDF }, undefined, actor),
+    ],
+  ])("refuses %s on a closed project", async (_name, act) => {
+    const { service } = makeService();
+    jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue({ id: "prj-1", status: "COMPLETED" } as any);
+    await expect(act(service)).rejects.toBeInstanceOf(BadRequestException);
   });
 });
