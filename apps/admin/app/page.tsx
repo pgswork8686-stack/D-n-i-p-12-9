@@ -251,7 +251,7 @@ export default function AdminHomePage() {
         </Card>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4">
         <a href="/admin/products">
           <Button variant="primary" size="sm">
             📦 Manage Catalog & Products →
@@ -265,6 +265,11 @@ export default function AdminHomePage() {
         <a href="/automation">
           <Button variant="primary" size="sm">
             ⚡ Automation & AI Engine →
+          </Button>
+        </a>
+        <a href="/service-inquiries">
+          <Button variant="primary" size="sm">
+            🧩 Services & Projects →
           </Button>
         </a>
         <a href={WEB_URL} target="_blank" rel="noreferrer">
