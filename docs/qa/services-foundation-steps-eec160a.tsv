@@ -1,0 +1,36 @@
+step	command	exit	started_utc	seconds	log
+install	pnpm install --frozen-lockfile	0	2026-10-15T16:58:12Z	2	install.log
+db_generate	pnpm db:generate	0	2026-10-15T16:58:14Z	5	db_generate.log
+lint	pnpm lint	0	2026-10-15T16:58:19Z	10	lint.log
+typecheck	pnpm typecheck	0	2026-10-15T16:58:29Z	24	typecheck.log
+unit_tests	pnpm test	0	2026-10-15T16:58:53Z	41	unit_tests.log
+prisma_validate	cd packages/database && node scripts/prisma-cli.js validate	0	2026-10-15T16:59:34Z	3	prisma_validate.log
+db_reset	docker exec pgs-test-postgres psql -U postgres -c 'DROP DATABASE IF EXISTS marketplace WITH (FORCE)' -c 'DROP DATABASE IF EXISTS shadow WITH (FORCE)' -c 'CREATE DATABASE marketplace' -c 'CREATE DATABASE shadow' && docker exec pgs-test-redis redis-cli FLUSHALL	0	2026-10-15T16:59:37Z	0	db_reset.log
+db_migrate	pnpm db:migrate	0	2026-10-15T16:59:37Z	7	db_migrate.log
+migration_drift	cd packages/database && node scripts/prisma-cli.js migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url postgresql://postgres:postgres@localhost:55432/shadow --exit-code	0	2026-10-15T16:59:44Z	4	migration_drift.log
+db_seed	pnpm db:seed:local	0	2026-10-15T16:59:48Z	8	db_seed.log
+build_monorepo	pnpm build --concurrency=2	1	2026-10-15T16:59:56Z	75	build_monorepo.log
+build_api_worker	pnpm --filter @nexus/api --filter @nexus/worker build	0	2026-10-15T17:01:11Z	18	build_api_worker.log
+worker_smoke	pnpm worker:smoke	0	2026-10-15T17:01:29Z	3	worker_smoke.log
+acceptance_phase4	pnpm test:acceptance:phase4	0	2026-10-15T17:01:32Z	7	acceptance_phase4.log
+acceptance_phase5	pnpm test:acceptance:phase5	0	2026-10-15T17:01:40Z	15	acceptance_phase5.log
+acceptance_phase6	pnpm test:acceptance:phase6	0	2026-10-15T17:01:55Z	9	acceptance_phase6.log
+acceptance_phase7	pnpm test:acceptance:phase7	0	2026-10-15T17:02:04Z	18	acceptance_phase7.log
+acceptance_phase8	pnpm test:acceptance:phase8	0	2026-10-15T17:02:22Z	26	acceptance_phase8.log
+acceptance_phase9	pnpm test:acceptance:phase9	0	2026-10-15T17:02:48Z	17	acceptance_phase9.log
+acceptance_phase10	pnpm test:acceptance:phase10	0	2026-10-15T17:03:05Z	6	acceptance_phase10.log
+acceptance_phase11	pnpm test:acceptance:phase11	0	2026-10-15T17:03:11Z	6	acceptance_phase11.log
+acceptance_phase12	pnpm test:acceptance:phase12	0	2026-10-15T17:03:17Z	8	acceptance_phase12.log
+acceptance_phase13	pnpm test:acceptance:phase13	0	2026-10-15T17:03:25Z	7	acceptance_phase13.log
+acceptance_phase14	pnpm test:acceptance:phase14	0	2026-10-15T17:03:32Z	6	acceptance_phase14.log
+acceptance_phase15	pnpm test:acceptance:phase15	0	2026-10-15T17:03:38Z	3	acceptance_phase15.log
+acceptance_phase16	pnpm test:acceptance:phase16	0	2026-10-15T17:03:41Z	2	acceptance_phase16.log
+acceptance_phase17	pnpm test:acceptance:phase17	0	2026-10-15T17:03:44Z	2	acceptance_phase17.log
+acceptance_phase18	pnpm test:acceptance:phase18	0	2026-10-15T17:03:46Z	3	acceptance_phase18.log
+acceptance_services	pnpm test:acceptance:services	0	2026-10-15T17:03:49Z	11	acceptance_services.log
+docker_api	docker build -q -f infra/docker/Dockerfile --target api --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-api .	0	2026-10-15T17:04:00Z	90	docker_api.log
+docker_worker	docker build -q -f infra/docker/Dockerfile --target worker --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-worker .	0	2026-10-15T17:05:30Z	3	docker_worker.log
+docker_migrate	docker build -q -f infra/docker/Dockerfile --target migrate --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-migrate .	0	2026-10-15T17:05:34Z	5	docker_migrate.log
+docker_next_web	docker build -q -f infra/docker/Dockerfile --target next --build-arg APP=web --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-web .	0	2026-10-15T17:05:39Z	55	docker_next_web.log
+docker_next_portal	docker build -q -f infra/docker/Dockerfile --target next --build-arg APP=portal --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-portal .	0	2026-10-15T17:06:34Z	56	docker_next_portal.log
+docker_next_admin	docker build -q -f infra/docker/Dockerfile --target next --build-arg APP=admin --build-arg NEXT_PUBLIC_API_URL=https://api.example.vn --build-arg NEXT_PUBLIC_SITE_URL=https://example.vn --build-arg NEXT_PUBLIC_PORTAL_URL=https://app.example.vn -t pgs-qa-admin .	0	2026-10-15T17:07:30Z	57	docker_next_admin.log
