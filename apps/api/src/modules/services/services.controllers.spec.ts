@@ -1,5 +1,5 @@
 import { GUARDS_METADATA } from "@nestjs/common/constants";
-import { NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { FEATURE_KEY, FeatureFlagGuard } from "../../common/feature-flags";
 import { Reflector } from "@nestjs/core";
 import { PERMISSIONS_KEY } from "../auth/require-permissions.decorator";
@@ -15,6 +15,7 @@ import {
   MyServiceProjectsController,
   PublicServiceInquiriesController,
   PublicServicesController,
+  signedInOnlyFileFilter,
 } from "./services.controllers";
 
 const ALL = [
@@ -121,5 +122,19 @@ describe("services feature flag", () => {
     process.env.FEATURE_SERVICES = "true";
     const guard = new FeatureFlagGuard(new Reflector());
     expect(guard.canActivate(ctxFor(PublicServicesController))).toBe(true);
+  });
+});
+
+describe("signedInOnlyFileFilter (public inquiry uploads)", () => {
+  it("rejects file parts from anonymous visitors before they are buffered", () => {
+    const cb = jest.fn();
+    signedInOnlyFileFilter({ headers: {} } as any, {}, cb);
+    expect(cb).toHaveBeenCalledWith(expect.any(BadRequestException), false);
+  });
+
+  it("accepts file parts from signed-in users (content is validated later)", () => {
+    const cb = jest.fn();
+    signedInOnlyFileFilter({ headers: {}, user: { id: "u1" } } as any, {}, cb);
+    expect(cb).toHaveBeenCalledWith(null, true);
   });
 });

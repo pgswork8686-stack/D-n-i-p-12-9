@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -48,6 +49,24 @@ const UPLOAD_LIMITS = {
   fieldSize: 64 * 1024,
 };
 
+/**
+ * Multer buffers files before the handler runs, so the public form must refuse
+ * anonymous file parts here — otherwise anyone could push 5 x 10 MB into memory
+ * per request without ever reaching the rate limiter. Guards run before
+ * interceptors, so req.user is already resolved by OptionalAuthGuard.
+ */
+export function signedInOnlyFileFilter(
+  req: Request,
+  _file: unknown,
+  callback: (error: Error | null, acceptFile: boolean) => void,
+): void {
+  if (!req.user) {
+    callback(new BadRequestException("Vui lòng đăng nhập để đính kèm tài liệu."), false);
+    return;
+  }
+  callback(null, true);
+}
+
 function actorOf(req: Request): ActorContext {
   return {
     userId: req.user!.id,
@@ -85,7 +104,9 @@ export class PublicServiceInquiriesController {
   /** Anonymous or signed-in. Attachments (multipart `files`) require a signed-in user. */
   @Post()
   @HttpCode(201)
-  @UseInterceptors(FilesInterceptor("files", SERVICE_INQUIRY_MAX_FILES, { limits: UPLOAD_LIMITS }))
+  @UseInterceptors(
+    FilesInterceptor("files", SERVICE_INQUIRY_MAX_FILES, { limits: UPLOAD_LIMITS, fileFilter: signedInOnlyFileFilter }),
+  )
   submit(
     @Req() req: Request,
     @Body() dto: CreateServiceInquiryDto,

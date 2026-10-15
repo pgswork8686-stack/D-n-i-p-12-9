@@ -181,7 +181,9 @@ export default function AdminInquiryDetailPage() {
                           onClick={() =>
                             run(async () => {
                               const { url } = await getApiClient(token).adminGetInquiryAttachmentUrl(inquiry.id, a.id);
-                              window.open(url, "_blank", "noopener,noreferrer");
+                              // Signed URLs are served as attachments: navigating downloads without leaving the page
+                              // and is not blocked like a popup opened after an await.
+                              window.location.assign(url);
                             })
                           }
                         >

@@ -52,24 +52,30 @@ export function listPosts(params: Record<string, string | undefined>) {
   );
 }
 
-/** Returns null when the services module is disabled (API answers 404). */
-export async function listServices(): Promise<ServiceDto[] | null> {
+async function fetchServices(path: string, fetchFn: typeof fetch): Promise<Response> {
   try {
-    const res = await fetch(`${serverApiUrl()}/v1/services`, { cache: "no-store" });
-    if (res.status === 404) return null;
-    if (!res.ok) return [];
-    return (await res.json()) as ServiceDto[];
+    return await fetchFn(`${serverApiUrl()}${path}`, { cache: "no-store" });
   } catch {
-    return [];
+    throw new Error("Unable to connect to the services catalog.");
   }
 }
 
-export async function getService(slug: string): Promise<ServiceDto | null> {
-  try {
-    const res = await fetch(`${serverApiUrl()}/v1/services/${encodeURIComponent(slug)}`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as ServiceDto;
-  } catch {
-    return null;
-  }
+/**
+ * Returns null when the services module is disabled (API answers 404). Outages
+ * and 5xx responses throw, so the page shows the error boundary instead of an
+ * empty catalog.
+ */
+export async function listServices(fetchFn: typeof fetch = fetch): Promise<ServiceDto[] | null> {
+  const res = await fetchServices("/v1/services", fetchFn);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
+  return (await res.json()) as ServiceDto[];
+}
+
+/** Returns null for unknown, unpublished or disabled services; throws on outages. */
+export async function getService(slug: string, fetchFn: typeof fetch = fetch): Promise<ServiceDto | null> {
+  const res = await fetchServices(`/v1/services/${encodeURIComponent(slug)}`, fetchFn);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
+  return (await res.json()) as ServiceDto;
 }

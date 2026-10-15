@@ -12,7 +12,8 @@ interface Props {
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const service = await getService(params.slug);
+  // Metadata must not take the page down: outages are reported by the page body.
+  const service = await getService(params.slug).catch(() => null);
   if (!service) return { title: "Dịch vụ" };
   return { title: service.name, description: service.summary };
 }

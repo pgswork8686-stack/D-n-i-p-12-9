@@ -83,7 +83,9 @@ export default function ProjectDetailPage() {
     if (!token || !project) return;
     try {
       const { url } = await getApiClient(token).getMyProjectDocumentUrl(project.id, documentId);
-      window.open(url, "_blank", "noopener,noreferrer");
+      // Signed URLs are served as attachments: navigating downloads without leaving the page
+      // and is not blocked like a popup opened after an await.
+      window.location.assign(url);
     } catch (err: any) {
       setActionError(err?.message || "Failed to open document");
     }
