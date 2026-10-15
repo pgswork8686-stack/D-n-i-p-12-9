@@ -23,6 +23,7 @@ import { AffiliatesModule } from "./modules/affiliates/affiliates.module";
 import { HostingModule } from "./modules/hosting/hosting.module";
 import { TicketsModule } from "./modules/tickets/tickets.module";
 import { FinanceModule } from "./modules/finance/finance.module";
+import { ServicesModule } from "./modules/services/services.module";
 import { CorrelationIdMiddleware } from "./common/middleware/correlation-id.middleware";
 import { SecurityHeadersMiddleware } from "./common/middleware/security-headers.middleware";
 import { FeatureFlagGuard, FeaturesController } from "./common/feature-flags";
@@ -53,6 +54,7 @@ import { FeatureFlagGuard, FeaturesController } from "./common/feature-flags";
     HostingModule,
     TicketsModule,
     FinanceModule,
+    ServicesModule,
     HealthModule,
     StorageModule,
     AuthModule,
