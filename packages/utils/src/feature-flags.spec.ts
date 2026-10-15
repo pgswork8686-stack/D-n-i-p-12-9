@@ -7,6 +7,7 @@ describe("feature flags", () => {
       membership: false,
       affiliate: false,
       finance: false,
+      services: false,
     });
   });
 
@@ -16,6 +17,7 @@ describe("feature flags", () => {
       membership: true,
       affiliate: true,
       finance: true,
+      services: true,
     });
   });
 
