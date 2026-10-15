@@ -8,6 +8,7 @@ import { AdminServiceInquiryDto, ServiceInquiryStatus } from "@nexus/contracts";
 import { useAuth } from "../../context/auth-context";
 import { getApiClient } from "../../lib/api";
 import { INQUIRY_VARIANT, ServicesNav, fieldClass, formatDateTime } from "../../components/services-nav";
+import { confirmAction, useCan } from "../../lib/permissions";
 
 /** Mirrors the backend rules; the API remains the authority and rejects anything else. */
 const NEXT_STATUSES: Record<ServiceInquiryStatus, ServiceInquiryStatus[]> = {
@@ -40,6 +41,10 @@ export default function AdminInquiryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { token } = useAuth();
+  const can = useCan();
+  const canManage = can("inquiry.manage");
+  // Must match the API: POST …/convert requires both permissions.
+  const canConvert = can("inquiry.manage", "project.manage");
   const [inquiry, setInquiry] = useState<AdminServiceInquiryDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -76,10 +81,12 @@ export default function AdminInquiryDetailPage() {
     }
   };
 
-  const changeStatus = (status: ServiceInquiryStatus) =>
-    run(async () => {
+  const changeStatus = (status: ServiceInquiryStatus) => {
+    if ((status === "REJECTED" || status === "SPAM") && !confirmAction(`Mark this inquiry as ${status}?`)) return;
+    return run(async () => {
       setInquiry(await getApiClient(token).adminUpdateServiceInquiry(id, { status }));
     });
+  };
 
   const saveNote = () =>
     run(async () => {
@@ -88,6 +95,7 @@ export default function AdminInquiryDetailPage() {
 
   const doConvert = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!confirmAction("Create a project from this inquiry? The inquiry becomes CONVERTED and cannot be changed afterwards.")) return;
     run(async () => {
       const project = await getApiClient(token).adminConvertServiceInquiry(id, {
         title: convert.title.trim() || undefined,
@@ -193,7 +201,7 @@ export default function AdminInquiryDetailPage() {
               </label>
               <textarea id="staff-note" rows={4} maxLength={5000} value={note} onChange={(e) => setNote(e.target.value)} className={`${fieldClass} mt-2`} />
               <div className="mt-2 flex justify-end">
-                <Button variant="outline" className="text-xs" disabled={busy} onClick={saveNote}>
+                <Button variant="outline" className="text-xs" disabled={busy || !canManage} onClick={saveNote}>
                   Save note
                 </Button>
               </div>
@@ -215,7 +223,7 @@ export default function AdminInquiryDetailPage() {
                 <h3 className="text-sm font-semibold text-gray-700">Change status</h3>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {NEXT_STATUSES[inquiry.status].map((s) => (
-                    <Button key={s} variant="outline" className="text-xs" disabled={busy} onClick={() => changeStatus(s)}>
+                    <Button key={s} variant="outline" className="text-xs" disabled={busy || !canManage} onClick={() => changeStatus(s)}>
                       {s}
                     </Button>
                   ))}
@@ -226,6 +234,7 @@ export default function AdminInquiryDetailPage() {
             {inquiry.status === "QUALIFIED" && (
               <form onSubmit={doConvert} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-700">Convert to project</h3>
+                {!canConvert && <p className="text-xs text-gray-500">Requires inquiry.manage and project.manage.</p>}
                 <label className="block text-xs font-semibold text-gray-700">
                   Project title
                   <input required maxLength={200} value={convert.title} onChange={(e) => setConvert({ ...convert, title: e.target.value })} className={`${fieldClass} mt-1`} />
@@ -260,7 +269,7 @@ export default function AdminInquiryDetailPage() {
                     <input type="date" value={convert.targetDate} onChange={(e) => setConvert({ ...convert, targetDate: e.target.value })} className={`${fieldClass} mt-1`} />
                   </label>
                 </div>
-                <Button type="submit" variant="primary" className="w-full" disabled={busy}>
+                <Button type="submit" variant="primary" className="w-full" disabled={busy || !canConvert}>
                   {busy ? "Converting…" : "Create project"}
                 </Button>
               </form>

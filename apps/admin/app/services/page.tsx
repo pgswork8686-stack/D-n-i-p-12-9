@@ -6,6 +6,7 @@ import { CreateServiceRequest, ServiceCatalogStatus, ServiceDto, ServicePricingM
 import { useAuth } from "../context/auth-context";
 import { getApiClient } from "../lib/api";
 import { ServicesNav, fieldClass } from "../components/services-nav";
+import { useCan } from "../lib/permissions";
 
 const STATUS_VARIANT: Record<ServiceCatalogStatus, "success" | "warning" | "info"> = {
   ACTIVE: "success",
@@ -90,6 +91,8 @@ function toRequest(f: FormState, isEdit: boolean): CreateServiceRequest {
 
 export default function AdminServicesPage() {
   const { token, isLoading: authLoading } = useAuth();
+  const can = useCan();
+  const canManage = can("service.manage");
   const [services, setServices] = useState<ServiceDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -157,7 +160,7 @@ export default function AdminServicesPage() {
         title="Services"
         subtitle="Custom development, AI chatbot and automation services shown on the storefront"
         actions={
-          <Button variant="primary" className="text-xs" onClick={() => openEditor("new")}>
+          <Button variant="primary" className="text-xs" disabled={!canManage} title={canManage ? undefined : "Requires service.manage"} onClick={() => openEditor("new")}>
             + New service
           </Button>
         }
@@ -194,7 +197,7 @@ export default function AdminServicesPage() {
                     <Badge variant={STATUS_VARIANT[s.status]}>{s.status}</Badge>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Button variant="outline" className="text-xs" onClick={() => openEditor(s)}>
+                    <Button variant="outline" className="text-xs" disabled={!canManage} title={canManage ? undefined : "Requires service.manage"} onClick={() => openEditor(s)}>
                       Edit
                     </Button>
                   </td>

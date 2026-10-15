@@ -14,6 +14,7 @@ import {
 import { useAuth } from "../../context/auth-context";
 import { getApiClient } from "../../lib/api";
 import { PROJECT_VARIANT, ServicesNav, fieldClass, formatDate, formatDateTime, toDateInput } from "../../components/services-nav";
+import { confirmAction, useCan } from "../../lib/permissions";
 
 /** Mirrors the backend rules; the API remains the authority and rejects anything else. */
 const NEXT_STATUSES: Record<ServiceProjectStatus, ServiceProjectStatus[]> = {
@@ -42,6 +43,8 @@ const MILESTONE_VARIANT: Record<ServiceMilestoneStatus, "success" | "warning" | 
 export default function AdminProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { token } = useAuth();
+  const can = useCan();
+  const canManage = can("project.manage");
   const [project, setProject] = useState<AdminServiceProjectDto | null>(null);
   const [staff, setStaff] = useState<StaffUserDto[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +133,10 @@ export default function AdminProjectDetailPage() {
                 <Badge variant={PROJECT_VARIANT[project.status]}>{project.status}</Badge>
                 <div className="flex flex-wrap gap-2">
                   {NEXT_STATUSES[project.status].map((s) => (
-                    <Button key={s} variant="outline" className="text-xs" disabled={busy} onClick={() => run(() => client().adminUpdateServiceProject(project.id, { status: s }))}>
+                    <Button key={s} variant="outline" className="text-xs" disabled={busy || !canManage} onClick={() => {
+                        if ((s === "COMPLETED" || s === "CANCELLED") && !confirmAction(`Move this project to ${s}? Closed projects become read-only and cannot be reopened.`)) return;
+                        run(() => client().adminUpdateServiceProject(project.id, { status: s }));
+                      }}>
                       → {s}
                     </Button>
                   ))}
@@ -169,7 +175,7 @@ export default function AdminProjectDetailPage() {
                 <textarea rows={2} maxLength={5000} value={details.summary} onChange={(e) => setDetails({ ...details, summary: e.target.value })} className={`${fieldClass} mt-1`} />
               </label>
               <div className="md:col-span-4 flex justify-end">
-                <Button type="submit" variant="outline" className="text-xs" disabled={busy}>
+                <Button type="submit" variant="outline" className="text-xs" disabled={busy || !canManage}>
                   Save details
                 </Button>
               </div>
@@ -200,7 +206,7 @@ export default function AdminProjectDetailPage() {
                             key={s}
                             variant="outline"
                             className="text-xs"
-                            disabled={busy}
+                            disabled={busy || !canManage}
                             onClick={() => run(() => client().adminUpdateMilestone(project.id, m.id, { status: s }))}
                           >
                             → {s}
@@ -241,7 +247,7 @@ export default function AdminProjectDetailPage() {
                     </label>
                     <input id="ms-desc" maxLength={2000} placeholder="Description (optional)" value={milestone.description} onChange={(e) => setMilestone({ ...milestone, description: e.target.value })} className={`${fieldClass} md:col-span-2`} />
                     <div className="md:col-span-2 flex justify-end">
-                      <Button type="submit" variant="primary" className="text-xs" disabled={busy}>
+                      <Button type="submit" variant="primary" className="text-xs" disabled={busy || !canManage}>
                         Add milestone
                       </Button>
                     </div>
@@ -289,7 +295,7 @@ export default function AdminProjectDetailPage() {
                       <input type="checkbox" checked={message.internal} onChange={(e) => setMessage({ ...message, internal: e.target.checked })} />
                       Internal note (hidden from customer)
                     </label>
-                    <Button type="submit" variant="primary" className="text-xs" disabled={busy || !message.body.trim()}>
+                    <Button type="submit" variant="primary" className="text-xs" disabled={busy || !canManage || !message.body.trim()}>
                       Send
                     </Button>
                   </div>
@@ -307,7 +313,10 @@ export default function AdminProjectDetailPage() {
                         <div className="font-medium text-gray-900 truncate">{m.displayName || m.email}</div>
                         <div className="text-xs text-gray-500">{m.role}</div>
                       </div>
-                      <Button variant="ghost" className="text-xs text-red-600" disabled={busy} onClick={() => run(() => client().adminRemoveProjectMember(project.id, m.userId!))}>
+                      <Button variant="ghost" className="text-xs text-red-600" disabled={busy || !canManage} onClick={() => {
+                        if (!confirmAction(`Remove ${m.displayName || m.email || "this member"} from the project?`)) return;
+                        run(() => client().adminRemoveProjectMember(project.id, m.userId!));
+                      }}>
                         Remove
                       </Button>
                     </li>
@@ -344,7 +353,7 @@ export default function AdminProjectDetailPage() {
                         <option value="MEMBER">Member</option>
                         <option value="LEAD">Lead</option>
                       </select>
-                      <Button type="submit" variant="primary" className="text-xs" disabled={busy || !assignee.userId}>
+                      <Button type="submit" variant="primary" className="text-xs" disabled={busy || !canManage || !assignee.userId}>
                         Assign
                       </Button>
                     </div>
@@ -362,7 +371,7 @@ export default function AdminProjectDetailPage() {
                     <option value="INTERNAL">Internal only</option>
                     <option value="CUSTOMER">Share with customer</option>
                   </select>
-                  <Button variant="outline" className="text-xs" disabled={busy} onClick={() => fileInput.current?.click()}>
+                  <Button variant="outline" className="text-xs" disabled={busy || !canManage} onClick={() => fileInput.current?.click()}>
                     Upload
                   </Button>
                   <input
@@ -372,7 +381,9 @@ export default function AdminProjectDetailPage() {
                     className="sr-only"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) run(() => client().adminUploadProjectDocument(project.id, file, docVisibility));
+                      if (file && (docVisibility === "INTERNAL" || confirmAction(`Share "${file.name}" with the customer?`))) {
+                        run(() => client().adminUploadProjectDocument(project.id, file, docVisibility));
+                      }
                       e.target.value = "";
                     }}
                   />
