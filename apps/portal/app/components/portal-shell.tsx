@@ -23,6 +23,7 @@ const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureK
   { label: "Support Tickets", href: "/tickets", icon: "🎫" },
   { label: "Notifications", href: "/notifications", icon: "🔔" },
   { label: "Account Profile", href: "/account", icon: "👤" },
+  { label: "Bảo mật tài khoản", href: "/account/security", icon: "🔒" },
 ];
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
