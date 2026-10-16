@@ -26,6 +26,8 @@ const baseDto = {
   contactName: "Nguyễn Văn A",
   contactEmail: "a@example.com",
   requirements: "Cần chatbot trả lời khách hàng",
+  consentAccepted: true,
+  consentVersion: "dev-unreviewed",
 };
 
 const inquiryRow = (over: Record<string, unknown> = {}) => ({
@@ -85,7 +87,8 @@ describe("ServiceInquiriesService", () => {
 
     it("rate-limits, stores the inquiry with a server-assigned owner and audits it", async () => {
       const { service, rateLimiter, audit } = makeService();
-      jest.spyOn(prisma.service, "findFirst").mockResolvedValue({ id: "svc-1" } as any);
+      jest.spyOn(prisma.service, "findFirst").mockResolvedValue({ id: "svc-1", name: "AI Chatbot" } as any);
+      jest.spyOn(prisma.outboxEvent, "create").mockResolvedValue({} as any);
       const create = jest
         .spyOn(prisma.serviceInquiry, "create")
         .mockResolvedValue({ id: "inq-1", inquiryNumber: "SI-202610-ABCDEF", status: "NEW" } as any);
@@ -104,6 +107,103 @@ describe("ServiceInquiriesService", () => {
       expect(data.ipHash).not.toContain("1.2.3.4");
       expect(data.attachments.create[0].mimeType).toBe("application/pdf");
       expect(audit.logActionWithClient).toHaveBeenCalledWith(prisma, expect.objectContaining({ action: "SERVICE_INQUIRY_SUBMITTED" }));
+    });
+
+    describe("consent (F-12)", () => {
+      const stored = () => {
+        jest.spyOn(prisma.service, "findFirst").mockResolvedValue({ id: "svc-1", name: "AI Chatbot" } as any);
+        const outbox = jest.spyOn(prisma.outboxEvent, "create").mockResolvedValue({} as any);
+        const create = jest
+          .spyOn(prisma.serviceInquiry, "create")
+          .mockResolvedValue({ id: "inq-1", inquiryNumber: "SI-202610-ABCDEF", status: "NEW" } as any);
+        return { outbox, create };
+      };
+
+      it.each([
+        ["missing", undefined],
+        ["false", false],
+        ["a string", "true"],
+        ["a number", 1],
+      ])("rejects with 400 when consentAccepted is %s, before spending quota or storing anything", async (_label, value) => {
+        const { service, rateLimiter, files } = makeService();
+        const { create, outbox } = stored();
+        await expect(service.submit({ ...baseDto, consentAccepted: value } as any, [], {})).rejects.toBeInstanceOf(BadRequestException);
+        expect(rateLimiter.consumeForSubmission).not.toHaveBeenCalled();
+        expect(files.uploadAll).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+        expect(outbox).not.toHaveBeenCalled();
+      });
+
+      it("rejects with 409 when the client echoes a different policy version", async () => {
+        const { service, rateLimiter } = makeService();
+        const { create } = stored();
+        await expect(service.submit({ ...baseDto, consentVersion: "v-forged" } as any, [], {})).rejects.toBeInstanceOf(ConflictException);
+        expect(rateLimiter.consumeForSubmission).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+      });
+
+      it("stores the server's version and clock, ignoring any client-supplied consent fields", async () => {
+        const { service } = makeService();
+        const { create } = stored();
+        const before = Date.now();
+        await service.submit({ ...baseDto, consentAt: "2000-01-01T00:00:00Z", marketingConsentAt: "2000-01-01T00:00:00Z" } as any, [], {});
+        const data = create.mock.calls[0][0].data as any;
+        expect(data.consentVersion).toBe("dev-unreviewed");
+        expect(data.consentAt.getTime()).toBeGreaterThanOrEqual(before);
+        // Marketing consent is never implied by the required consent.
+        expect(data.marketingConsent).toBe(false);
+        expect(data.marketingConsentAt).toBeNull();
+      });
+
+      it("records marketing consent only when explicitly true, with its own timestamp", async () => {
+        const { service } = makeService();
+        const { create } = stored();
+        await service.submit({ ...baseDto, marketingConsent: true } as any, [], {});
+        const data = create.mock.calls[0][0].data as any;
+        expect(data.marketingConsent).toBe(true);
+        expect(data.marketingConsentAt).toBeInstanceOf(Date);
+      });
+
+      it("writes the SERVICE_INQUIRY_CREATED outbox event in the same transaction, without personal data", async () => {
+        const { service, audit } = makeService();
+        const { outbox } = stored();
+        await service.submit({ ...baseDto, contactPhone: "0900000000" } as any, [], { userId: "cust-1" });
+        expect(outbox).toHaveBeenCalledTimes(1);
+        const data = (outbox.mock.calls[0][0] as any).data;
+        expect(data).toMatchObject({ eventType: "SERVICE_INQUIRY_CREATED", aggregateType: "ServiceInquiry", aggregateId: "inq-1" });
+        expect(data.payload).toEqual({
+          inquiryId: "inq-1",
+          inquiryNumber: "SI-202610-ABCDEF",
+          serviceId: "svc-1",
+          serviceName: "AI Chatbot",
+        });
+        const serialized = JSON.stringify(data.payload);
+        expect(serialized).not.toContain("a@example.com");
+        expect(serialized).not.toContain("0900000000");
+        expect(serialized).not.toContain("chatbot trả lời");
+        expect(audit.logActionWithClient).toHaveBeenCalledWith(
+          prisma,
+          expect.objectContaining({ details: expect.objectContaining({ consentVersion: "dev-unreviewed", marketingConsent: false }) }),
+        );
+      });
+
+      it("does not lose the inquiry's outbox event: a failing outbox write fails the whole transaction", async () => {
+        const { service, files } = makeService();
+        stored();
+        jest.spyOn(prisma.outboxEvent, "create").mockRejectedValue(new Error("outbox down"));
+        await expect(
+          service.submit(baseDto as any, [{ originalname: "a.pdf", mimetype: "application/pdf", size: PDF.length, buffer: PDF }], { userId: "cust-1" }),
+        ).rejects.toThrow("outbox down");
+        expect(files.deleteObjects).toHaveBeenCalled();
+      });
+
+      it("exposes the server's consent config to the public form", () => {
+        const { service } = makeService();
+        expect(service.getConsentConfig()).toEqual({
+          version: "dev-unreviewed",
+          privacyPolicyUrl: expect.stringMatching(/^https?:\/\//),
+        });
+      });
     });
 
     it("returns the original inquiry for a retried submissionKey without consuming quota", async () => {
@@ -126,7 +226,7 @@ describe("ServiceInquiriesService", () => {
 
     it("removes uploaded objects when the database write fails", async () => {
       const { service, files } = makeService();
-      jest.spyOn(prisma.service, "findFirst").mockResolvedValue({ id: "svc-1" } as any);
+      jest.spyOn(prisma.service, "findFirst").mockResolvedValue({ id: "svc-1", name: "AI Chatbot" } as any);
       jest.spyOn(prisma.serviceInquiry, "create").mockRejectedValue(new Error("db down"));
       await expect(
         service.submit(baseDto as any, [{ originalname: "a.pdf", mimetype: "application/pdf", size: PDF.length, buffer: PDF }], {
@@ -294,9 +394,23 @@ describe("ServiceInquiriesService configuration", () => {
     expect(() => build({ NODE_ENV: "production" })).not.toThrow();
   });
 
-  it("boots in production when the salt is configured", () => {
+  const prodEnv = {
+    NODE_ENV: "production",
+    SERVICE_INQUIRY_IP_SALT: "x".repeat(32),
+    SERVICE_CONSENT_VERSION: "2026-10",
+    PRIVACY_POLICY_URL: "https://pgs.example/privacy",
+  };
+
+  it("boots in production when the salt and the consent policy are configured", () => {
     process.env.NODE_ENV = "production";
     process.env.FEATURE_SERVICES = "true";
-    expect(() => build({ NODE_ENV: "production", SERVICE_INQUIRY_IP_SALT: "x".repeat(32) })).not.toThrow();
+    expect(() => build(prodEnv)).not.toThrow();
+  });
+
+  it("refuses to start in production with the module enabled and no consent policy configured", () => {
+    process.env.NODE_ENV = "production";
+    process.env.FEATURE_SERVICES = "true";
+    expect(() => build({ ...prodEnv, PRIVACY_POLICY_URL: undefined })).toThrow(/PRIVACY_POLICY_URL/);
+    expect(() => build({ ...prodEnv, SERVICE_CONSENT_VERSION: undefined })).toThrow(/SERVICE_CONSENT_VERSION/);
   });
 });

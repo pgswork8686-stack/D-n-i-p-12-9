@@ -136,6 +136,31 @@ export interface AdminServiceInquiryDto extends ServiceInquiryDto {
   staffNote: string | null;
   reviewedById: string | null;
   reviewedAt: string | null;
+  /** Server-recorded consent evidence; null for inquiries stored before consent was collected. */
+  consentVersion: string | null;
+  consentAt: string | null;
+  marketingConsent: boolean;
+  marketingConsentAt: string | null;
+}
+
+/** Outbox event written in the same transaction as a stored inquiry (aggregate: ServiceInquiry). */
+export const SERVICE_INQUIRY_CREATED_EVENT = "SERVICE_INQUIRY_CREATED";
+
+/** Outbox payload: ids and the public reference only, never contact data or requirements. */
+export interface ServiceInquiryCreatedPayload {
+  inquiryId: string;
+  inquiryNumber: string;
+  serviceId: string;
+  serviceName: string;
+}
+
+/**
+ * What the public form must show before it can be submitted. `version` is authoritative:
+ * the server stores its own value and rejects a submission that echoes a different one.
+ */
+export interface ServiceConsentConfigDto {
+  version: string;
+  privacyPolicyUrl: string;
 }
 
 /** Public form payload, sent as multipart fields (attachments as `files`). */
@@ -151,6 +176,12 @@ export interface CreateServiceInquiryRequest {
   timeline?: ServiceTimeline;
   /** Client-generated UUID; resubmitting returns the original inquiry. */
   submissionKey?: string;
+  /** Must be exactly `true`: consent to processing the data in this request. */
+  consentAccepted: boolean;
+  /** The version the customer was shown (from `GET /v1/service-inquiries/consent`). */
+  consentVersion: string;
+  /** Independent opt-in to marketing messages. Defaults to false and never required. */
+  marketingConsent?: boolean;
   /** Honeypot field: must stay empty. */
   website?: string;
 }

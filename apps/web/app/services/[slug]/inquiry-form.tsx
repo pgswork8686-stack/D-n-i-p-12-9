@@ -8,10 +8,12 @@ import {
   SERVICE_INQUIRY_MAX_FILES,
   type CreateServiceInquiryResponse,
   type ServiceBudgetRange,
+  type ServiceConsentConfigDto,
   type ServiceTimeline,
 } from "@nexus/contracts";
 import { API_URL, ApiError } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import { applyConsentFields, DEV_CONSENT_VERSION } from "./consent";
 
 const BUDGETS: { value: ServiceBudgetRange; label: string }[] = [
   { value: "UNDER_20M", label: "Dưới 20 triệu" },
@@ -39,8 +41,20 @@ function newSubmissionKey(): string {
     : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function InquiryForm({ serviceSlug, ctaLabel }: { serviceSlug: string; ctaLabel: string }) {
+export function InquiryForm({
+  serviceSlug,
+  ctaLabel,
+  consent,
+}: {
+  serviceSlug: string;
+  ctaLabel: string;
+  consent: ServiceConsentConfigDto;
+}) {
   const { user, token } = useAuth();
+  // Both start unchecked and are never pre-ticked: consent has to be an explicit act.
+  const [accepted, setAccepted] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+  const [consentMissing, setConsentMissing] = useState(false);
   // One key per filled-in form: double clicks and network retries return the same inquiry.
   const submissionKey = useMemo(newSubmissionKey, []);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -71,7 +85,12 @@ export function InquiryForm({ serviceSlug, ctaLabel }: { serviceSlug: string; ct
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
+    if (!accepted) {
+      setConsentMissing(true);
+      return;
+    }
     const form = new FormData(e.currentTarget);
+    applyConsentFields(form, { accepted, marketing, version: consent.version });
     form.set("serviceSlug", serviceSlug);
     form.set("submissionKey", submissionKey);
     const features = String(form.get("desiredFeatures") || "")
@@ -260,6 +279,55 @@ export function InquiryForm({ serviceSlug, ctaLabel }: { serviceSlug: string; ct
           </p>
         )}
       </div>
+
+      <fieldset className="space-y-3 border-t border-line pt-4">
+        <legend className="sr-only">Đồng ý xử lý dữ liệu</legend>
+        <div>
+          <label htmlFor="inq-consent" className="flex items-start gap-2.5 text-sm text-ink/90">
+            <input
+              id="inq-consent"
+              type="checkbox"
+              checked={accepted}
+              onChange={(e) => {
+                setAccepted(e.target.checked);
+                if (e.target.checked) setConsentMissing(false);
+              }}
+              required
+              aria-required="true"
+              aria-invalid={consentMissing}
+              aria-describedby={consentMissing ? "inq-consent-error" : undefined}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-line accent-brand"
+            />
+            <span>
+              Tôi đồng ý để PGS xử lý thông tin trong yêu cầu này nhằm tư vấn và báo giá, theo{" "}
+              <a href={consent.privacyPolicyUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-brand underline">
+                Chính sách quyền riêng tư
+              </a>
+              . *
+            </span>
+          </label>
+          {consentMissing && (
+            <p id="inq-consent-error" role="alert" className="mt-1.5 text-sm text-danger">
+              Bạn cần đồng ý xử lý dữ liệu để gửi yêu cầu.
+            </p>
+          )}
+        </div>
+        <label htmlFor="inq-marketing" className="flex items-start gap-2.5 text-sm text-ink/90">
+          <input
+            id="inq-marketing"
+            type="checkbox"
+            checked={marketing}
+            onChange={(e) => setMarketing(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-line accent-brand"
+          />
+          <span>
+            Tôi muốn nhận tin tức và ưu đãi từ PGS qua email. <span className="text-muted">(Không bắt buộc, có thể rút lại bất cứ lúc nào.)</span>
+          </span>
+        </label>
+        {consent.version === DEV_CONSENT_VERSION && (
+          <p className="text-xs text-muted">Môi trường phát triển: chính sách quyền riêng tư chưa được duyệt.</p>
+        )}
+      </fieldset>
 
       {error && (
         <p role="alert" className="rounded-xl border border-danger/30 bg-danger/5 px-3.5 py-2.5 text-sm text-danger">

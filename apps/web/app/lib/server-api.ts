@@ -4,6 +4,7 @@ import type {
   PaginatedResponse,
   PublicProductListItemDto,
   PublicContentListItemDto,
+  ServiceConsentConfigDto,
   ServiceDto,
 } from "@nexus/contracts";
 
@@ -70,6 +71,26 @@ export async function listServices(fetchFn: typeof fetch = fetch): Promise<Servi
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
   return (await res.json()) as ServiceDto[];
+}
+
+/**
+ * Consent version and privacy-policy link for the inquiry form. Throws on outages and on a
+ * malformed answer: a form that cannot show the policy it asks people to accept must not render.
+ */
+export async function getServiceConsent(fetchFn: typeof fetch = fetch): Promise<ServiceConsentConfigDto> {
+  const res = await fetchServices("/v1/service-inquiries/consent", fetchFn);
+  if (!res.ok) throw new Error(`Services consent config returned ${res.status}`);
+  const body = (await res.json()) as Partial<ServiceConsentConfigDto> | null;
+  const version = typeof body?.version === "string" ? body.version : "";
+  let url = "";
+  try {
+    const parsed = new URL(String(body?.privacyPolicyUrl ?? ""));
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") url = parsed.toString();
+  } catch {
+    url = "";
+  }
+  if (!version || !url) throw new Error("Services consent config is incomplete");
+  return { version, privacyPolicyUrl: url };
 }
 
 /** Returns null for unknown, unpublished or disabled services; throws on outages. */

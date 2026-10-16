@@ -99,6 +99,10 @@ export function toAdminInquiryDto(i: any): AdminServiceInquiryDto {
     staffNote: i.staffNote ?? null,
     reviewedById: i.reviewedById ?? null,
     reviewedAt: iso(i.reviewedAt),
+    consentVersion: i.consentVersion ?? null,
+    consentAt: iso(i.consentAt),
+    marketingConsent: i.marketingConsent === true,
+    marketingConsentAt: iso(i.marketingConsentAt),
   };
 }
 

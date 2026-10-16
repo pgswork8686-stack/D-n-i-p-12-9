@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { InquiryNotifications } from "./inquiry-notifications";
 
 const TABS = [
   { href: "/services", label: "Service Catalog" },
@@ -40,6 +41,9 @@ export function ServicesNav({ title, subtitle, actions }: { title: string; subti
           );
         })}
       </nav>
+      <div className="mt-4">
+        <InquiryNotifications />
+      </div>
     </div>
   );
 }

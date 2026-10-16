@@ -1001,6 +1001,7 @@ enum AutomationJobType {
   ORDER_PAID_EMAIL
   LICENSE_PROVISIONED_EMAIL
   EXTERNAL_ALLOCATION_EMAIL
+  SERVICE_INQUIRY_NOTIFY_EMAIL
 }
 
 model AutomationJob {
@@ -1409,6 +1410,7 @@ enum NotificationType {
   SYSTEM_ALERT
   PROMOTION
   BILLING
+  SERVICE_INQUIRY_CREATED
 }
 
 model Ticket {
@@ -1726,6 +1728,13 @@ model ServiceInquiry {
   submissionKey   String?              @unique @map("submission_key")
   /// SHA-256 of the client IP, kept for abuse analysis without storing the raw address.
   ipHash          String?              @map("ip_hash")
+  /// Privacy-notice version the customer accepted. Set by the server from its own config, never from the client; null on rows created before consent was collected.
+  consentVersion  String?              @map("consent_version")
+  /// Server clock at the moment the request was stored.
+  consentAt       DateTime?            @map("consent_at")
+  /// Separate, opt-in marketing consent. Never implied by consentVersion.
+  marketingConsent   Boolean           @default(false) @map("marketing_consent")
+  marketingConsentAt DateTime?         @map("marketing_consent_at")
   staffNote       String?              @map("staff_note")
   reviewedById    String?              @map("reviewed_by_id")
   reviewedAt      DateTime?            @map("reviewed_at")

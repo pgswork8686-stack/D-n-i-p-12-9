@@ -45,6 +45,7 @@ Tất cả route gắn `@RequireFeature("services")` → 404 khi `FEATURE_SERVIC
 | Nhóm | Endpoint | Quyền |
 | :-- | :-- | :-- |
 | Public | `GET /v1/services`, `GET /v1/services/:slug` | — |
+| Public | `GET /v1/service-inquiries/consent` | — |
 | Public | `POST /v1/service-inquiries` (multipart, `files` ≤ 5 × 10 MB, chỉ khi đăng nhập) | tùy chọn đăng nhập |
 | Khách | `GET /v1/me/service-inquiries`, `GET /v1/me/service-inquiries/:id`, `GET …/:id/attachments/:attachmentId/url` | đăng nhập + sở hữu |
 | Khách | `GET /v1/me/service-projects`, `GET /v1/me/service-projects/:id`, `POST …/:id/messages`, `POST …/:id/documents`, `GET …/:id/documents/:documentId/url` | đăng nhập + sở hữu |
@@ -70,6 +71,30 @@ Quyền mới được gán: `support_agent` (inquiry.read/manage, project.read)
   2. Ứng dụng (`maxRequestBytes`, `apps/api/src/common/max-request-bytes.guard.ts`): từ chối `413` theo `Content-Length` trước khi Multer đọc body; vẫn đúng nếu API bị gọi không qua Caddy.
   3. Multer `limits`: chặn bộ nhớ thực tế khi header thiếu hoặc sai (chunked).
   Khi đổi `SERVICE_FILE_MAX_BYTES`, `SERVICE_INQUIRY_MAX_FILES` hoặc `MAX_UPLOAD_BYTES`, phải đổi cả ba nơi. Giới hạn tốc độ ở edge (Cloudflare rate rule cho `POST /v1/service-inquiries`) là việc cấu hình hạ tầng, chưa nằm trong repo. IP của khách phụ thuộc `TRUST_PROXY_HOPS` (xem `docs/deployment/proxy-topology.md`, F-07).
+
+## Consent và thông báo yêu cầu mới (F-12)
+
+Migration `20261016000000_20261016_services_consent_notifications` (additive): 4 cột trên `service_inquiries`
+(`consent_version`, `consent_at`, `marketing_consent`, `marketing_consent_at`) cùng 2 CHECK nhất quán, và hai giá trị enum mới
+(`NotificationType.SERVICE_INQUIRY_CREATED`, `AutomationJobType.SERVICE_INQUIRY_NOTIFY_EMAIL`). Các yêu cầu gửi trước migration giữ
+`consent_version = NULL` ("chưa ghi nhận consent"), không backfill.
+
+**Consent**
+- `GET /v1/service-inquiries/consent` trả `{ version, privacyPolicyUrl }` do server cấu hình (`SERVICE_CONSENT_VERSION`, `PRIVACY_POLICY_URL`).
+- `POST /v1/service-inquiries` bắt buộc `consentAccepted=true` (chuỗi/số khác `true` đều bị từ chối) và `consentVersion` khớp phiên bản hiện hành (lệch → 409).
+  Phiên bản và thời điểm lưu là của **server**; client không thể chọn hay lùi ngày. `marketingConsent` độc lập, mặc định `false`, có timestamp riêng, không bao giờ được suy ra từ consent bắt buộc.
+- Production + `FEATURE_SERVICES=true` mà thiếu `SERVICE_CONSENT_VERSION` hoặc `PRIVACY_POLICY_URL` (hoặc URL không phải https) thì API **không khởi động**.
+  Repo không kèm chính sách quyền riêng tư: đây là điều kiện phải hoàn tất ngoài code.
+- Form (`apps/web/app/services/[slug]/inquiry-form.tsx`): hai checkbox không tick sẵn, link chính sách mở tab mới, lỗi có `role="alert"`. Admin thấy bằng chứng consent ở chi tiết yêu cầu.
+
+**Thông báo**
+- Cùng transaction với yêu cầu, API ghi outbox `SERVICE_INQUIRY_CREATED` (aggregate `ServiceInquiry`, payload chỉ có id, mã yêu cầu, dịch vụ; không có email/điện thoại/nội dung).
+- Worker (`apps/worker/src/service-inquiry-notifier.ts`) đọc lại bản ghi gốc rồi: (1) tạo `Notification` cho nhân sự có `inquiry.read` hoặc `super_admin` (trần `SERVICE_INQUIRY_NOTIFY_MAX_STAFF`);
+  (2) nếu có `SERVICE_INQUIRY_NOTIFY_EMAILS`, đưa mỗi hộp thư một `AutomationJob` `SERVICE_INQUIRY_NOTIFY_EMAIL` (có retry/lease sẵn của hàng đợi automation); (3) ghi một audit `SERVICE_INQUIRY_NOTIFIED` (chỉ số lượng).
+- Idempotent (khóa `service-inquiry-notify:{inquiryId}:{sha256(email)[:16]}`, kiểm tra thông báo đã có, audit một lần). Lỗi email/hàng đợi làm outbox retry theo back-off; yêu cầu đã lưu từ trước nên không bao giờ mất.
+- Chống tràn: trần email mỗi giờ (`SERVICE_INQUIRY_NOTIFY_HOURLY_EMAIL_CAP`), vượt thì bỏ email nhưng vẫn thông báo trong Admin. Việc gửi vào hệ thống đã bị giới hạn bởi honeypot và rate limit IP/email.
+- Admin: banner "yêu cầu dịch vụ mới" trên mọi màn Services, dùng `GET /v1/notifications` của chính người dùng.
+- **Chưa có trong repo:** workflow n8n nhận `/webhook/service-inquiry-notify-email` và gửi mail thật. Cho tới khi workflow được triển khai, email chưa thể gửi (job sẽ retry rồi FAILED); thông báo trong Admin không phụ thuộc điều này.
 
 ## Tương thích với PR #23 (AI Marketing OS)
 
