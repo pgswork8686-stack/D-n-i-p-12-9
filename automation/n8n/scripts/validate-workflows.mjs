@@ -38,11 +38,13 @@ const FORBIDDEN_ENV_SECRETS = [
 const EMAIL_WORKFLOWS = new Set([
   "order-paid-email.json",
   "license-provisioned-email.json",
+  "service-inquiry-notify-email.json",
 ]);
 
 const WORKFLOW_JOB_TYPES = {
   "order-paid-email.json": "ORDER_PAID_EMAIL",
   "license-provisioned-email.json": "LICENSE_PROVISIONED_EMAIL",
+  "service-inquiry-notify-email.json": "SERVICE_INQUIRY_NOTIFY_EMAIL",
   "cms-ai-draft.json": "CMS_AI_DRAFT",
 };
 

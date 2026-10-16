@@ -33,6 +33,7 @@ Backend Validation + PostgreSQL Transaction
   - `cms-ai-draft.json`: CMS AI draft generation with OpenAI and HMAC callback.
   - `order-paid-email.json`: Order payment confirmation email delivery.
   - `license-provisioned-email.json`: Masked license delivery notification.
+  - `service-inquiry-notify-email.json`: Staff notification for a new service inquiry (reference, service and company name only; no contact details or requirements; all free text is HTML-escaped). Webhook `/webhook/service-inquiry-notify-email`; worker route env `N8N_SERVICE_INQUIRY_NOTIFY_EMAIL_WEBHOOK_URL`.
 - `scripts/`: Validation scripts.
   - `validate-workflows.mjs`: Automated CI linter for security and architecture compliance.
 - `examples/`: Reference configuration.

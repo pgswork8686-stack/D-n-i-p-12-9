@@ -71,7 +71,7 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `SERVICE_INQUIRY_NOTIFY_MAX_STAFF` | Worker | OPTIONAL | PUBLIC | `50` | `.env.production` | Trần số nhân sự nhận thông báo trong Admin cho mỗi yêu cầu |
 | `SERVICE_INQUIRY_NOTIFY_HOURLY_EMAIL_CAP` | Worker | OPTIONAL | PUBLIC | `30` | `.env.production` | Tối đa số email job mỗi giờ; vượt thì bỏ email (thông báo Admin vẫn gửi) |
 | `ADMIN_PUBLIC_URL` | Worker | OPTIONAL | PUBLIC | Origin của Admin | `.env.production` | Dùng tạo link trong email |
-| `N8N_SERVICE_INQUIRY_NOTIFY_EMAIL_WEBHOOK_URL` | Worker | OPTIONAL | PUBLIC | URL webhook n8n | `.env.production` | Mặc định `${N8N_WEBHOOK_BASE_URL}/webhook/service-inquiry-notify-email`. Workflow này **chưa có trong repo** |
+| `N8N_SERVICE_INQUIRY_NOTIFY_EMAIL_WEBHOOK_URL` | Worker | OPTIONAL | PUBLIC | URL webhook n8n | `.env.production` | Mặc định `${N8N_WEBHOOK_BASE_URL}/webhook/service-inquiry-notify-email`. Workflow: `automation/n8n/workflows/service-inquiry-notify-email.json` (cần import vào n8n) |
 | `ENABLE_TEST_PAYMENT_PROVIDER` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Bị cấm bởi `NODE_ENV === "production"` |
 | `STRIPE_MOCK_CLIENT` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Ném lỗi crash nếu bật trong production |
 | `SEED_DEV_USERS` | DB seed | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Không tạo user mock |
