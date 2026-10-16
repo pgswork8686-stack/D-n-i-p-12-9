@@ -147,6 +147,9 @@ describe("NexusApiClient services", () => {
         contactEmail: "a@example.com",
         requirements: "x",
         desiredFeatures: ["SSO", "Báo cáo"],
+        consentAccepted: true,
+        consentVersion: "v1",
+        marketingConsent: false,
       },
       [new Blob(["%PDF-1.7"], { type: "application/pdf" })],
     );
@@ -157,6 +160,16 @@ describe("NexusApiClient services", () => {
     const form = init.body as FormData;
     expect(JSON.parse(form.get("desiredFeatures") as string)).toEqual(["SSO", "Báo cáo"]);
     expect(form.getAll("files")).toHaveLength(1);
+    // Consent travels as explicit strings; an unchecked marketing box is sent as "false", not omitted.
+    expect(form.get("consentAccepted")).toBe("true");
+    expect(form.get("consentVersion")).toBe("v1");
+    expect(form.get("marketingConsent")).toBe("false");
+  });
+
+  it("reads the consent config from the public endpoint", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ version: "v1", privacyPolicyUrl: "https://x.test/p" }) });
+    await expect(client.getServiceConsentConfig()).resolves.toEqual({ version: "v1", privacyPolicyUrl: "https://x.test/p" });
+    expect(mockFetch.mock.calls[0][0]).toBe("https://api.example.com/v1/service-inquiries/consent");
   });
 
   it("builds admin list queries and skips empty filters", async () => {

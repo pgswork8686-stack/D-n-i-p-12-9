@@ -1,4 +1,5 @@
 import { prisma, OutboxEventStatus, enqueueOrderPaidEmailJob } from "@nexus/database";
+import { processServiceInquiryCreatedEvent } from "./service-inquiry-notifier";
 import { isFeatureEnabled } from "@nexus/utils";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
 import {
@@ -208,6 +209,23 @@ export async function processOutboxEvents(
         await processTicketRepliedEvent(event.payload, workerId);
       } else if (event.eventType === "TICKET_STATUS_CHANGED") {
         // Ticket status change outbox event - mark processed
+      } else if (event.eventType === "SERVICE_INQUIRY_CREATED") {
+        if (event.aggregateType !== "ServiceInquiry") {
+          throw new Error(
+            `Invalid aggregateType '${event.aggregateType}' for eventType 'SERVICE_INQUIRY_CREATED', expected 'ServiceInquiry'`,
+          );
+        }
+        const payloadInquiryId = (event.payload as any)?.inquiryId;
+        if (payloadInquiryId && payloadInquiryId !== event.aggregateId) {
+          throw new Error(
+            `Payload inquiryId '${payloadInquiryId}' does not match aggregateId '${event.aggregateId}'`,
+          );
+        }
+        // The aggregate id is authoritative; the payload is only a hint.
+        await processServiceInquiryCreatedEvent(
+          { ...(event.payload as object), inquiryId: event.aggregateId },
+          workerId,
+        );
       } else {
         throw new Error(`Unsupported outbox event type '${event.eventType}'`);
       }

@@ -19,7 +19,8 @@ export type NotificationType =
   | "TICKET_CLOSED"
   | "SYSTEM_ALERT"
   | "PROMOTION"
-  | "BILLING";
+  | "BILLING"
+  | "SERVICE_INQUIRY_CREATED";
 
 export interface TicketAttachmentDto {
   id: string;

@@ -1,6 +1,7 @@
 import { processOutboxEvents } from "./outbox-processor";
 import { prisma, enqueueOrderPaidEmailJob } from "@nexus/database";
 import { issueEntitlementsForOrder } from "./entitlement-issuer";
+import { processServiceInquiryCreatedEvent } from "./service-inquiry-notifier";
 
 jest.mock("./entitlement-issuer", () => ({
   issueEntitlementsForOrder: jest.fn().mockResolvedValue({ orderId: "order-123", issuedCount: 1, entitlements: [] }),
@@ -16,6 +17,10 @@ jest.mock("./hosting-processor", () => ({
   suspendHostingAccountsForOrder: jest.fn().mockResolvedValue({ suspendedCount: 1 }),
   suspendHostingForRevokedEntitlement: jest.fn().mockResolvedValue(true),
   reconcileHostingUsage: jest.fn().mockResolvedValue({ reconciledCount: 1 }),
+}));
+
+jest.mock("./service-inquiry-notifier", () => ({
+  processServiceInquiryCreatedEvent: jest.fn().mockResolvedValue({ handled: true }),
 }));
 
 jest.mock("./ledger-processor", () => ({
@@ -294,5 +299,44 @@ describe("OutboxProcessor", () => {
         error: expect.stringContaining("Redis connection dropped"),
       }),
     });
+  });
+});
+
+describe("OutboxProcessor SERVICE_INQUIRY_CREATED", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (prisma.outboxEvent.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+  });
+
+  const arrange = (event: Record<string, unknown>) => {
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: "evt-si" }]);
+    (prisma.outboxEvent.findMany as jest.Mock).mockResolvedValue([
+      { id: "evt-si", status: "PROCESSING", retryCount: 0, eventType: "SERVICE_INQUIRY_CREATED", ...event },
+    ]);
+  };
+
+  it("hands the authoritative aggregate id to the notifier and marks the event PROCESSED", async () => {
+    arrange({ aggregateType: "ServiceInquiry", aggregateId: "inq-1", payload: { inquiryId: "inq-1", inquiryNumber: "SI-1" } });
+    const result = await processOutboxEvents({ workerId: "worker-1" });
+    expect(processServiceInquiryCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ inquiryId: "inq-1" }), "worker-1");
+    expect(result.results[0].status).toBe("PROCESSED");
+  });
+
+  it("retries (does not drop) when the notifier fails, so a mail or queue outage cannot lose the notification", async () => {
+    arrange({ aggregateType: "ServiceInquiry", aggregateId: "inq-1", payload: { inquiryId: "inq-1" } });
+    (processServiceInquiryCreatedEvent as jest.Mock).mockRejectedValueOnce(new Error("queue down"));
+    const result = await processOutboxEvents({ workerId: "worker-1", maxRetries: 5 });
+    expect(result.results[0].status).toBe("PENDING");
+    expect(prisma.outboxEvent.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PENDING", retryCount: 1, error: "queue down" }) }),
+    );
+  });
+
+  it("rejects an event whose aggregate type or payload id do not match", async () => {
+    arrange({ aggregateType: "Order", aggregateId: "inq-1", payload: { inquiryId: "inq-1" } });
+    await processOutboxEvents({ workerId: "worker-1" });
+    arrange({ aggregateType: "ServiceInquiry", aggregateId: "inq-1", payload: { inquiryId: "inq-OTHER" } });
+    await processOutboxEvents({ workerId: "worker-1" });
+    expect(processServiceInquiryCreatedEvent).not.toHaveBeenCalled();
   });
 });

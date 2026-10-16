@@ -101,6 +101,12 @@ export class PublicServicesController {
 export class PublicServiceInquiriesController {
   constructor(private readonly inquiries: ServiceInquiriesService) {}
 
+  /** Version and privacy-policy link the form must show; the server rejects any other version. */
+  @Get("consent")
+  consent() {
+    return this.inquiries.getConsentConfig();
+  }
+
   /** Anonymous or signed-in. Attachments (multipart `files`) require a signed-in user. */
   @Post()
   @HttpCode(201)
