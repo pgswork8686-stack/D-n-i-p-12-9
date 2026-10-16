@@ -125,6 +125,11 @@ jobs:
           bash -n infra/scripts/verify-caddy-limits.sh
           bash infra/scripts/verify-caddy-limits.sh
 
+      - name: Staging env isolation (synthetic CI-only credentials)
+        run: |
+          bash -n infra/scripts/staging-preflight-ci.sh
+          bash infra/scripts/staging-preflight-ci.sh
+
       - name: Lint
         run: pnpm lint
 
