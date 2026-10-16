@@ -78,7 +78,9 @@ docker exec -i nexustheme-postgres psql -v ON_ERROR_STOP=1 -U postgres -d market
 echo "::endgroup::"
 
 echo "::group::Start built Storefront"
-NODE_ENV=production INTERNAL_API_URL=http://localhost:4000 \
+# Canonical/public metadata must keep a non-loopback HTTPS origin in production.
+# Browser navigation still uses the local HTTP test server through E2E_BASE_URL.
+NODE_ENV=production NEXT_PUBLIC_SITE_URL=https://st01-ci.example.invalid INTERNAL_API_URL=http://localhost:4000 \
   pnpm --filter @nexus/web start > "$TMP/web.log" 2>&1 &
 WEB_PID=$!
 for i in $(seq 1 60); do
