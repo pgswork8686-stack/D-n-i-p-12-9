@@ -130,6 +130,9 @@ jobs:
           bash -n infra/scripts/staging-preflight-ci.sh
           bash infra/scripts/staging-preflight-ci.sh
 
+      - name: Validate content intake templates
+        run: node scripts/validate-content-intake.mjs
+
       - name: Lint
         run: pnpm lint
 
