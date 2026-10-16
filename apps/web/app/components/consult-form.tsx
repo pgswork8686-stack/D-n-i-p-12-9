@@ -6,7 +6,7 @@ import { ErrorSummary, FormField, Notice } from "@nexus/ui";
 import type { CreateServiceInquiryResponse, ServiceConsentConfigDto } from "@nexus/contracts";
 import { API_URL } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { buildConsultFields, resolveConsultServiceSlug } from "../lib/consult";
+import { buildConsultFields, isConfirmedConsultResponse, resolveConsultServiceSlug } from "../lib/consult";
 import { validateConsult, type ConsultErrors, type ConsultInput } from "../lib/home-catalog";
 import { applyConsentFields, DEV_CONSENT_VERSION } from "../services/[slug]/consent";
 
@@ -92,11 +92,16 @@ export function ConsultForm({ consent, serviceSlugs }: { consent: ServiceConsent
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         body: form,
       });
-      if (!res.ok) {
+      if (res.status !== 201) {
         setFailure(await failureMessage(res));
         return;
       }
-      setDone((await res.json()) as CreateServiceInquiryResponse);
+      const result: unknown = await res.json().catch(() => null);
+      if (!isConfirmedConsultResponse(res.status, result)) {
+        setFailure("Máy chủ chưa xác nhận mã yêu cầu. Vui lòng liên hệ hỗ trợ để kiểm tra.");
+        return;
+      }
+      setDone(result);
     } catch {
       setFailure("Không kết nối được máy chủ. Kiểm tra mạng và thử lại.");
     } finally {

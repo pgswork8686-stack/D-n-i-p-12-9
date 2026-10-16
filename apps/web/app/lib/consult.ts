@@ -1,3 +1,4 @@
+import type { CreateServiceInquiryResponse } from "@nexus/contracts";
 import type { ConsultInput } from "./home-catalog";
 
 /**
@@ -48,4 +49,13 @@ export function buildConsultFields(input: ConsultInput, serviceSlug: string, sub
   const phone = input.phone.trim();
   if (phone) fields.contactPhone = phone;
   return fields;
+}
+
+/** A successful consultation is a confirmed 201 with a real SI reference, not just any 2xx. */
+export function isConfirmedConsultResponse(httpStatus: number, payload: unknown): payload is CreateServiceInquiryResponse {
+  if (httpStatus !== 201 || !payload || typeof payload !== "object") return false;
+  const body = payload as Record<string, unknown>;
+  return typeof body.inquiryNumber === "string"
+    && /^SI-\d{6}-[0-9A-F]{6}$/.test(body.inquiryNumber)
+    && body.status === "NEW";
 }

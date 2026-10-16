@@ -1,4 +1,4 @@
-import { buildConsultFields, canOfferConsultForm, DEFAULT_CONSULT_SERVICE, resolveConsultServiceSlug } from "../lib/consult";
+import { buildConsultFields, canOfferConsultForm, DEFAULT_CONSULT_SERVICE, isConfirmedConsultResponse, resolveConsultServiceSlug } from "../lib/consult";
 import type { ConsultInput } from "../lib/home-catalog";
 
 const ALL = ["custom-web-app-development", "ai-chatbot-development", "api-integration"];
@@ -54,5 +54,24 @@ describe("buildConsultFields", () => {
   it("never carries consent: that is added explicitly and separately", () => {
     const fields = buildConsultFields(input, "s", "k");
     expect(Object.keys(fields).some((k) => /consent/i.test(k))).toBe(false);
+  });
+});
+
+
+describe("isConfirmedConsultResponse", () => {
+  const accepted = { inquiryNumber: "SI-261016-A1B2C3", status: "NEW" };
+
+  it("accepts only an HTTP 201 containing a valid created inquiry reference", () => {
+    expect(isConfirmedConsultResponse(201, accepted)).toBe(true);
+    for (const httpStatus of [200, 202, 204, 400, 500]) {
+      expect(isConfirmedConsultResponse(httpStatus, accepted)).toBe(false);
+    }
+  });
+
+  it("never shows a success state for an incomplete or forged 201 response", () => {
+    for (const response of [null, {}, { status: "NEW" }, { inquiryNumber: "OTHER-123", status: "NEW" },
+      { inquiryNumber: "SI-261016-A1B2C3", status: "FAILED" }, { inquiryNumber: 123, status: "NEW" }]) {
+      expect(isConfirmedConsultResponse(201, response)).toBe(false);
+    }
   });
 });
