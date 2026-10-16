@@ -22,6 +22,12 @@ export default function AccountPage() {
             </p>
           </div>
 
+          <div className="flex justify-end">
+            <a href="/account/security" className="inline-flex items-center rounded-lg border border-blue-200 px-4 py-2 text-sm font-semibold text-[#0037b0] hover:bg-blue-50">
+              Đổi mật khẩu và bảo mật tài khoản →
+            </a>
+          </div>
+
           <Card title="Customer Identity" subtitle="Server-verified identity payload (/auth/me)">
             <div className="space-y-4 pt-2">
               <div className="flex items-center gap-4 pb-4 border-b border-slate-100">

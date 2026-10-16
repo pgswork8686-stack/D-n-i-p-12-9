@@ -142,6 +142,14 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         </button>
       </form>
 
+      {isLogin && (
+        <p className="mt-3 text-right text-sm">
+          <Link href="/forgot-password" className="font-semibold text-brand hover:underline">
+            Quên mật khẩu?
+          </Link>
+        </p>
+      )}
+
       <p className="mt-6 text-center text-sm text-muted">
         {isLogin ? "Chưa có tài khoản? " : "Đã có tài khoản? "}
         <Link

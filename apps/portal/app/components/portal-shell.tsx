@@ -9,20 +9,21 @@ import { Badge, Button } from "@nexus/ui";
 type FeatureKey = "hosting" | "membership" | "affiliate" | "finance" | "services";
 
 const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureKey }[] = [
-  { label: "Dashboard", href: "/", icon: "📊" },
-  { label: "My Orders", href: "/orders", icon: "📦" },
-  { label: "My Products", href: "/entitlements", icon: "✨" },
-  { label: "Downloads", href: "/downloads", icon: "⬇️" },
-  { label: "Internal Licenses", href: "/licenses", icon: "🔑" },
-  { label: "External Allocations", href: "/allocations", icon: "🌐" },
-  { label: "Cloud Hosting", href: "/hosting", icon: "☁️", feature: "hosting" },
-  { label: "Affiliate & Partner", href: "/affiliate", icon: "🤝", feature: "affiliate" },
-  { label: "Membership", href: "/subscription", icon: "👑", feature: "membership" },
-  { label: "Invoices & Billing", href: "/invoices", icon: "🧾", feature: "finance" },
-  { label: "Service Projects", href: "/services", icon: "🧩", feature: "services" },
-  { label: "Support Tickets", href: "/tickets", icon: "🎫" },
-  { label: "Notifications", href: "/notifications", icon: "🔔" },
-  { label: "Account Profile", href: "/account", icon: "👤" },
+  { label: "Tổng quan", href: "/", icon: "📊" },
+  { label: "Đơn hàng của tôi", href: "/orders", icon: "📦" },
+  { label: "Sản phẩm của tôi", href: "/entitlements", icon: "✨" },
+  { label: "Tải xuống", href: "/downloads", icon: "⬇️" },
+  { label: "License nội bộ", href: "/licenses", icon: "🔑" },
+  { label: "License quản lý hộ", href: "/allocations", icon: "🌐" },
+  { label: "Dịch vụ Hosting", href: "/hosting", icon: "☁️", feature: "hosting" },
+  { label: "Đối tác & cộng tác viên", href: "/affiliate", icon: "🤝", feature: "affiliate" },
+  { label: "Gói thành viên", href: "/subscription", icon: "👑", feature: "membership" },
+  { label: "Hóa đơn & thanh toán", href: "/invoices", icon: "🧾", feature: "finance" },
+  { label: "Dự án dịch vụ", href: "/services", icon: "🧩", feature: "services" },
+  { label: "Yêu cầu hỗ trợ", href: "/tickets", icon: "🎫" },
+  { label: "Thông báo", href: "/notifications", icon: "🔔" },
+  { label: "Tài khoản", href: "/account", icon: "👤" },
+  { label: "Bảo mật tài khoản", href: "/account/security", icon: "🔒" },
 ];
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
@@ -57,7 +58,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
                 NEXUSTHEME
               </span>
               <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">
-                Customer Hub
+                Cổng khách hàng
               </span>
             </div>
           </Link>
@@ -68,7 +69,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
             const isActive =
               item.href === "/"
                 ? pathname === "/"
-                : pathname.startsWith(item.href);
+                : pathname === item.href || pathname.startsWith(item.href + "/");
             return (
               <Link
                 key={item.href}
@@ -93,7 +94,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
             rel="noreferrer"
             className="flex items-center justify-between px-3 py-2 text-xs font-medium text-slate-500 hover:text-[#0037b0] hover:bg-slate-50 rounded-lg transition"
           >
-            <span>Marketplace Store</span>
+            <span>Cửa hàng</span>
             <span>↗</span>
           </a>
           {user && (
@@ -109,7 +110,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
                   onClick={logout}
                   className="w-full text-xs text-red-600 hover:bg-red-50"
                 >
-                  Sign Out
+                  Đăng xuất
                 </Button>
               </div>
             </div>
@@ -126,13 +127,13 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
               N
             </span>
             <span className="font-extrabold text-[#0037b0] text-sm">
-              NEXUSTHEME Portal
+              NEXUSTHEME · Cổng khách hàng
             </span>
           </Link>
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="p-2 rounded-lg text-slate-600 hover:bg-slate-100"
-            aria-label="Toggle Navigation"
+            aria-label="Mở hoặc đóng menu"
           >
             <svg
               className="w-6 h-6"
@@ -181,7 +182,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
                 }}
                 className="text-xs text-red-600"
               >
-                Sign Out
+                Đăng xuất
               </Button>
             </div>
           </div>

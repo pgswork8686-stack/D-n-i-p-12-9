@@ -1,287 +1,110 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card } from "@nexus/ui";
-import { useAuth, isDevAuthToolsEnabled } from "./context/auth-context";
+import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "./context/auth-context";
 import { getApiUrl } from "./lib/api";
+import { visibleAdminNavigation } from "./lib/admin-navigation";
 
 const WEB_URL = process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000";
-const PORTAL_URL =
-  process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+
+type CountState = { status: "idle" | "loading" | "success" | "error"; value?: number };
 
 export default function AdminHomePage() {
-  const { token, user, logout, loginWithDevToken, isLoading: authLoading } = useAuth();
-  const [apiHealth, setApiHealth] = useState<string>("Checking...");
-  const [isHealthy, setIsHealthy] = useState<boolean | null>(null);
-  const [adminAccess, setAdminAccess] = useState<{
-    allowed: boolean;
-    statusText: string;
-    roles?: any[];
-  }>({
-    allowed: false,
-    statusText: "Checking authorization...",
-  });
+  const { token, user, isLoading, isConnectivityError, logout } = useAuth();
+  const nav = useMemo(
+    () => visibleAdminNavigation(user?.permissions ?? [], user?.roles ?? []),
+    [user?.permissions, user?.roles],
+  );
+  const canReadOrders = nav.some(item => item.permission === "order.read");
+  const [count, setCount] = useState<CountState>({ status: "idle" });
 
+  // Only display a metric when the API supplies an authoritative total.
   useEffect(() => {
-    let apiUrl: string;
-    try {
-      apiUrl = getApiUrl();
-    } catch {
-      setIsHealthy(false);
-      setApiHealth(
-        "Admin API configuration unavailable: Production requires a valid HTTPS API URL.",
-      );
+    if (isLoading || !token || !canReadOrders) {
+      setCount({ status: "idle" });
       return;
     }
-
-    fetch(`${apiUrl}/health`)
-      .then((res) => res.json())
-      .then((data) => {
-        setIsHealthy(data.status === "ok");
-        setApiHealth(JSON.stringify(data, null, 2));
-      })
-      .catch((err) => {
-        setIsHealthy(false);
-        setApiHealth(`Failed to connect: ${err.message}`);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!token) {
-      setAdminAccess({
-        allowed: false,
-        statusText: "Access Denied (401 Unauthorized): Please sign in with an authenticated admin account.",
-      });
-      return;
-    }
-
-    let apiUrl: string;
-    try {
-      apiUrl = getApiUrl();
-    } catch {
-      setAdminAccess({
-        allowed: false,
-        statusText: "Admin API configuration unavailable",
-      });
-      return;
-    }
-
-    fetch(`${apiUrl}/admin/roles`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(
-            `Access Denied (${res.status} ${res.statusText}): ${body.message || "Insufficient permissions for Admin operations"}`,
-          );
+    let canceled = false;
+    setCount({ status: "loading" });
+    (async () => {
+      try {
+        const response = await fetch(getApiUrl() + "/admin/orders?page=1&limit=1", {
+          headers: { Authorization: "Bearer " + token }, cache: "no-store",
+        });
+        if (!response.ok) throw new Error("Order summary unavailable");
+        const data = await response.json() as { total?: unknown };
+        if (!Number.isSafeInteger(data.total) || Number(data.total) < 0) {
+          throw new Error("Order response missing authoritative total");
         }
-        return res.json();
-      })
-      .then((data) => {
-        setAdminAccess({
-          allowed: true,
-          statusText: "Access Granted: Verified server-side admin authority.",
-          roles: data.roles || [],
-        });
-      })
-      .catch((err) => {
-        setAdminAccess({
-          allowed: false,
-          statusText: err.message,
-        });
-      });
-  }, [token]);
-
-  const showDevTools = isDevAuthToolsEnabled();
+        if (!canceled) setCount({ status: "success", value: Number(data.total) });
+      } catch {
+        if (!canceled) setCount({ status: "error" });
+      }
+    })();
+    return () => { canceled = true; };
+  }, [isLoading, token, canReadOrders]);
 
   return (
-    <main className="max-w-4xl mx-auto py-12 px-6">
-      <div className="flex items-center justify-between mb-8 pb-4 border-b border-gray-200">
-        <div>
-          <h1 className="text-3xl font-extrabold text-[#0037b0]">
-            NEXUSTHEME Super Admin
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">
-            Central Operations & Control Center (apps/admin — Port 3002)
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Badge
-            variant={
-              isHealthy ? "success" : isHealthy === false ? "error" : "warning"
-            }
-          >
-            {isHealthy
-              ? "API Connected"
-              : isHealthy === false
-                ? "API Disconnected"
-                : "Checking API..."}
-          </Badge>
-          <Badge variant={adminAccess.allowed ? "success" : "error"}>
-            {adminAccess.allowed ? "Admin Verified" : "Access Denied"}
-          </Badge>
-          {token ? (
-            <Button variant="outline" size="sm" onClick={() => logout()}>
-              Sign Out
-            </Button>
-          ) : (
-            <Link href="/login">
-              <Button variant="primary" size="sm">
-                Sign In
-              </Button>
-            </Link>
-          )}
-        </div>
-      </div>
-
-      {showDevTools && (
-        <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 flex items-center justify-between">
+    <main id="main" className="min-h-screen bg-slate-50 px-5 py-8 text-slate-900 sm:px-8">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b pb-6">
           <div>
-            <span className="text-sm font-semibold text-gray-800">
-              Simulate Client Identity Token (Dev Only):
-            </span>
-            <p className="text-xs text-gray-500">
-              Test how Admin UI reacts to different user authorization levels
-            </p>
+            <p className="text-xs font-bold uppercase tracking-widest text-blue-700">NEXUSTHEME · ADMIN</p>
+            <h1 className="mt-2 text-3xl font-bold">Tổng quan quản trị</h1>
+            <p className="mt-2 text-sm text-slate-600">Quản lý sản phẩm, đơn hàng, nội dung và vận hành theo quyền tài khoản.</p>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => loginWithDevToken("dev-admin-token")}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                token === "dev-admin-token"
-                  ? "bg-[#0037b0] text-white border-[#0037b0]"
-                  : "bg-white text-gray-700 border-gray-300"
-              }`}
-            >
-              Admin Token (Pass)
-            </button>
-            <button
-              onClick={() => loginWithDevToken("dev-customer-token")}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                token === "dev-customer-token"
-                  ? "bg-amber-600 text-white border-amber-600"
-                  : "bg-white text-gray-700 border-gray-300"
-              }`}
-            >
-              Customer Token (403)
-            </button>
-            <button
-              onClick={() => logout()}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border ${
-                !token
-                  ? "bg-red-600 text-white border-red-600"
-                  : "bg-white text-gray-700 border-gray-300"
-              }`}
-            >
-              No Token (401)
-            </button>
+          <div className="flex items-center gap-3">
+            {token && user ? <button onClick={() => void logout()} className="rounded-lg border bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-100">Đăng xuất</button> :
+              <Link href="/login" className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white">Đăng nhập</Link>}
           </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        <Card
-          title="RBAC Authorization Guard"
-          subtitle="Real-time check against /admin/roles"
-        >
-          {adminAccess.allowed ? (
-            <div className="space-y-4">
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-xs font-semibold">
-                ✓ {adminAccess.statusText}
+        </header>
+        {isLoading ? (
+          <p role="status" className="rounded-xl border bg-white p-6">Đang xác minh phiên quản trị…</p>
+        ) : !token || !user ? (
+          <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-6">
+            <h2 className="font-semibold">Chưa có phiên đăng nhập hợp lệ</h2>
+            <p className="mt-2 text-sm">Vui lòng đăng nhập bằng tài khoản quản trị đã được cấp quyền.</p>
+            {isConnectivityError && <p className="mt-2 text-sm">Máy chủ tạm thời không phản hồi. Hãy thử lại sau.</p>}
+          </div>
+        ) : nav.length === 0 ? (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-6">
+            <h2 className="font-semibold">Không đủ quyền truy cập</h2>
+            <p className="mt-2 text-sm">Tài khoản đã đăng nhập nhưng chưa có quyền vận hành Admin.</p>
+          </div>
+        ) : (
+          <>
+            <section aria-label="Tài khoản đang đăng nhập" className="rounded-2xl border bg-white p-5">
+              <p className="text-sm text-slate-500">Tài khoản</p>
+              <p className="mt-1 font-semibold">{user.profile?.displayName || user.email}</p>
+              <p className="mt-2 text-xs text-slate-500">Quyền điều hướng theo /auth/me; mọi endpoint tiếp tục kiểm tra RBAC trên máy chủ.</p>
+            </section>
+            {canReadOrders && (
+              <section aria-label="Số liệu đơn hàng" className="rounded-2xl border bg-white p-6">
+                <p className="text-sm text-slate-500">Tổng số đơn hàng đã ghi nhận</p>
+                {count.status === "success" ? <p className="mt-2 text-3xl font-bold">{count.value}</p> :
+                  count.status === "loading" ? <p role="status" className="mt-2 text-sm">Đang tải số liệu…</p> :
+                  <p className="mt-2 text-sm text-slate-500">Chưa tải được số liệu, không hiển thị số ước đoán.</p>}
+                <Link className="mt-3 inline-block text-sm font-semibold text-blue-700 hover:underline" href="/admin/orders">Xem đơn hàng →</Link>
+              </section>
+            )}
+            <section aria-labelledby="admin-modules-title">
+              <h2 id="admin-modules-title" className="text-lg font-bold">Chức năng được phép sử dụng</h2>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {nav.map(item => <Link key={item.href} href={item.href}
+                  className="rounded-2xl border bg-white p-6 shadow-sm transition hover:border-blue-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <span className="font-bold">{item.label}</span>
+                  <span className="mt-2 block text-sm text-blue-700">Mở chức năng →</span>
+                </Link>)}
               </div>
-              <div>
-                <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                  Configured Platform Roles ({adminAccess.roles?.length || 0}):
-                </h4>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {adminAccess.roles?.map((r) => (
-                    <div
-                      key={r.id}
-                      className="p-2 bg-gray-50 rounded border border-gray-200 flex justify-between items-center text-xs"
-                    >
-                      <span className="font-semibold text-gray-900">{r.name}</span>
-                      <span className="text-gray-500">
-                        {r.permissions?.length} perms
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="p-6 bg-red-50 border border-red-200 rounded-xl text-center space-y-3">
-              <div className="text-3xl">🚫</div>
-              <h3 className="text-base font-bold text-red-800">
-                Access Denied / Unauthorized
-              </h3>
-              <p className="text-xs text-red-600">{adminAccess.statusText}</p>
-              <p className="text-[11px] text-gray-500">
-                Client-side UI respects server authority. Access cannot be bypassed by client tampering.
-              </p>
-              {!token && (
-                <div className="pt-2">
-                  <Link href="/login">
-                    <Button variant="primary" size="sm">
-                      Go to Sign In
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </div>
-          )}
-        </Card>
-
-        <Card
-          title="Backend API Health"
-          subtitle={(() => {
-            try {
-              return `Live probe to ${getApiUrl()}/health`;
-            } catch {
-              return "Live probe to /health (configuration unavailable)";
-            }
-          })()}
-        >
-          <pre className="bg-gray-900 text-emerald-400 p-4 rounded-xl text-xs overflow-x-auto h-52">
-            {apiHealth}
-          </pre>
-        </Card>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-4">
-        <a href="/admin/products">
-          <Button variant="primary" size="sm">
-            📦 Manage Catalog & Products →
-          </Button>
-        </a>
-        <a href="/content">
-          <Button variant="primary" size="sm">
-            ✍️ Manage Content (CMS) →
-          </Button>
-        </a>
-        <a href="/automation">
-          <Button variant="primary" size="sm">
-            ⚡ Automation & AI Engine →
-          </Button>
-        </a>
-        <a href="/service-inquiries">
-          <Button variant="primary" size="sm">
-            🧩 Services & Projects →
-          </Button>
-        </a>
-        <a href={WEB_URL} target="_blank" rel="noreferrer">
-          <Button variant="secondary" size="sm">
-            ← Return to Marketplace
-          </Button>
-        </a>
-        <a href={PORTAL_URL} target="_blank" rel="noreferrer">
-          <Button variant="outline" size="sm">
-            Go to Customer Portal →
-          </Button>
-        </a>
+            </section>
+          </>
+        )}
+        <footer className="flex flex-wrap gap-5 border-t pt-5 text-sm text-slate-600">
+          <a href={WEB_URL} target="_blank" rel="noopener noreferrer" className="hover:underline">Cửa hàng ↗</a>
+          <a href={PORTAL_URL} target="_blank" rel="noopener noreferrer" className="hover:underline">Cổng khách hàng ↗</a>
+        </footer>
       </div>
     </main>
   );

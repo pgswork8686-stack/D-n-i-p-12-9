@@ -1,0 +1,17 @@
+[
+  {
+    "status": "DRAFT",
+    "name": "",
+    "slug": "",
+    "productType": "DOWNLOADABLE_ASSET",
+    "fulfillmentType": "DIGITAL_DOWNLOAD",
+    "categorySlugs": [],
+    "shortDescription": "",
+    "description": "",
+    "thumbnailUrl": "",
+    "gallery": [],
+    "variants": [],
+    "licenseEvidence": "",
+    "supportPolicyUrl": ""
+  }
+]
