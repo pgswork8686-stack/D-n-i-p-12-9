@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
 import { ProductCard } from "../components/product-card";
+import { validCatalogPage } from "../lib/catalog-filters";
 import { listCategories, tryListProducts } from "../lib/server-api";
 import { PRODUCT_TYPE_LABELS } from "../lib/format";
 
@@ -18,13 +19,6 @@ const SORTS = [
   { value: "price_desc", label: "Giá giảm dần" },
   { value: "name_asc", label: "Tên A → Z" },
 ];
-
-/** Limit page input before forwarding it to the validated catalog API. */
-export function validCatalogPage(raw?: string): number {
-  if (!raw || !/^[1-9][0-9]{0,5}$/.test(raw)) return 1;
-  const page = Number(raw);
-  return Number.isSafeInteger(page) ? page : 1;
-}
 
 const LISTED_TYPES = ["DOWNLOADABLE_ASSET", "LICENSED_SOFTWARE", "EXTERNAL_MANAGED_LICENSE", "SERVICE"];
 

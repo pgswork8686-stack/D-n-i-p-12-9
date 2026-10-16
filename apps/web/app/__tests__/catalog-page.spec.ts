@@ -1,4 +1,4 @@
-import { validCatalogPage } from "../products/page";
+import { validCatalogPage } from "../lib/catalog-filters";
 
 describe("B3 Storefront catalog page validation", () => {
   it.each([
