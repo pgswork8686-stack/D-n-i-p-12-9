@@ -116,6 +116,7 @@ jobs:
           bash -n infra/scripts/verify-backup.sh
           bash -n infra/scripts/production-preflight.sh
           bash -n infra/scripts/staging-smoke.sh
+          bash -n infra/scripts/staging-preflight.sh
 
       # Actual production Caddyfile syntax and HTTP request-size enforcement.
       # Tests use an isolated Docker network and a mock API that consumes request bodies.
