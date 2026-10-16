@@ -2,82 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/*
- * NexusTheme storefront tokens (RGB channels so Tailwind can apply alpha).
- * Contrast checked: ink/canvas 15.9:1, muted/surface 7.5:1,
- * white/brand 6.3:1, white/cta 5.0:1.
- */
-:root {
-  --brand: 79 70 229; /* #4F46E5 */
-  --brand-hover: 67 56 202; /* #4338CA */
-  --brand-soft: 238 242 255; /* #EEF2FF */
-  --cta: 21 128 61; /* #15803D */
-  --cta-hover: 22 101 52; /* #166534 */
-  --ink: 30 27 75; /* #1E1B4B */
-  --muted: 71 85 105; /* #475569 */
-  --line: 226 232 240; /* #E2E8F0 */
-  --canvas: 248 250 252; /* #F8FAFC */
-  --surface: 255 255 255;
-  --danger: 220 38 38; /* #DC2626 */
-}
+/* Tokens, base styles and shared component classes (.btn, .card, .field-*)
+   come from @nexus/config/tailwind-preset. Storefront-only styles below. */
 
 html {
-  -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
 }
 
-body {
-  background-color: rgb(var(--canvas));
-  color: rgb(var(--ink));
-  font-family: var(--font-sans), system-ui, sans-serif;
-  font-size: 16px;
-  line-height: 1.6;
-}
-
-:focus-visible {
-  outline: 2px solid rgb(var(--brand));
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
 @layer components {
-  .container-site {
-    @apply mx-auto w-full max-w-site px-4 sm:px-6 lg:px-8;
-  }
-  .btn {
-    @apply inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60;
-  }
-  .btn-primary {
-    @apply btn bg-brand text-white hover:bg-brand-hover;
-  }
-  .btn-buy {
-    @apply btn bg-cta text-white hover:bg-cta-hover;
-  }
-  .btn-ghost {
-    @apply btn border border-line bg-surface text-ink hover:border-brand/40 hover:bg-brand-soft;
-  }
-  .card {
-    @apply rounded-2xl border border-line bg-surface shadow-card;
-  }
-  .field-label {
-    @apply mb-1.5 block text-sm font-medium text-ink;
-  }
-  .field-input {
-    @apply min-h-[44px] w-full rounded-xl border border-line bg-surface px-3.5 text-base text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20;
-  }
   .prose-article h2 {
     @apply mt-10 text-2xl font-bold text-ink;
   }
