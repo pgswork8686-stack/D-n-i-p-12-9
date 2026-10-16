@@ -139,6 +139,9 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Validate n8n workflows and inquiry email template
+        run: pnpm n8n:validate
+
       - name: Build
         run: pnpm build --concurrency=2
 
