@@ -19,6 +19,7 @@ import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { Request } from "express";
 import { SERVICE_FILE_MAX_BYTES, SERVICE_INQUIRY_MAX_FILES } from "@nexus/contracts";
 import { RequireFeature } from "../../common/feature-flags";
+import { maxRequestBytes } from "../../common/max-request-bytes.guard";
 import { AuthGuard } from "../auth/auth.guard";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { RequirePermissions } from "../auth/require-permissions.decorator";
@@ -48,6 +49,13 @@ const UPLOAD_LIMITS = {
   fields: 30,
   fieldSize: 64 * 1024,
 };
+
+/** Room for the text fields and multipart framing around the files (30 fields x 64 KB worst case). */
+const MULTIPART_OVERHEAD_BYTES = 2 * 1024 * 1024;
+/** Public form: up to 5 files of 10 MB plus fields. */
+export const INQUIRY_MAX_REQUEST_BYTES = SERVICE_INQUIRY_MAX_FILES * SERVICE_FILE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
+/** Customer and staff document uploads: one file of 10 MB plus fields. */
+export const SINGLE_FILE_MAX_REQUEST_BYTES = SERVICE_FILE_MAX_BYTES + MULTIPART_OVERHEAD_BYTES;
 
 /**
  * Multer buffers files before the handler runs, so the public form must refuse
@@ -110,6 +118,7 @@ export class PublicServiceInquiriesController {
   /** Anonymous or signed-in. Attachments (multipart `files`) require a signed-in user. */
   @Post()
   @HttpCode(201)
+  @UseGuards(maxRequestBytes(INQUIRY_MAX_REQUEST_BYTES))
   @UseInterceptors(
     FilesInterceptor("files", SERVICE_INQUIRY_MAX_FILES, { limits: UPLOAD_LIMITS, fileFilter: signedInOnlyFileFilter }),
   )
@@ -174,6 +183,7 @@ export class MyServiceProjectsController {
   }
 
   @Post(":id/documents")
+  @UseGuards(maxRequestBytes(SINGLE_FILE_MAX_REQUEST_BYTES))
   @UseInterceptors(FileInterceptor("file", { limits: { ...UPLOAD_LIMITS, files: 1 } }))
   uploadDocument(@Req() req: Request, @Param("id") id: string, @UploadedFile() file: UploadedServiceFile) {
     return this.projects.customerUploadDocument(req.user!.id, id, file, {
@@ -321,6 +331,7 @@ export class AdminServiceProjectsController {
 
   @Post(":id/documents")
   @RequirePermissions("project.manage")
+  @UseGuards(maxRequestBytes(SINGLE_FILE_MAX_REQUEST_BYTES))
   @UseInterceptors(FileInterceptor("file", { limits: { ...UPLOAD_LIMITS, files: 1 } }))
   uploadDocument(
     @Req() req: Request,
