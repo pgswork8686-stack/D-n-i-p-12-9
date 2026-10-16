@@ -51,9 +51,45 @@ www.{$WEB_DOMAIN} {
 
 {$API_DOMAIN} {
 	import common
-	# Payment webhooks need the untouched raw body; keep request size bounded.
-	request_body {
-		max_size 60MB
+
+	# Request-body ceilings per endpoint (F-08). Caddy sizes use SI units for "MB" and binary
+	# units for "MiB"; MiB is used so the numbers match the application limits exactly.
+	# Layers: this edge limit -> maxRequestBytes guard (413 on Content-Length) -> Multer limits.
+	# Keep the three in step with SERVICE_FILE_MAX_BYTES / SERVICE_INQUIRY_MAX_FILES (contracts)
+	# and MAX_UPLOAD_BYTES (admin version files).
+
+	# Public inquiry form: 5 files x 10 MiB + 2 MiB of fields, plus 1 MiB of slack.
+	@service_inquiry_form path /v1/service-inquiries
+	handle @service_inquiry_form {
+		request_body {
+			max_size 53MiB
+		}
+		reverse_proxy api:4000
 	}
-	reverse_proxy api:4000
+
+	# Service project documents (customer and staff): one 10 MiB file + 2 MiB, plus 1 MiB of slack.
+	@service_documents path_regexp ^/v1/(me|admin)/service-projects/[^/]+/documents$
+	handle @service_documents {
+		request_body {
+			max_size 13MiB
+		}
+		reverse_proxy api:4000
+	}
+
+	# Admin product-version file upload (large release archives).
+	@version_upload path_regexp ^(/v1)?/admin/product-versions/[^/]+/files/upload$
+	handle @version_upload {
+		request_body {
+			max_size 60MiB
+		}
+		reverse_proxy api:4000
+	}
+
+	# Everything else is JSON. Payment webhooks need the untouched raw body but are tiny.
+	handle {
+		request_body {
+			max_size 5MiB
+		}
+		reverse_proxy api:4000
+	}
 }
