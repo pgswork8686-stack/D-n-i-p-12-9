@@ -242,7 +242,7 @@ Thang mức độ: **P0** mất dữ liệu/lộ dữ liệu diện rộng/khôn
 #### F-11 — Một số điểm UI nhỏ
 - **Severity:** P3
 - **Evidence:** lịch sử ở admin hiển thị tên enum thô (`apps/admin/app/service-projects/[id]/page.tsx:422`); portal lấy tối đa 50 dự án/yêu cầu, chưa phân trang (`apps/portal/app/services/page.tsx:33-34`); `assignMember` gọi đồng thời cho cùng một nhân sự có thể gặp P2002 → 500 (`service-projects.service.ts:292`).
-- **Status:** OPEN (backlog Sprint 1)
+- **Status:** PARTIALLY FIXED — `assignMember` race đã sửa ở commit `f2bf30a` (retry một lần khi P2002; test "retries once when a concurrent assignment wins the insert race" và "does not swallow non-unique database errors"). Hai điểm UI (tên enum thô, phân trang portal) còn OPEN (backlog Sprint 1).
 
 #### F-12 — Chưa lưu consent và chưa có thông báo
 - **Severity:** P2 (quyết định sản phẩm/pháp lý)
