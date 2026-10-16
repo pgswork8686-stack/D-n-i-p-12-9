@@ -131,6 +131,7 @@ import {
   UpdateServiceRequest,
   CreateServiceInquiryRequest,
   CreateServiceInquiryResponse,
+  ServiceConsentConfigDto,
   ServiceInquiryDto,
   AdminServiceInquiryDto,
   AdminUpdateInquiryRequest,
@@ -2486,6 +2487,11 @@ export class NexusApiClient {
 
   getService(slug: string): Promise<ServiceDto> {
     return this.requestJson("GET", `/v1/services/${encodeURIComponent(slug)}`, "Get service failed");
+  }
+
+  /** Consent version and privacy-policy link the inquiry form must present. */
+  getServiceConsentConfig(): Promise<ServiceConsentConfigDto> {
+    return this.requestJson("GET", "/v1/service-inquiries/consent", "Get consent config failed");
   }
 
   /**

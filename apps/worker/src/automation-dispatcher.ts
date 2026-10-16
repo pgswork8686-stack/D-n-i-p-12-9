@@ -32,6 +32,7 @@ export const SUPPORTED_AUTOMATION_JOB_TYPES: ReadonlySet<string> = new Set([
   AutomationJobType.CMS_AI_DRAFT,
   AutomationJobType.ORDER_PAID_EMAIL,
   AutomationJobType.LICENSE_PROVISIONED_EMAIL,
+  AutomationJobType.SERVICE_INQUIRY_NOTIFY_EMAIL,
 ]);
 
 const WEBHOOK_PATH_BY_JOB_TYPE: Record<string, string> = {
@@ -39,6 +40,7 @@ const WEBHOOK_PATH_BY_JOB_TYPE: Record<string, string> = {
   [AutomationJobType.ORDER_PAID_EMAIL]: "/webhook/order-paid-email",
   [AutomationJobType.LICENSE_PROVISIONED_EMAIL]:
     "/webhook/license-provisioned-email",
+  [AutomationJobType.SERVICE_INQUIRY_NOTIFY_EMAIL]: "/webhook/service-inquiry-notify-email",
 };
 
 
@@ -71,6 +73,8 @@ export function resolveWebhookUrlForJobType(jobType: string): string | null {
     specificUrl = process.env.N8N_ORDER_PAID_EMAIL_WEBHOOK_URL;
   } else if (jobType === "LICENSE_PROVISIONED_EMAIL") {
     specificUrl = process.env.N8N_LICENSE_PROVISIONED_EMAIL_WEBHOOK_URL;
+  } else if (jobType === "SERVICE_INQUIRY_NOTIFY_EMAIL") {
+    specificUrl = process.env.N8N_SERVICE_INQUIRY_NOTIFY_EMAIL_WEBHOOK_URL;
   }
 
   const baseUrl =

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CheckCircle2, ChevronRight } from "lucide-react";
-import { getService } from "../../lib/server-api";
+import { getService, getServiceConsent } from "../../lib/server-api";
 import { InquiryForm } from "./inquiry-form";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +21,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function ServiceDetailPage({ params }: Props) {
   const service = await getService(params.slug);
   if (!service) notFound();
+  // The form shows the policy it asks people to accept; without it the page errors instead.
+  const consent = await getServiceConsent();
 
   const directCheckout = service.pricingMode === "DIRECT_CHECKOUT" && service.productSlug;
 
@@ -106,7 +108,7 @@ export default async function ServiceDetailPage({ params }: Props) {
               </Link>
               <p className="mt-4 text-xs text-muted">Cần tùy chỉnh thêm? Gửi yêu cầu bên dưới.</p>
               <div className="mt-4 border-t border-line pt-4">
-                <InquiryForm serviceSlug={service.slug} ctaLabel="Gửi yêu cầu tùy chỉnh" />
+                <InquiryForm serviceSlug={service.slug} ctaLabel="Gửi yêu cầu tùy chỉnh" consent={consent} />
               </div>
             </div>
           ) : (
@@ -114,7 +116,7 @@ export default async function ServiceDetailPage({ params }: Props) {
               <h2 className="text-lg font-semibold text-ink">Gửi yêu cầu dự án</h2>
               <p className="mt-2 text-sm text-muted">Chúng tôi phản hồi trong 1 ngày làm việc.</p>
               <div className="mt-5">
-                <InquiryForm serviceSlug={service.slug} ctaLabel={service.ctaLabel} />
+                <InquiryForm serviceSlug={service.slug} ctaLabel={service.ctaLabel} consent={consent} />
               </div>
             </div>
           )}

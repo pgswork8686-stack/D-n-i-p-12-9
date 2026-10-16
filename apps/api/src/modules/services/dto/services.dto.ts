@@ -40,6 +40,17 @@ const lowerTrim = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.trim().toLowerCase() : value;
 
 /**
+ * Multipart forms send booleans as strings. Only the exact values `true`/`"true"` and
+ * `false`/`"false"` convert; anything else ("1", "yes", "on", numbers) stays as-is and fails
+ * `@IsBoolean`, so consent can never be inferred from a loosely truthy value.
+ */
+const toStrictBoolean = ({ value }: { value: unknown }) => {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return value;
+};
+
+/**
  * Multipart forms send arrays either as repeated fields, a JSON array string or
  * a newline-separated string; normalise all of them to a trimmed string[].
  */
@@ -289,6 +300,24 @@ export class CreateServiceInquiryDto {
   @IsOptional()
   @IsUUID()
   submissionKey?: string;
+
+  /** Consent to process the data in this request. Required and must be exactly true. */
+  @Transform(toStrictBoolean)
+  @IsBoolean({ message: "consentAccepted must be a boolean" })
+  consentAccepted!: boolean;
+
+  /** Echo of the version shown to the customer; compared with the server's current version. */
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  consentVersion!: string;
+
+  /** Independent opt-in; absent means false. */
+  @IsOptional()
+  @Transform(toStrictBoolean)
+  @IsBoolean({ message: "marketingConsent must be a boolean" })
+  marketingConsent?: boolean;
 
   /** Honeypot: humans never see this field. */
   @IsOptional()

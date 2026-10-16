@@ -41,6 +41,8 @@ function gate(name: string, condition: boolean, detail?: unknown) {
 const ADMIN = "dev-admin-token";
 const CUSTOMER_A = "dev-customer-token";
 const CUSTOMER_B = `dev-no-email:services-acceptance-${Date.now()}`;
+const CONSENT_VERSION = "acceptance-1";
+const NOTIFY_EMAIL = "ops-acceptance@example.com";
 const PDF = Buffer.from("%PDF-1.7\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n");
 const EXE = Buffer.from("MZ\x90\x00\x03\x00\x00\x00\x04\x00", "latin1");
 
@@ -71,6 +73,8 @@ async function startApi(overrides: Record<string, string> = {}): Promise<ChildPr
       SERVICE_INQUIRY_RATE_LIMIT_PER_IP: "4",
       SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL: "50",
       SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS: "3600",
+      SERVICE_CONSENT_VERSION: CONSENT_VERSION,
+      PRIVACY_POLICY_URL: "https://example.com/privacy",
       ...overrides,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -135,6 +139,8 @@ const validFields = (over: Record<string, string> = {}) => ({
   desiredFeatures: JSON.stringify(["Handoff nhân viên", "Thống kê"]),
   budgetRange: "FROM_20M_TO_50M",
   timeline: "ONE_TO_THREE_MONTHS",
+  consentAccepted: "true",
+  consentVersion: CONSENT_VERSION,
   ...over,
 });
 
@@ -294,6 +300,107 @@ async function run() {
     gate("Completed projects reject further transitions (400)", (await call("PATCH", `/v1/admin/service-projects/${projectId}`, { token: ADMIN, json: { status: "IN_PROGRESS" } })).status === 400);
     gate("Customers cannot post to a completed project (400)", (await call("POST", `/v1/me/service-projects/${projectId}/messages`, { token: CUSTOMER_A, json: { body: "hi" } })).status === 400);
 
+    // -------------------------------------------- consent + notifications (F-12)
+    console.log("\n--- Consent and new-inquiry notifications (F-12) ---");
+    const cfg = await call("GET", "/v1/service-inquiries/consent");
+    gate("Public consent config returns the server's version and policy link", cfg.status === 200 && cfg.body.version === CONSENT_VERSION && cfg.body.privacyPolicyUrl === "https://example.com/privacy", cfg.body);
+
+    const consentEmail = `consent-${Date.now()}@example.com`;
+    const withoutConsent = (over: Record<string, string>) => {
+      const f: Record<string, string> = validFields({ contactEmail: consentEmail });
+      delete f.consentAccepted;
+      return inquiryForm({ ...f, ...over });
+    };
+    const rejected = {
+      missing: (await call("POST", "/v1/service-inquiries", { form: withoutConsent({}) })).status,
+      falseValue: (await call("POST", "/v1/service-inquiries", { form: withoutConsent({ consentAccepted: "false" }) })).status,
+      looseValue: (await call("POST", "/v1/service-inquiries", { form: withoutConsent({ consentAccepted: "1" }) })).status,
+      onlyMarketing: (await call("POST", "/v1/service-inquiries", { form: withoutConsent({ consentAccepted: "false", marketingConsent: "true" }) })).status,
+    };
+    gate("Missing, false, loosely-truthy or marketing-only consent is rejected (400)", Object.values(rejected).every((s) => s === 400), rejected);
+    const stale = await call("POST", "/v1/service-inquiries", { form: inquiryForm(validFields({ contactEmail: consentEmail, consentVersion: "forged-0" })) });
+    gate("A forged or stale consent version is rejected (409)", stale.status === 409, stale);
+    gate("Rejected consent stores nothing and writes no outbox event", (await prisma.serviceInquiry.count({ where: { contactEmail: consentEmail } })) === 0);
+
+    const t0 = Date.now();
+    const opted = await call("POST", "/v1/service-inquiries", {
+      form: inquiryForm(validFields({ contactEmail: consentEmail, marketingConsent: "true", consentAt: "2000-01-01T00:00:00Z" })),
+    });
+    const optedRow = await prisma.serviceInquiry.findFirst({ where: { contactEmail: consentEmail } });
+    gate("Consent version and timestamp are the server's; client-supplied times are ignored", opted.status === 201 && optedRow?.consentVersion === CONSENT_VERSION && !!optedRow.consentAt && optedRow.consentAt.getTime() >= t0 - 5000, optedRow);
+    gate("Marketing consent is stored only when explicitly opted in, with its own timestamp", optedRow?.marketingConsent === true && !!optedRow.marketingConsentAt, optedRow);
+    gate("Marketing consent defaults to false when the box is left unticked", anonRow!.consentVersion === CONSENT_VERSION && (await prisma.serviceInquiry.findUnique({ where: { id: anonRow!.id } }))?.marketingConsent === false);
+
+    const adminView = await call("GET", `/v1/admin/service-inquiries/${anonRow!.id}`, { token: ADMIN });
+    gate("Admin sees the consent evidence for an inquiry", adminView.status === 200 && adminView.body.consentVersion === CONSENT_VERSION && !!adminView.body.consentAt && adminView.body.marketingConsent === false, adminView.body);
+    const ownView = await call("GET", `/v1/me/service-inquiries/${inqA!.id}`, { token: CUSTOMER_A });
+    gate("Customer responses do not carry internal consent bookkeeping", ownView.status === 200 && !("consentVersion" in ownView.body) && !("marketingConsent" in ownView.body), Object.keys(ownView.body || {}));
+
+    const pending = await prisma.outboxEvent.findFirst({ where: { eventType: "SERVICE_INQUIRY_CREATED", aggregateId: optedRow!.id } });
+    gate("Storing an inquiry writes a PENDING SERVICE_INQUIRY_CREATED outbox event atomically", !!pending && pending.status === "PENDING" && pending.aggregateType === "ServiceInquiry", pending);
+    const payloadText = JSON.stringify(pending?.payload ?? {});
+    gate("The outbox payload carries no contact details or requirements text", !payloadText.includes(consentEmail) && !payloadText.includes("chatbot") && !payloadText.includes("Nguyễn"), payloadText);
+    gate("The event is not processed inline: staff were not notified before the worker runs", (await prisma.notification.count({ where: { type: "SERVICE_INQUIRY_CREATED", metadata: { path: ["inquiryId"], equals: optedRow!.id } } })) === 0);
+
+    // Drive the real worker code (built dist) against the same database.
+    process.env.SERVICE_INQUIRY_NOTIFY_EMAILS = NOTIFY_EMAIL;
+    process.env.SERVICE_INQUIRY_NOTIFY_HOURLY_EMAIL_CAP = "1000";
+    // The worker runs as its own process, as in production.
+    const workerDist = path.resolve(__dirname, "../../../apps/worker/dist").replace(/\\/g, "/");
+    const runWorker = (body: string) =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, ["-e", `(async () => { ${body} })().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });`], {
+          env: process.env,
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let err = "";
+        child.stderr?.on("data", (d) => (err += d.toString()));
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`worker process failed (${code}): ${err.slice(-800)}`))));
+      });
+    await runWorker(`
+      const { processOutboxEvents } = require("${workerDist}/outbox-processor.js");
+      for (let i = 0; i < 5; i++) {
+        const r = await processOutboxEvents({ workerId: "services-acceptance", batchSize: 50 });
+        if (r.processedCount === 0) break;
+      }
+    `);
+    const done = await prisma.outboxEvent.findFirst({ where: { eventType: "SERVICE_INQUIRY_CREATED", aggregateId: optedRow!.id } });
+    gate("The worker processes the event to PROCESSED", done?.status === "PROCESSED", done);
+
+    const adminUser = await prisma.user.findFirst({ where: { email: "admin@nexustheme.dev" } });
+    const inapp = await prisma.notification.findMany({ where: { type: "SERVICE_INQUIRY_CREATED", metadata: { path: ["inquiryId"], equals: optedRow!.id } } });
+    gate("Staff with inquiry access receive an in-app notification with a link to the inquiry", inapp.length >= 1 && inapp.every((n) => n.actionUrl === `/service-inquiries/${optedRow!.id}`) && (!adminUser || inapp.some((n) => n.userId === adminUser.id)), inapp.map((n) => n.userId));
+    const nonStaffIds = (await prisma.user.findMany({ where: { userRoles: { none: {} } }, select: { id: true } })).map((u) => u.id);
+    gate("Accounts without inquiry access are never notified", inapp.every((n) => !nonStaffIds.includes(n.userId)));
+    const adminNotifs = adminUser ? await call("GET", "/v1/notifications?isRead=false&limit=50", { token: ADMIN }) : { status: 200, body: [{ type: "SERVICE_INQUIRY_CREATED" }] };
+    gate("The admin sees the notice through the notifications API", adminNotifs.status === 200 && Array.isArray(adminNotifs.body) && adminNotifs.body.some((n: any) => n.type === "SERVICE_INQUIRY_CREATED"), adminNotifs.status);
+    const custNotifs = await call("GET", "/v1/notifications?limit=50", { token: CUSTOMER_A });
+    gate("Customers never see staff notices", custNotifs.status === 200 && !custNotifs.body.some((n: any) => n.type === "SERVICE_INQUIRY_CREATED"));
+
+    const emailJobs = await prisma.automationJob.findMany({ where: { type: "SERVICE_INQUIRY_NOTIFY_EMAIL", sourceId: optedRow!.id } });
+    gate("One email job is queued per configured mailbox, with a minimal payload", emailJobs.length === 1 && (emailJobs[0].payloadJson as any).recipientEmail === NOTIFY_EMAIL && !JSON.stringify(emailJobs[0].payloadJson).includes(consentEmail) && !("requirements" in (emailJobs[0].payloadJson as object)), emailJobs.map((j) => j.payloadJson));
+
+    const countsBefore = [
+      await prisma.notification.count({ where: { type: "SERVICE_INQUIRY_CREATED", metadata: { path: ["inquiryId"], equals: optedRow!.id } } }),
+      await prisma.automationJob.count({ where: { type: "SERVICE_INQUIRY_NOTIFY_EMAIL", sourceId: optedRow!.id } }),
+      await prisma.auditLog.count({ where: { action: "SERVICE_INQUIRY_NOTIFIED", entityId: optedRow!.id } }),
+    ];
+    await runWorker(`
+      const { processServiceInquiryCreatedEvent } = require("${workerDist}/service-inquiry-notifier.js");
+      await processServiceInquiryCreatedEvent({ inquiryId: "${optedRow!.id}" }, "services-acceptance-replay");
+      await processServiceInquiryCreatedEvent({ inquiryId: "${optedRow!.id}" }, "services-acceptance-replay");
+    `);
+    const countsAfter = [
+      await prisma.notification.count({ where: { type: "SERVICE_INQUIRY_CREATED", metadata: { path: ["inquiryId"], equals: optedRow!.id } } }),
+      await prisma.automationJob.count({ where: { type: "SERVICE_INQUIRY_NOTIFY_EMAIL", sourceId: optedRow!.id } }),
+      await prisma.auditLog.count({ where: { action: "SERVICE_INQUIRY_NOTIFIED", entityId: optedRow!.id } }),
+    ];
+    gate("Replaying the event is idempotent: no duplicate notices, email jobs or audit rows", JSON.stringify(countsBefore) === JSON.stringify(countsAfter) && countsAfter[2] === 1, { countsBefore, countsAfter });
+
+    // Email outage must not touch the stored inquiry: the job queue is separate from the inquiry.
+    gate("The inquiry survives independently of notification delivery", (await prisma.serviceInquiry.count({ where: { id: optedRow!.id } })) === 1);
+    delete process.env.SERVICE_INQUIRY_NOTIFY_EMAILS;
+
     // ------------------------------------------------------------------- audit
     console.log("\n--- Audit trail ---");
     const actions = (await prisma.auditLog.findMany({ where: { OR: [{ entityId: inqA!.id }, { entityId: projectId }] }, select: { action: true } })).map((a) => a.action);
@@ -340,6 +447,53 @@ async function run() {
     noRedis.kill();
   }
 
+  // ------------------------------------- production without a privacy policy
+  // Constructs the compiled service in a child process with a production environment instead of
+  // booting the whole API: a full production boot is refused first by unrelated checks (for
+  // example CI sets STRIPE_MOCK_CLIENT=true and ENABLE_TEST_PAYMENT_PROVIDER=true, both forbidden
+  // in production), which would hide the consent check this gate is about. The service is the
+  // object whose constructor enforces it, so this exercises the real compiled code and the
+  // environment parsing, not a copy of the logic.
+  console.log("\n--- Production configuration of the consent policy (compiled build) ---");
+  const apiDir = path.resolve(__dirname, "../../../apps/api");
+  const constructService = (env: Record<string, string>) =>
+    new Promise<{ code: number | null; output: string }>((resolve) => {
+      const script = `
+        require("reflect-metadata");
+        const { ServiceInquiriesService } = require("./dist/modules/services/service-inquiries.service.js");
+        try {
+          new ServiceInquiriesService({}, {}, {}, { get: (k) => process.env[k] });
+          console.log("STARTED");
+        } catch (e) {
+          console.log("REFUSED: " + e.message);
+        }`;
+      const child = spawn(process.execPath, ["-e", script], {
+        cwd: apiDir,
+        env: { ...process.env, SERVICE_CONSENT_VERSION: "", PRIVACY_POLICY_URL: "", SERVICE_INQUIRY_IP_SALT: "x".repeat(32), ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let output = "";
+      child.stdout?.on("data", (d) => (output += d.toString()));
+      child.stderr?.on("data", (d) => (output += d.toString()));
+      const timer = setTimeout(() => child.kill(), 30000);
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        resolve({ code, output });
+      });
+    });
+
+  const noPolicy = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true" });
+  gate(
+    "Production with FEATURE_SERVICES on and no consent version / privacy-policy URL is refused",
+    /REFUSED: .*SERVICE_CONSENT_VERSION and PRIVACY_POLICY_URL are required/.test(noPolicy.output),
+    { code: noPolicy.code, output: noPolicy.output.slice(-500) },
+  );
+  const insecure = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true", SERVICE_CONSENT_VERSION: "2026-10", PRIVACY_POLICY_URL: "http://pgs.example/privacy" });
+  gate("A non-https privacy-policy URL is refused in production", /REFUSED: .*https/.test(insecure.output), { output: insecure.output.slice(-500) });
+  const configured = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true", SERVICE_CONSENT_VERSION: "2026-10", PRIVACY_POLICY_URL: "https://pgs.example/privacy" });
+  gate("Production with a version and an https policy URL starts", /STARTED/.test(configured.output), { output: configured.output.slice(-500) });
+  const moduleOff = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "false" });
+  gate("Production with the Services module off still starts without a policy (marketplace unaffected)", /STARTED/.test(moduleOff.output), { output: moduleOff.output.slice(-500) });
   const failed = results.filter((r) => !r.passed);
   console.log("\n================================================================================");
   console.log(`   RESULT: ${results.length - failed.length}/${results.length} gates passed`);

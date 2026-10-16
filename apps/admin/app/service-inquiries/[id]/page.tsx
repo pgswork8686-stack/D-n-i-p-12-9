@@ -154,6 +154,22 @@ export default function AdminInquiryDetailPage() {
                   <dt className="text-xs text-gray-400">Account</dt>
                   <dd className="text-gray-800">{inquiry.userId ? "Signed-in customer" : "Anonymous (no account linked)"}</dd>
                 </div>
+                <div>
+                  <dt className="text-xs text-gray-400">Data-processing consent</dt>
+                  <dd className="text-gray-800" data-testid="consent-processing">
+                    {inquiry.consentVersion && inquiry.consentAt
+                      ? `Accepted policy ${inquiry.consentVersion} • ${formatDateTime(inquiry.consentAt)}`
+                      : "Not recorded (submitted before consent was collected)"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-400">Marketing consent</dt>
+                  <dd className="text-gray-800" data-testid="consent-marketing">
+                    {inquiry.marketingConsent
+                      ? `Opted in • ${formatDateTime(inquiry.marketingConsentAt)}`
+                      : "No — do not use this contact for marketing"}
+                  </dd>
+                </div>
               </dl>
               <div>
                 <h3 className="text-sm font-semibold text-gray-700">Requirements</h3>

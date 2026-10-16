@@ -23,11 +23,14 @@ import {
   AdminServiceProjectDto,
   CreateServiceInquiryResponse,
   PaginatedList,
+  SERVICE_INQUIRY_CREATED_EVENT,
   SERVICE_INQUIRY_MAX_FILES,
+  ServiceConsentConfigDto,
   ServiceFileDownloadResponse,
   ServiceInquiryDto,
 } from "@nexus/contracts";
 import { AuditService } from "../audit/audit.service";
+import { ConsentPolicy, recordConsent, resolveConsentPolicy } from "./consent-policy";
 import {
   AdminUpdateInquiryDto,
   ConvertInquiryDto,
@@ -58,6 +61,7 @@ export interface SubmissionContext {
 export class ServiceInquiriesService {
   private readonly logger = new Logger(ServiceInquiriesService.name);
   private readonly ipSalt: string;
+  private readonly consentPolicy: ConsentPolicy;
 
   constructor(
     private readonly audit: AuditService,
@@ -72,6 +76,17 @@ export class ServiceInquiriesService {
       throw new Error("[Services] SERVICE_INQUIRY_IP_SALT is required in production when FEATURE_SERVICES is enabled");
     }
     this.ipSalt = salt || "local-dev-only-salt";
+    this.consentPolicy = resolveConsentPolicy({
+      version: config.get<string>("SERVICE_CONSENT_VERSION"),
+      privacyPolicyUrl: config.get<string>("PRIVACY_POLICY_URL"),
+      production: config.get<string>("NODE_ENV") === "production",
+      servicesEnabled: isFeatureEnabled("services"),
+    });
+  }
+
+  /** Version and policy link the public form must present (see consent-policy.ts). */
+  getConsentConfig(): ServiceConsentConfigDto {
+    return { version: this.consentPolicy.version, privacyPolicyUrl: this.consentPolicy.privacyPolicyUrl };
   }
 
   // ---------------------------------------------------------- submission
@@ -95,6 +110,10 @@ export class ServiceInquiriesService {
       if (existing) return existing;
     }
 
+    // Consent is validated before anything is stored or any quota is spent. The stored version
+    // and timestamps are the server's own (see recordConsent).
+    const consent = recordConsent(this.consentPolicy, dto);
+
     files = files || [];
     if (files.length > 0 && !ctx.userId) {
       throw new BadRequestException("Vui lòng đăng nhập để đính kèm tài liệu.");
@@ -111,7 +130,7 @@ export class ServiceInquiriesService {
 
     const service = await prisma.service.findFirst({
       where: { slug: dto.serviceSlug, status: ServiceStatus.ACTIVE },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     if (!service) {
       throw new NotFoundException("Dịch vụ không tồn tại hoặc đã ngừng nhận yêu cầu.");
@@ -142,6 +161,10 @@ export class ServiceInquiriesService {
             status: ServiceInquiryStatus.NEW,
             submissionKey: dto.submissionKey ?? null,
             ipHash,
+            consentVersion: consent.consentVersion,
+            consentAt: consent.consentAt,
+            marketingConsent: consent.marketingConsent,
+            marketingConsentAt: consent.marketingConsentAt,
             attachments: uploaded.length
               ? {
                   create: uploaded.map((f) => ({
@@ -161,9 +184,31 @@ export class ServiceInquiriesService {
           entity: "ServiceInquiry",
           entityId: row.id,
           actorId: ctx.userId ?? null,
-          details: { inquiryNumber: row.inquiryNumber, serviceId: service.id, attachments: uploaded.length },
+          details: {
+            inquiryNumber: row.inquiryNumber,
+            serviceId: service.id,
+            attachments: uploaded.length,
+            consentVersion: consent.consentVersion,
+            marketingConsent: consent.marketingConsent,
+          },
           ipAddress: ctx.ipAddress,
           userAgent: ctx.userAgent,
+        });
+        // Transactional outbox: the event exists if and only if the inquiry was stored, so a
+        // worker or email outage can delay notifications but never lose them or the inquiry.
+        // The payload carries ids and the public reference only: no contact data or requirements.
+        await tx.outboxEvent.create({
+          data: {
+            eventType: SERVICE_INQUIRY_CREATED_EVENT,
+            aggregateType: "ServiceInquiry",
+            aggregateId: row.id,
+            payload: {
+              inquiryId: row.id,
+              inquiryNumber: row.inquiryNumber,
+              serviceId: service.id,
+              serviceName: service.name,
+            },
+          },
         });
         return row;
       }));
