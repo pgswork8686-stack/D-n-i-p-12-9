@@ -148,7 +148,7 @@ export default function AdminOrdersPage() {
               {orders.map((o) => (
                 <tr key={o.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 font-mono font-medium text-blue-600">
-                    {o.orderNumber}
+                    <Link href={`/admin/orders/${o.id}`} className="hover:underline">{o.orderNumber}</Link>
                   </td>
                   <td className="px-6 py-4 font-mono text-xs text-gray-500">
                     {o.userId?.slice(0, 12)}...
