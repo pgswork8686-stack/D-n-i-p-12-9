@@ -1,0 +1,14 @@
+{
+  "name": "@nexus/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright end-to-end tests against a running stack (web + API). Not part of `pnpm test`: it needs live servers.",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "seed:demo": "node fixtures/seed-storefront-demo.mjs"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.0",
+    "@playwright/test": "1.48.0"
+  }
+}

@@ -10,7 +10,7 @@ Definition of Done của một màn: xem [implementation-plan.md](implementation
 |---|---|---|---|
 | B0 Audit + kế hoạch | Xong, chờ PR | `docs/frontend-route-audit` | Còn nợ: `api-matrix.md`, `permissions-matrix.md` (thông tin hiện nằm trong `route-audit.md`) |
 | B1 Nền tảng + SY01–03 | Xong, chờ PR | `feat/frontend-b1-foundation` (nối tiếp B0) | lint / typecheck / test / build xanh — xem mục dưới |
-| B2 Pilot ST01 | Sẵn sàng | — | Theo Figma `ST01 · Trang chủ` |
+| B2 Pilot ST01 | **REVIEW — vòng 2 xong, chờ duyệt** | `feat/frontend-b2-st01` (nối tiếp B1); PR chưa tạo (GitHub CLI hết quyền) | Báo cáo: [st01-acceptance.md](st01-acceptance.md) §8; backlog: [backlog.md](backlog.md). B3 chưa bắt đầu |
 | B3 Storefront | Chưa bắt đầu | — | Sau khi B2 được duyệt |
 | B4 Portal | Chưa bắt đầu | — | Thêm `lucide-react` khi dùng |
 | B5 Admin 1 | Chưa bắt đầu | — | Q2 đã chốt: `/admin/*` |
@@ -24,7 +24,8 @@ Design: Figma "Hệ Thống Figma PGS". QA: `Not run / Failed / Passed / Approve
 
 | ID | Design | Code | QA |
 |---|---|---|---|
-| ST01–ST13 | Figma xong, chờ duyệt | Chưa (ST13 Demo-only) | Not run |
+| ST01 | Figma xong | Route `/` chạy thật; header/footer theo danh mục API; khối tư vấn: form gửi thật tới `POST /v1/service-inquiries` khi Services bật và sẵn sàng, ngược lại CTA hỗ trợ (cờ demo đã gỡ) | **Passed** (chưa Approved): unit 32/32; E2E staging gần production 35 đạt / 7 bỏ qua có lý do, lượt demo 35 đạt / 7 bỏ qua — chờ duyệt `st01-acceptance.md` §7–8 |
+| ST02–ST13 | Figma xong, chờ duyệt | Chưa (ST13 Demo-only) | Not run |
 | PT01–PT14 | Figma xong, chờ duyệt | Chưa | Not run |
 | AD01–AD20 | Figma xong, chờ duyệt | Chưa | Not run |
 | SY01 | Figma xong | Route `/403` ở portal + admin (B1) | Not run — chưa có E2E/responsive |
@@ -45,3 +46,21 @@ Design: Figma "Hệ Thống Figma PGS". QA: `Not run / Failed / Passed / Approve
 | `pnpm build` | 11/11 task; `/403`, `/_not-found` có trong build portal, admin, web |
 
 Chưa chạy: worker smoke, acceptance phase 4–18 (cần MinIO; B1 không đổi backend), Playwright/axe (chưa có — B8).
+
+### B2 — ST01 Trang chủ — 13/10/2026
+
+**Chạy thật:** stack cách ly trong Docker (Postgres + Redis tạm, API `node dist/main`, web `next dev`). Dữ liệu demo tạo **qua Admin API** bằng dev token (11 danh mục, 16 sản phẩm nhãn "Sản phẩm demo", 3 bài viết DRAFT → REVIEW → PUBLISHED). Ảnh sản phẩm chèn thẳng vào `product_media` của DB tạm vì **không có API quản lý media** (khoảng trống backend, xem route-audit).
+
+**Kiểm tra Playwright (Chromium, 1440 / 768 / 390):**
+
+| Kiểm tra | 1440 | 768 | 390 |
+|---|---|---|---|
+| Không tràn ngang | ✓ | ✓ | ✓ |
+| Đúng 1 thẻ `h1` | ✓ | ✓ | ✓ |
+| Ảnh lỗi | 0 | 0 | 0 |
+| Lỗi console | 0 | 0 | 0 |
+| Thứ tự khu: Hero → Mới tuyển chọn → WordPress → Plugins & UI Kits → Web/Mobile/Chatbot → Quy trình → Tư vấn → Tin tức | ✓ | ✓ | ✓ |
+
+Form tư vấn: gửi trống → 4 lỗi (họ tên, email, mô tả, đồng ý); gửi hợp lệ → `POST /v1/service-inquiries`, chỉ báo "Đã nhận yêu cầu tư vấn" khi API trả 201.
+
+**Khác so với Figma (theo dữ liệu thật):** API không có cờ "nổi bật" nên khu showcase hiển thị **sản phẩm mới nhất** (nhãn "Mới phát hành") và tiêu đề lưới là "Sản phẩm mới tuyển chọn"; số "Xem toàn bộ N sản phẩm" là `total` từ API; khu nhóm nào không có danh mục tương ứng thì ẩn; footer chưa link trang chính sách (ST13 chưa có nội dung pháp lý duyệt).

@@ -1,4 +1,5 @@
 import { resolveApiUrl } from "@nexus/utils";
+import { canOfferConsultForm } from "./consult";
 import type {
   CategoryDto,
   PaginatedResponse,
@@ -19,9 +20,14 @@ export function serverApiUrl(): string {
   return resolveApiUrl();
 }
 
-async function getJson<T>(path: string, fallback: T): Promise<T> {
+/** Pass `{ revalidate }` for data shared by every page (layout nav). */
+type CacheOption = { revalidate?: number };
+
+async function getJson<T>(path: string, fallback: T, cache: CacheOption = {}): Promise<T> {
   try {
-    const res = await fetch(`${serverApiUrl()}${path}`, { cache: "no-store" });
+    const init: RequestInit & { next?: { revalidate: number } } =
+      cache.revalidate !== undefined ? { next: { revalidate: cache.revalidate } } : { cache: "no-store" };
+    const res = await fetch(`${serverApiUrl()}${path}`, init);
     if (!res.ok) return fallback;
     return (await res.json()) as T;
   } catch {
@@ -30,6 +36,26 @@ async function getJson<T>(path: string, fallback: T): Promise<T> {
 }
 
 const EMPTY_PAGE = { items: [], total: 0, page: 1, limit: 0, totalPages: 0 };
+
+/** Like getJson, but tells "API failed" apart from "API returned nothing". */
+export type ApiResult<T> = { ok: boolean; data: T };
+
+async function getResult<T>(path: string, fallback: T): Promise<ApiResult<T>> {
+  try {
+    const res = await fetch(`${serverApiUrl()}${path}`, { cache: "no-store" });
+    if (!res.ok) return { ok: false, data: fallback };
+    return { ok: true, data: (await res.json()) as T };
+  } catch {
+    return { ok: false, data: fallback };
+  }
+}
+
+/** Product list with an explicit failure flag (homepage error state). */
+export function tryListProducts(params: Record<string, string | undefined>) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+  return getResult<PaginatedResponse<PublicProductListItemDto>>(`/products?${qs.toString()}`, EMPTY_PAGE);
+}
 
 export function listProducts(params: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
@@ -40,8 +66,8 @@ export function listProducts(params: Record<string, string | undefined>) {
   );
 }
 
-export function listCategories() {
-  return getJson<CategoryDto[]>("/categories", []);
+export function listCategories(cache: CacheOption = {}) {
+  return getJson<CategoryDto[]>("/categories", [], cache);
 }
 
 export function listPosts(params: Record<string, string | undefined>) {
@@ -99,4 +125,29 @@ export async function getService(slug: string, fetchFn: typeof fetch = fetch): P
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
   return (await res.json()) as ServiceDto;
+}
+
+export interface ConsultOffer {
+  consent: ServiceConsentConfigDto;
+  /** Slugs of the ACTIVE services, used to choose which one a homepage request is filed under. */
+  serviceSlugs: string[];
+}
+
+/**
+ * What the homepage needs to offer a working consultation form, or null to fall back to the support CTA.
+ * It never throws: the homepage must render when the Services module is off (404), the API is down,
+ * the consent config is missing, or the default service is not published. A form that would be
+ * refused on submit is worse than the CTA.
+ */
+export async function loadConsultOffer(fetchFn: typeof fetch = fetch): Promise<ConsultOffer | null> {
+  try {
+    const services = await listServices(fetchFn);
+    if (!services) return null;
+    const serviceSlugs = services.map((s) => s.slug);
+    if (!canOfferConsultForm(serviceSlugs)) return null;
+    const consent = await getServiceConsent(fetchFn);
+    return { consent, serviceSlugs };
+  } catch {
+    return null;
+  }
 }
