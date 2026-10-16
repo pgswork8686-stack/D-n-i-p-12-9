@@ -89,7 +89,7 @@ Migration `20261016000000_20261016_services_consent_notifications` (additive): 4
 - Idempotent (khóa `service-inquiry-notify:{inquiryId}:{sha256(email)[:16]}`, kiểm tra thông báo đã có, audit một lần). Lỗi email/hàng đợi làm outbox retry theo back-off; yêu cầu đã lưu từ trước nên không bao giờ mất.
 - Chống tràn: trần email mỗi giờ (`SERVICE_INQUIRY_NOTIFY_HOURLY_EMAIL_CAP`), vượt thì bỏ email nhưng vẫn thông báo trong Admin. Việc gửi vào hệ thống đã bị giới hạn bởi honeypot và rate limit IP/email.
 - Admin: banner "yêu cầu dịch vụ mới" trên mọi màn Services, dùng `GET /v1/notifications` của chính người dùng.
-- **Chưa có trong repo:** workflow n8n nhận `/webhook/service-inquiry-notify-email` và gửi mail thật. Cho tới khi workflow được triển khai, email chưa thể gửi (job sẽ retry rồi FAILED); thông báo trong Admin không phụ thuộc điều này.
+- **Email:** workflow n8n `automation/n8n/workflows/service-inquiry-notify-email.json` nhận `/webhook/service-inquiry-notify-email` và gửi qua Resend (key nằm trong credential store của n8n, người gửi `TRANSACTIONAL_FROM_EMAIL`). Đã qua `pnpm n8n:validate` và kiểm tra escape template; **chưa** chạy trên n8n thật (`pnpm n8n:smoke` cần Docker) và chưa import vào n8n staging. Thông báo trong Admin không phụ thuộc email.
 
 ## Tương thích với PR #23 (AI Marketing OS)
 

@@ -414,6 +414,38 @@ const wfLicense = workflow(
   "EMAIL",
 );
 
+// Staff notification for a new service inquiry (F-12). Unlike the receipt templates above, this
+// one includes free text typed by an anonymous visitor (company name), so the whole request body is
+// built with JSON.stringify inside one expression instead of interpolating values into a JSON
+// string, and every value placed in the HTML is escaped. The payload deliberately has no contact
+// details or requirements text; the email points staff at the admin screen instead.
+const serviceInquiryProvider = emailProviderNode("Send New Inquiry Notification Email", [
+  "={{ (() => {",
+  "  const p = $('Webhook Trigger').first().json.body.payload || {};",
+  "  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');",
+  "  const link = typeof p.adminUrl === 'string' && /^https?:\\/\\//.test(p.adminUrl)",
+  "    ? '<p><a href=\"' + esc(p.adminUrl) + '\">Open the inquiry in Admin</a></p>'",
+  "    : '<p>Open the Services section in Admin to review it.</p>';",
+  "  return JSON.stringify({",
+  "    from: $env.TRANSACTIONAL_FROM_EMAIL,",
+  "    to: p.recipientEmail,",
+  "    subject: 'New service inquiry ' + String(p.inquiryNumber || '').replace(/[^A-Za-z0-9-]/g, ''),",
+  "    html: '<p>A new service inquiry was submitted.</p><ul><li>Reference: ' + esc(p.inquiryNumber) + '</li><li>Service: ' + esc(p.serviceName) + '</li><li>Company: ' + esc(p.companyName) + '</li></ul>' + link",
+  "  });",
+  "})() }}",
+]);
+
+const wfServiceInquiry = workflow(
+  "NEXUSTHEME — Service Inquiry Staff Notification Email",
+  "service-inquiry-notify-email",
+  "SERVICE_INQUIRY_NOTIFY_EMAIL",
+  verifyCode("service-inquiry-notify-email", "SERVICE_INQUIRY_NOTIFY_EMAIL"),
+  serviceInquiryProvider,
+  signCompleteCode("/v1/internal/automation/jobs", "cb-svc-"),
+  "service-inquiry",
+  "EMAIL",
+);
+
 const aiPrepareCode = [
   "const body = $('Webhook Trigger').first().json.body || {};",
   "const p = body.payload || {};",
@@ -595,6 +627,7 @@ const wfAi = {
 for (const [file, wf] of [
   ["order-paid-email.json", wfOrder],
   ["license-provisioned-email.json", wfLicense],
+  ["service-inquiry-notify-email.json", wfServiceInquiry],
   ["cms-ai-draft.json", wfAi],
 ]) {
   // Stable id so `n8n import:workflow` can insert (n8n requires an id) and
