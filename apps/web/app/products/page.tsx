@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
 import { ProductCard } from "../components/product-card";
-import { listCategories, listProducts } from "../lib/server-api";
+import { listCategories, tryListProducts } from "../lib/server-api";
 import { PRODUCT_TYPE_LABELS } from "../lib/format";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +19,13 @@ const SORTS = [
   { value: "name_asc", label: "Tên A → Z" },
 ];
 
+/** Limit page input before forwarding it to the validated catalog API. */
+export function validCatalogPage(raw?: string): number {
+  if (!raw || !/^[1-9][0-9]{0,5}$/.test(raw)) return 1;
+  const page = Number(raw);
+  return Number.isSafeInteger(page) ? page : 1;
+}
+
 const LISTED_TYPES = ["DOWNLOADABLE_ASSET", "LICENSED_SOFTWARE", "EXTERNAL_MANAGED_LICENSE", "SERVICE"];
 
 interface Props {
@@ -26,12 +33,12 @@ interface Props {
 }
 
 export default async function ProductsPage({ searchParams }: Props) {
-  const page = Math.max(1, Number.parseInt(searchParams.page || "1", 10) || 1);
+  const page = validCatalogPage(searchParams.page);
   const sort = SORTS.some((s) => s.value === searchParams.sort) ? searchParams.sort! : "newest";
   const productType = LISTED_TYPES.includes(searchParams.productType || "") ? searchParams.productType : undefined;
 
-  const [result, categories] = await Promise.all([
-    listProducts({
+  const [catalog, categories] = await Promise.all([
+    tryListProducts({
       page: String(page),
       limit: "12",
       sort,
@@ -43,9 +50,19 @@ export default async function ProductsPage({ searchParams }: Props) {
     listCategories(),
   ]);
 
+  const result = catalog.data;
+  // Preserve only known, validated catalog filter keys in generated links.
+  // Unrecognized or array-valued query parameters must not appear in pagination.
+  const safeFilters = {
+    search: typeof searchParams.search === "string" ? searchParams.search.trim() : "",
+    category: typeof searchParams.category === "string" ? searchParams.category : "",
+    productType: productType || "",
+    sort,
+  };
+  
   const hrefFor = (p: number) => {
     const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries({ ...searchParams, page: String(p) })) if (v) qs.set(k, v);
+    for (const [k, v] of Object.entries({ ...safeFilters, page: String(p) })) if (v) qs.set(k, v);
     return `/products?${qs.toString()}`;
   };
   const activeCategory = categories.find((c) => c.slug === searchParams.category);
@@ -58,7 +75,9 @@ export default async function ProductsPage({ searchParams }: Props) {
           {activeCategory?.name || (productType ? PRODUCT_TYPE_LABELS[productType] : "Tất cả sản phẩm")}
         </h1>
         <p className="mt-3 text-muted">
-          {searchParams.search ? (
+          {!catalog.ok ? (
+            "Danh mục tạm thời chưa khả dụng."
+          ) : searchParams.search ? (
             <>
               Kết quả cho “<span className="font-medium text-ink">{searchParams.search}</span>” — {result.total} sản phẩm
             </>
@@ -133,7 +152,15 @@ export default async function ProductsPage({ searchParams }: Props) {
         </aside>
 
         <section aria-label="Danh sách sản phẩm">
-          {result.items.length === 0 ? (
+          {!catalog.ok ? (
+            <div className="card p-10 text-center" role="alert">
+              <p className="text-lg font-semibold text-ink">Không tải được danh sách sản phẩm</p>
+              <p className="mt-2 text-muted">Hệ thống đang tạm gián đoạn. Vui lòng thử tải lại sau ít phút.</p>
+              <Link href={hrefFor(page)} className="btn-ghost mt-6">
+                Thử lại
+              </Link>
+            </div>
+          ) : result.items.length === 0 ? (
             <div className="card p-12 text-center">
               <p className="text-lg font-semibold text-ink">Không tìm thấy sản phẩm phù hợp</p>
               <p className="mt-2 text-muted">Thử từ khoá khác hoặc bỏ bớt bộ lọc.</p>
@@ -149,7 +176,7 @@ export default async function ProductsPage({ searchParams }: Props) {
             </div>
           )}
 
-          {result.totalPages > 1 && (
+          {catalog.ok && result.totalPages > 1 && (
             <nav aria-label="Phân trang" className="mt-10 flex items-center justify-center gap-2">
               {page > 1 ? (
                 <Link href={hrefFor(page - 1)} className="btn-ghost" rel="prev">
