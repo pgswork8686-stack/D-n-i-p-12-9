@@ -103,6 +103,7 @@ export default function AdminProductsPage() {
             Manage digital products, variants, and pricing structures
           </p>
         </div>
+        <Link href="/admin/categories" className="mr-4 font-semibold text-blue-700 hover:underline">Danh mục</Link>
         <Link href="/admin/products/new">
           <Button variant="primary">+ New Product</Button>
         </Link>
