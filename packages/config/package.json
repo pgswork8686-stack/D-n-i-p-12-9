@@ -8,12 +8,14 @@
     "./eslint.base.js": "./eslint.base.js",
     "./tsconfig.base.json": "./tsconfig.base.json",
     "./tsconfig.nextjs.json": "./tsconfig.nextjs.json",
-    "./tsconfig.node.json": "./tsconfig.node.json"
+    "./tsconfig.node.json": "./tsconfig.node.json",
+    "./tailwind-preset": "./tailwind-preset.js"
   },
   "files": [
     "tsconfig.base.json",
     "tsconfig.nextjs.json",
     "tsconfig.node.json",
-    "eslint.base.js"
+    "eslint.base.js",
+    "tailwind-preset.js"
   ]
 }
