@@ -141,6 +141,12 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Boots the built API (FEATURE_SERVICES=true) and drives the Services
+      # Foundation endpoints over HTTP: validation, idempotency, rate limits,
+      # file checks, ownership/IDOR, RBAC, transitions and audit trail.
+      - name: Acceptance suite (Services Foundation)
+        run: pnpm test:acceptance:services
+
       - name: Diagnostics
         if: failure()
         run: |

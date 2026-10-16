@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { prisma } from "./client";
+import { seedServiceCatalog } from "./service-seed";
 
 export const SEED_ROLES = [
   { name: "customer", displayName: "Customer", description: "Default customer role with access to own purchases and profile" },
@@ -82,6 +83,14 @@ export const SEED_PERMISSIONS = [
   // Notification
   { name: "notification.read", displayName: "Read Notifications", module: "notification", description: "View in-app notifications" },
   { name: "notification.manage", displayName: "Manage Notifications", module: "notification", description: "Send and broadcast system notifications" },
+
+  // Services Foundation
+  { name: "service.read", displayName: "Read Services", module: "service", description: "View the service catalog in admin" },
+  { name: "service.manage", displayName: "Manage Services", module: "service", description: "Create, edit and publish catalog services" },
+  { name: "inquiry.read", displayName: "Read Service Inquiries", module: "service", description: "View customer project inquiries" },
+  { name: "inquiry.manage", displayName: "Manage Service Inquiries", module: "service", description: "Review inquiries and convert them into projects" },
+  { name: "project.read", displayName: "Read Service Projects", module: "service", description: "View customer projects, milestones and documents" },
+  { name: "project.manage", displayName: "Manage Service Projects", module: "service", description: "Update projects, assign staff, manage milestones and documents" },
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
@@ -103,6 +112,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "ticket.manage",
     "notification.read",
     "notification.manage",
+    "inquiry.read",
+    "inquiry.manage",
+    "project.read",
   ],
   content_editor: [
     "profile.read",
@@ -116,6 +128,8 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "product.write",
     "product.publish",
     "content.read",
+    "service.read",
+    "service.manage",
   ],
   finance: [
     "profile.read",
@@ -150,6 +164,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "hosting.manage",
     "notification.read",
     "notification.manage",
+    "inquiry.read",
+    "project.read",
+    "project.manage",
   ],
   admin: [
     "profile.read",
@@ -186,6 +203,12 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "settings.manage",
     "automation.read",
     "automation.manage",
+    "service.read",
+    "service.manage",
+    "inquiry.read",
+    "inquiry.manage",
+    "project.read",
+    "project.manage",
   ],
   super_admin: [
     "profile.read",
@@ -220,6 +243,12 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "settings.manage",
     "automation.read",
     "automation.manage",
+    "service.read",
+    "service.manage",
+    "inquiry.read",
+    "inquiry.manage",
+    "project.read",
+    "project.manage",
   ],
 };
 
@@ -685,11 +714,18 @@ export async function seed(db: PrismaClient = prisma) {
     process.env.SEED_DEV_USERS = "true";
     await seedDevUsers(db, rolesMap);
     await seedDevCatalog(db);
+    await seedServiceCatalog(db);
     return;
   }
 
   if (process.argv.includes("--catalog")) {
     await seedDevCatalog(db);
+    await seedServiceCatalog(db);
+    return;
+  }
+
+  if (process.argv.includes("--services")) {
+    await seedServiceCatalog(db);
     return;
   }
 

@@ -2,8 +2,5 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #faf8ff;
-  color: #131b2e;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-}
+/* Tokens, base styles and shared component classes come from
+   @nexus/config/tailwind-preset. */

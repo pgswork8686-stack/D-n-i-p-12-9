@@ -38,6 +38,18 @@ model User {
   notifications      Notification[]
   invoices           Invoice[]
 
+  // Services Foundation
+  serviceInquiries              ServiceInquiry[]           @relation("CustomerServiceInquiries")
+  reviewedServiceInquiries      ServiceInquiry[]           @relation("ReviewedServiceInquiries")
+  serviceInquiryAttachments     ServiceInquiryAttachment[]
+  customerServiceProjects       ServiceProject[]           @relation("CustomerServiceProjects")
+  createdServiceProjects        ServiceProject[]           @relation("CreatedServiceProjects")
+  serviceProjectMembers         ServiceProjectMember[]     @relation("ServiceProjectMemberUser")
+  assignedServiceProjectMembers ServiceProjectMember[]     @relation("ServiceProjectMemberAssigner")
+  serviceProjectDocuments       ServiceProjectDocument[]
+  serviceProjectMessages        ServiceProjectMessage[]
+  serviceProjectEvents          ServiceProjectEvent[]
+
   @@map("users")
 }
 
@@ -231,6 +243,7 @@ model Product {
   internalLicenses InternalLicense[]
   versions     ProductVersion[]
   downloadEvents DownloadEvent[]
+  services     Service[]
 
   @@index([status])
   @@index([productType])
@@ -988,6 +1001,7 @@ enum AutomationJobType {
   ORDER_PAID_EMAIL
   LICENSE_PROVISIONED_EMAIL
   EXTERNAL_ALLOCATION_EMAIL
+  SERVICE_INQUIRY_NOTIFY_EMAIL
 }
 
 model AutomationJob {
@@ -1396,6 +1410,7 @@ enum NotificationType {
   SYSTEM_ALERT
   PROMOTION
   BILLING
+  SERVICE_INQUIRY_CREATED
 }
 
 model Ticket {
@@ -1595,3 +1610,289 @@ model InvoiceItem {
 }
 
 
+
+// --------------------------------------------------------
+// Services Foundation (custom development, AI/chatbot, automation)
+// Additive only: no existing table or column is altered.
+// --------------------------------------------------------
+
+enum ServiceStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+/// QUOTE_REQUIRED: customer submits an inquiry and staff quote manually.
+/// DIRECT_CHECKOUT: the service is sold as a catalog Product (productId) through the normal checkout.
+enum ServicePricingMode {
+  QUOTE_REQUIRED
+  DIRECT_CHECKOUT
+}
+
+enum ServiceInquiryStatus {
+  NEW
+  REVIEWING
+  QUALIFIED
+  REJECTED
+  SPAM
+  CONVERTED
+}
+
+enum ServiceProjectStatus {
+  PLANNING
+  IN_PROGRESS
+  ON_HOLD
+  IN_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum ServiceMilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum ServiceProjectMemberRole {
+  LEAD
+  MEMBER
+}
+
+enum ServiceDocumentVisibility {
+  CUSTOMER
+  INTERNAL
+}
+
+enum ServiceSenderType {
+  CUSTOMER
+  STAFF
+}
+
+enum ServiceProjectEventType {
+  CREATED
+  STATUS_CHANGED
+  MEMBER_ASSIGNED
+  MEMBER_REMOVED
+  MILESTONE_CREATED
+  MILESTONE_UPDATED
+  DOCUMENT_ADDED
+  MESSAGE_POSTED
+}
+
+model Service {
+  id           String             @id @default(uuid())
+  slug         String             @unique
+  name         String
+  summary      String
+  description  String
+  /// string[]
+  features     Json               @default("[]")
+  /// { title: string; description: string }[]
+  processSteps Json               @default("[]") @map("process_steps")
+  imageUrl     String?            @map("image_url")
+  ctaLabel     String             @default("Nhận báo giá") @map("cta_label")
+  pricingMode  ServicePricingMode @default(QUOTE_REQUIRED) @map("pricing_mode")
+  productId    String?            @map("product_id")
+  status       ServiceStatus      @default(DRAFT)
+  sortOrder    Int                @default(0) @map("sort_order")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  product   Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  inquiries ServiceInquiry[]
+  projects  ServiceProject[]
+
+  @@index([status, sortOrder])
+  @@index([productId])
+  @@map("services")
+}
+
+model ServiceInquiry {
+  id              String               @id @default(uuid())
+  inquiryNumber   String               @unique @map("inquiry_number")
+  serviceId       String               @map("service_id")
+  /// Set when submitted while signed in; anonymous inquiries stay null.
+  userId          String?              @map("user_id")
+  companyName     String               @map("company_name")
+  contactName     String               @map("contact_name")
+  contactEmail    String               @map("contact_email")
+  contactPhone    String?              @map("contact_phone")
+  requirements    String
+  /// string[]
+  desiredFeatures Json                 @default("[]") @map("desired_features")
+  budgetRange     String?              @map("budget_range")
+  timeline        String?
+  status          ServiceInquiryStatus @default(NEW)
+  /// Client-generated key: re-submitting the same form returns the original inquiry.
+  submissionKey   String?              @unique @map("submission_key")
+  /// SHA-256 of the client IP, kept for abuse analysis without storing the raw address.
+  ipHash          String?              @map("ip_hash")
+  /// Privacy-notice version the customer accepted. Set by the server from its own config, never from the client; null on rows created before consent was collected.
+  consentVersion  String?              @map("consent_version")
+  /// Server clock at the moment the request was stored.
+  consentAt       DateTime?            @map("consent_at")
+  /// Separate, opt-in marketing consent. Never implied by consentVersion.
+  marketingConsent   Boolean           @default(false) @map("marketing_consent")
+  marketingConsentAt DateTime?         @map("marketing_consent_at")
+  staffNote       String?              @map("staff_note")
+  reviewedById    String?              @map("reviewed_by_id")
+  reviewedAt      DateTime?            @map("reviewed_at")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  service     Service                    @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  user        User?                      @relation("CustomerServiceInquiries", fields: [userId], references: [id], onDelete: SetNull)
+  reviewedBy  User?                      @relation("ReviewedServiceInquiries", fields: [reviewedById], references: [id], onDelete: SetNull)
+  attachments ServiceInquiryAttachment[]
+  project     ServiceProject?
+
+  @@index([userId])
+  @@index([serviceId])
+  @@index([status])
+  @@index([contactEmail])
+  @@index([createdAt])
+  @@map("service_inquiries")
+}
+
+model ServiceInquiryAttachment {
+  id           String   @id @default(uuid())
+  inquiryId    String   @map("inquiry_id")
+  fileName     String   @map("file_name")
+  storageKey   String   @unique @map("storage_key")
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  sha256       String
+  uploadedById String?  @map("uploaded_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  inquiry    ServiceInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([inquiryId])
+  @@map("service_inquiry_attachments")
+}
+
+model ServiceProject {
+  id          String               @id @default(uuid())
+  projectCode String               @unique @map("project_code")
+  /// One project per inquiry: makes conversion idempotent.
+  inquiryId   String?              @unique @map("inquiry_id")
+  customerId  String               @map("customer_id")
+  serviceId   String               @map("service_id")
+  title       String
+  summary     String?
+  status      ServiceProjectStatus @default(PLANNING)
+  startDate   DateTime?            @map("start_date")
+  targetDate  DateTime?            @map("target_date")
+  completedAt DateTime?            @map("completed_at")
+  createdById String?              @map("created_by_id")
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+
+  inquiry    ServiceInquiry?          @relation(fields: [inquiryId], references: [id], onDelete: SetNull)
+  customer   User                     @relation("CustomerServiceProjects", fields: [customerId], references: [id], onDelete: Restrict)
+  service    Service                  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  createdBy  User?                    @relation("CreatedServiceProjects", fields: [createdById], references: [id], onDelete: SetNull)
+  members    ServiceProjectMember[]
+  milestones ServiceMilestone[]
+  documents  ServiceProjectDocument[]
+  messages   ServiceProjectMessage[]
+  events     ServiceProjectEvent[]
+
+  @@index([customerId])
+  @@index([serviceId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("service_projects")
+}
+
+model ServiceProjectMember {
+  id           String                   @id @default(uuid())
+  projectId    String                   @map("project_id")
+  userId       String                   @map("user_id")
+  role         ServiceProjectMemberRole @default(MEMBER)
+  assignedById String?                  @map("assigned_by_id")
+  createdAt    DateTime                 @default(now()) @map("created_at")
+
+  project    ServiceProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User           @relation("ServiceProjectMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy User?          @relation("ServiceProjectMemberAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@map("service_project_members")
+}
+
+model ServiceMilestone {
+  id          String                 @id @default(uuid())
+  projectId   String                 @map("project_id")
+  title       String
+  description String?
+  dueDate     DateTime?              @map("due_date")
+  status      ServiceMilestoneStatus @default(PENDING)
+  sortOrder   Int                    @default(0) @map("sort_order")
+  completedAt DateTime?              @map("completed_at")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  project ServiceProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, sortOrder])
+  @@map("service_milestones")
+}
+
+model ServiceProjectDocument {
+  id           String                    @id @default(uuid())
+  projectId    String                    @map("project_id")
+  fileName     String                    @map("file_name")
+  storageKey   String                    @unique @map("storage_key")
+  mimeType     String                    @map("mime_type")
+  sizeBytes    Int                       @map("size_bytes")
+  sha256       String
+  visibility   ServiceDocumentVisibility @default(CUSTOMER)
+  uploadedById String?                   @map("uploaded_by_id")
+  uploaderType ServiceSenderType         @map("uploader_type")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+
+  project    ServiceProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@map("service_project_documents")
+}
+
+model ServiceProjectMessage {
+  id             String            @id @default(uuid())
+  projectId      String            @map("project_id")
+  senderId       String            @map("sender_id")
+  senderType     ServiceSenderType @map("sender_type")
+  isInternalNote Boolean           @default(false) @map("is_internal_note")
+  body           String
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  project ServiceProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sender  User           @relation(fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+  @@map("service_project_messages")
+}
+
+model ServiceProjectEvent {
+  id         String                  @id @default(uuid())
+  projectId  String                  @map("project_id")
+  actorId    String?                 @map("actor_id")
+  type       ServiceProjectEventType
+  /// Internal events (internal notes and documents) are never shown to the customer.
+  isInternal Boolean                 @default(false) @map("is_internal")
+  fromStatus String?                 @map("from_status")
+  toStatus   String?                 @map("to_status")
+  details    Json?
+  createdAt  DateTime                @default(now()) @map("created_at")
+
+  project ServiceProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor   User?          @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@map("service_project_events")
+}

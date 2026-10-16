@@ -10,4 +10,6 @@ export * from "./domain/membership-affiliate-engine";
 export * from "./domain/hosting-engine";
 export * from "./domain/ticket-engine";
 export * from "./domain/ledger-engine";
+export * from "./domain/service-engine";
+export * from "./service-seed";
 

@@ -4,6 +4,8 @@ import type {
   PaginatedResponse,
   PublicProductListItemDto,
   PublicContentListItemDto,
+  ServiceConsentConfigDto,
+  ServiceDto,
 } from "@nexus/contracts";
 
 /**
@@ -49,4 +51,52 @@ export function listPosts(params: Record<string, string | undefined>) {
     `/v1/content/posts?${qs.toString()}`,
     EMPTY_PAGE,
   );
+}
+
+async function fetchServices(path: string, fetchFn: typeof fetch): Promise<Response> {
+  try {
+    return await fetchFn(`${serverApiUrl()}${path}`, { cache: "no-store" });
+  } catch {
+    throw new Error("Unable to connect to the services catalog.");
+  }
+}
+
+/**
+ * Returns null when the services module is disabled (API answers 404). Outages
+ * and 5xx responses throw, so the page shows the error boundary instead of an
+ * empty catalog.
+ */
+export async function listServices(fetchFn: typeof fetch = fetch): Promise<ServiceDto[] | null> {
+  const res = await fetchServices("/v1/services", fetchFn);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
+  return (await res.json()) as ServiceDto[];
+}
+
+/**
+ * Consent version and privacy-policy link for the inquiry form. Throws on outages and on a
+ * malformed answer: a form that cannot show the policy it asks people to accept must not render.
+ */
+export async function getServiceConsent(fetchFn: typeof fetch = fetch): Promise<ServiceConsentConfigDto> {
+  const res = await fetchServices("/v1/service-inquiries/consent", fetchFn);
+  if (!res.ok) throw new Error(`Services consent config returned ${res.status}`);
+  const body = (await res.json()) as Partial<ServiceConsentConfigDto> | null;
+  const version = typeof body?.version === "string" ? body.version : "";
+  let url = "";
+  try {
+    const parsed = new URL(String(body?.privacyPolicyUrl ?? ""));
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") url = parsed.toString();
+  } catch {
+    url = "";
+  }
+  if (!version || !url) throw new Error("Services consent config is incomplete");
+  return { version, privacyPolicyUrl: url };
+}
+
+/** Returns null for unknown, unpublished or disabled services; throws on outages. */
+export async function getService(slug: string, fetchFn: typeof fetch = fetch): Promise<ServiceDto | null> {
+  const res = await fetchServices(`/v1/services/${encodeURIComponent(slug)}`, fetchFn);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
+  return (await res.json()) as ServiceDto;
 }

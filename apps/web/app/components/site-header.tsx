@@ -8,14 +8,18 @@ import { useAuth } from "../lib/auth";
 import { useCart } from "../lib/cart";
 import { Logo } from "./logo";
 
-const NAV = [
+type NavItem = { href: string; label: string; feature?: "services" };
+
+const NAV: NavItem[] = [
   { href: "/products", label: "Sản phẩm" },
   { href: "/products?productType=LICENSED_SOFTWARE", label: "Plugin & phần mềm" },
   { href: "/products?productType=DOWNLOADABLE_ASSET", label: "Theme & UI Kit" },
+  { href: "/services", label: "Dịch vụ", feature: "services" },
   { href: "/blog", label: "Blog" },
 ];
 
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(/\/$/, "");
 
 export function SiteHeader() {
   const { user, logout } = useAuth();
@@ -30,6 +34,16 @@ export function SiteHeader() {
 
   useEffect(() => setOpen(false), [pathname]);
 
+  // Feature-flagged items stay hidden until GET /v1/features confirms them.
+  const [features, setFeatures] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    fetch(`${API_URL}/v1/features`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then(setFeatures)
+      .catch(() => setFeatures({}));
+  }, []);
+  const navItems = NAV.filter((item) => !item.feature || features[item.feature] === true);
+
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const q = query.trim();
@@ -42,7 +56,7 @@ export function SiteHeader() {
         <Logo />
 
         <nav aria-label="Điều hướng chính" className="ml-4 hidden items-center gap-1 lg:flex">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -134,7 +148,7 @@ export function SiteHeader() {
                 className="field-input"
               />
             </form>
-            {NAV.map((item) => (
+            {navItems.map((item) => (
               <Link key={item.href} href={item.href} className="block rounded-lg px-3 py-3 font-medium text-ink hover:bg-brand-soft">
                 {item.label}
               </Link>
