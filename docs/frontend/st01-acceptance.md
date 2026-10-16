@@ -159,6 +159,17 @@ Khi đủ 1–4: ST01 chuyển "Approved" trong `progress.md` và mới bắt đ
 
 Cờ đọc phía server lúc chạy (không phải `NEXT_PUBLIC_`), vì staging cũng chạy `NODE_ENV=production`. Đã thêm vào `infra/docker/production-compose.yml` (mặc định `false`), `.env.production.example`, `docs/deployment/environment-matrix.md`. Ảnh: `screenshots/ST01-consult-cta-production.jpg`.
 
+> **Cập nhật khi tích hợp với Services Foundation + F-12 (thay thế bảng trên).** Cờ `FEATURE_CONSULT_FORM_DEMO` và chế độ "mô phỏng" đã được **gỡ bỏ**. Khối R8 nay do dữ liệu thật quyết định
+> (`loadConsultOffer`, `apps/web/app/lib/server-api.ts`):
+>
+> | Điều kiện | Hiển thị |
+> |---|---|
+> | Module Services bật, dịch vụ `custom-web-app-development` đang ACTIVE, đọc được cấu hình consent | **Form gửi thật** → `POST /v1/service-inquiries` (201 mới báo thành công; mã `SI-…`) |
+> | Module tắt (404), API lỗi, dịch vụ chưa công khai, cấu hình consent thiếu/sai | CTA hỗ trợ như §8.2 (kênh thật), không bao giờ hiện form sẽ bị từ chối |
+>
+> Khác biệt so với Figma (có chủ đích, do API yêu cầu): "Mô tả nhu cầu" thành **bắt buộc**; thêm hộp đồng ý xử lý dữ liệu có link chính sách và hộp marketing **riêng, không tick sẵn**;
+> form không có ô "tên doanh nghiệp" nên API nhận tên người gửi làm `companyName`, còn "Loại website" được ghi vào đầu nội dung yêu cầu. "Chatbot AI" gửi vào dịch vụ `ai-chatbot-development`, các loại còn lại vào `custom-web-app-development`.
+> Consent do server ghi (phiên bản và thời điểm của server), xem `docs/services-foundation.md`. Các số liệu E2E ở §8.3 là của giai đoạn trước và **chưa được chạy lại** sau thay đổi này.
 ### 8.3. E2E trên staging gần production
 
 Cấu hình: web `next build` + `next start` (`NODE_ENV=production`), API `NODE_ENV=production` (Supabase, R2, SePay cấu hình kiểu staging — fail-closed thật), Postgres/Redis riêng, HTTPS qua Caddy (`web.staging.test`, `api.staging.test`, `img.staging.test`, chứng chỉ nội bộ), `FEATURE_CONSULT_FORM_DEMO` không đặt. Dữ liệu demo tạo qua Admin API trong lần khởi động development, sau đó API khởi động lại ở production và **từ chối dev token (401)** — đã kiểm tra tự động trong script dựng staging.

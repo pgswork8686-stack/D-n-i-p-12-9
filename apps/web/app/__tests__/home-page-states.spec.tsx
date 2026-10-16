@@ -6,7 +6,10 @@ jest.mock("../lib/server-api", () => ({
   listProducts: jest.fn(),
   listCategories: jest.fn(),
   listPosts: jest.fn(),
+  loadConsultOffer: jest.fn(),
 }));
+
+jest.mock("../lib/auth", () => ({ useAuth: () => ({ token: null, user: null }) }));
 
 import * as api from "../lib/server-api";
 import HomePage from "../page";
@@ -34,6 +37,7 @@ beforeEach(() => {
   jest.resetAllMocks();
   mocked.listPosts.mockResolvedValue(page([]) as never);
   mocked.listProducts.mockResolvedValue(page([]) as never);
+  mocked.loadConsultOffer.mockResolvedValue(null);
 });
 
 describe("ST01 homepage states", () => {
@@ -83,19 +87,18 @@ describe("ST01 homepage states", () => {
     expect(html).toContain('<option value="chatbot-ai">Chatbot AI</option>');
   });
 
-  describe("consultation block (FEATURE_CONSULT_FORM_DEMO)", () => {
-    const original = process.env.FEATURE_CONSULT_FORM_DEMO;
-    afterEach(() => {
-      if (original === undefined) delete process.env.FEATURE_CONSULT_FORM_DEMO;
-      else process.env.FEATURE_CONSULT_FORM_DEMO = original;
-    });
+  describe("consultation block", () => {
+    const offer = {
+      consent: { version: "2026-10", privacyPolicyUrl: "https://pgs.example/privacy" },
+      serviceSlugs: ["custom-web-app-development", "ai-chatbot-development"],
+    };
     beforeEach(() => {
       mocked.tryListProducts.mockResolvedValue({ ok: true, data: page([]) } as never);
       mocked.listCategories.mockResolvedValue([]);
     });
 
-    it("by default (production) shows no simulated form, only a working support CTA", async () => {
-      delete process.env.FEATURE_CONSULT_FORM_DEMO;
+    it("shows only the support CTA when the Services module cannot take requests", async () => {
+      mocked.loadConsultOffer.mockResolvedValue(null);
       const html = await render();
       expect(html).not.toContain('id="consult-name"');
       expect(html).not.toContain("Mô phỏng");
@@ -103,16 +106,21 @@ describe("ST01 homepage states", () => {
       expect(html).toContain("Gửi yêu cầu tư vấn");
     });
 
-    it("treats any value other than 'true' as off", async () => {
-      process.env.FEATURE_CONSULT_FORM_DEMO = "1";
-      expect(await render()).not.toContain('id="consult-name"');
-    });
-
-    it("with the flag on (dev/staging) shows the form, always labelled as a simulation", async () => {
-      process.env.FEATURE_CONSULT_FORM_DEMO = "true";
+    it("shows the real form, with the policy link and an unticked marketing box, when requests can be taken", async () => {
+      mocked.loadConsultOffer.mockResolvedValue(offer);
       const html = await render();
       expect(html).toContain('id="consult-name"');
-      expect(html).toContain("Mô phỏng — kênh nhận yêu cầu tư vấn chưa hoạt động");
+      expect(html).not.toContain("Mô phỏng");
+      expect(html).toContain('href="https://pgs.example/privacy"');
+      expect(html).toContain('rel="noopener noreferrer"');
+      // neither consent box is pre-ticked
+      expect(html).not.toMatch(/id="consult-consent"[^>]*checked/);
+      expect(html).not.toMatch(/id="consult-marketing"[^>]*checked/);
+      expect(html).toContain('id="consult-marketing"');
     });
-  });
-});
+
+    it("labels the form as unreviewed while the server still reports the development policy version", async () => {
+      mocked.loadConsultOffer.mockResolvedValue({ ...offer, consent: { ...offer.consent, version: "dev-unreviewed" } });
+      expect(await render()).toContain("chính sách quyền riêng tư chưa được duyệt");
+    });
+  });});

@@ -4,9 +4,10 @@ import { ArrowRight, MessageCircle } from "lucide-react";
 const PORTAL_URL = process.env.NEXT_PUBLIC_PORTAL_URL || "http://localhost:3001";
 
 /**
- * ST01 R8 when FEATURE_CONSULT_FORM_DEMO is off (production): only real
- * channels. Support tickets in the customer portal are the working way to
- * reach the team today; browsing the catalog needs no account.
+ * ST01 R8 fallback when the consultation form cannot be offered (Services module
+ * off, API unavailable, or its default service not published): only real
+ * channels. Support tickets in the customer portal reach the team; browsing the
+ * catalog needs no account.
  */
 export function ConsultCta() {
   return (

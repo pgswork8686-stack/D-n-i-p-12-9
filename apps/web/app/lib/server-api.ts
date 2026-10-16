@@ -1,4 +1,5 @@
 import { resolveApiUrl } from "@nexus/utils";
+import { canOfferConsultForm } from "./consult";
 import type {
   CategoryDto,
   PaginatedResponse,
@@ -124,4 +125,29 @@ export async function getService(slug: string, fetchFn: typeof fetch = fetch): P
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Services catalog returned ${res.status}`);
   return (await res.json()) as ServiceDto;
+}
+
+export interface ConsultOffer {
+  consent: ServiceConsentConfigDto;
+  /** Slugs of the ACTIVE services, used to choose which one a homepage request is filed under. */
+  serviceSlugs: string[];
+}
+
+/**
+ * What the homepage needs to offer a working consultation form, or null to fall back to the support CTA.
+ * It never throws: the homepage must render when the Services module is off (404), the API is down,
+ * the consent config is missing, or the default service is not published. A form that would be
+ * refused on submit is worse than the CTA.
+ */
+export async function loadConsultOffer(fetchFn: typeof fetch = fetch): Promise<ConsultOffer | null> {
+  try {
+    const services = await listServices(fetchFn);
+    if (!services) return null;
+    const serviceSlugs = services.map((s) => s.slug);
+    if (!canOfferConsultForm(serviceSlugs)) return null;
+    const consent = await getServiceConsent(fetchFn);
+    return { consent, serviceSlugs };
+  } catch {
+    return null;
+  }
 }

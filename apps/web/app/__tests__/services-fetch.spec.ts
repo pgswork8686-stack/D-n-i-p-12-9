@@ -1,4 +1,4 @@
-import { getService, getServiceConsent, listServices } from "../lib/server-api";
+import { getService, getServiceConsent, listServices, loadConsultOffer } from "../lib/server-api";
 
 const response = (status: number, body: unknown = {}) =>
   ({ status, ok: status >= 200 && status < 300, json: async () => body }) as Response;
@@ -64,5 +64,45 @@ describe("services catalog fetch semantics", () => {
 
   it("throws for service detail outages", async () => {
     await expect(getService("x", jest.fn().mockResolvedValue(response(500)))).rejects.toThrow("500");
+  });
+});
+
+describe("loadConsultOffer (homepage consultation form)", () => {
+  const original = process.env.INTERNAL_API_URL;
+  beforeAll(() => {
+    process.env.INTERNAL_API_URL = "http://api.internal:4000";
+  });
+  afterAll(() => {
+    process.env.INTERNAL_API_URL = original;
+  });
+
+  const consent = { version: "2026-10", privacyPolicyUrl: "https://pgs.example/privacy" };
+  const route = (table: Record<string, Response>) =>
+    jest.fn(async (url: string) => {
+      const path = url.replace("http://api.internal:4000", "");
+      if (!table[path]) throw new Error(`unexpected ${path}`);
+      return table[path];
+    }) as unknown as typeof fetch;
+
+  it("offers the form when the custom-build service is active and the consent config is valid", async () => {
+    const f = route({
+      "/v1/services": response(200, [{ slug: "custom-web-app-development" }, { slug: "ai-chatbot-development" }]),
+      "/v1/service-inquiries/consent": response(200, consent),
+    });
+    await expect(loadConsultOffer(f)).resolves.toEqual({ consent, serviceSlugs: ["custom-web-app-development", "ai-chatbot-development"] });
+  });
+
+  it.each([
+    ["the Services module is off (404)", { "/v1/services": response(404) }],
+    ["the API is failing (503)", { "/v1/services": response(503) }],
+    ["the default service is not published", { "/v1/services": response(200, [{ slug: "api-integration" }]) }],
+    ["the consent config is missing", { "/v1/services": response(200, [{ slug: "custom-web-app-development" }]), "/v1/service-inquiries/consent": response(404) }],
+    ["the consent config is malformed", { "/v1/services": response(200, [{ slug: "custom-web-app-development" }]), "/v1/service-inquiries/consent": response(200, { version: "", privacyPolicyUrl: "x" }) }],
+  ])("falls back to null (support CTA) when %s", async (_label, table) => {
+    await expect(loadConsultOffer(route(table as Record<string, Response>))).resolves.toBeNull();
+  });
+
+  it("never throws, even when the network does", async () => {
+    await expect(loadConsultOffer(jest.fn().mockRejectedValue(new TypeError("fetch failed")))).resolves.toBeNull();
   });
 });

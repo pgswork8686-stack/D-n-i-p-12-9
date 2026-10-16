@@ -5,8 +5,7 @@ import { EmptyState, ErrorState, SectionHeader } from "@nexus/ui";
 import { ProductCard } from "./components/product-card";
 import { ConsultForm } from "./components/consult-form";
 import { ConsultCta } from "./components/consult-cta";
-import { consultFormDemoEnabled } from "./lib/flags";
-import { listCategories, listPosts, listProducts, tryListProducts } from "./lib/server-api";
+import { listCategories, listPosts, listProducts, loadConsultOffer, tryListProducts } from "./lib/server-api";
 import { flattenCategories, findTopicCategory, navCategories, pickPrice, type HomeTopicKey } from "./lib/home-catalog";
 import { formatDate, money, productTypeLabel } from "./lib/format";
 
@@ -92,10 +91,12 @@ function TopicColumn({ topic, withCover = false }: { topic: Topic; withCover?: b
 }
 
 export default async function HomePage() {
-  const [latestResult, tree, posts] = await Promise.all([
+  const [latestResult, tree, posts, consultOffer] = await Promise.all([
     tryListProducts({ limit: "10", sort: "newest", currency: "VND" }),
     listCategories(),
     listPosts({ limit: "3" }),
+    // null (module off, API down, service unpublished) → support CTA instead of a form that would be refused.
+    loadConsultOffer(),
   ]);
   const nav = navCategories(tree);
   const flat = flattenCategories(tree);
@@ -429,7 +430,7 @@ export default async function HomePage() {
           <p className="mt-3 max-w-xl text-base leading-7 text-white/75">
             Để lại nhu cầu, đội ngũ kỹ thuật sẽ gợi ý theme, app hoặc chatbot và gói license phù hợp với website của bạn.
           </p>
-          <div className="mt-8 w-full max-w-3xl">{consultFormDemoEnabled() ? <ConsultForm /> : <ConsultCta />}</div>
+          <div className="mt-8 w-full max-w-3xl">{consultOffer ? <ConsultForm consent={consultOffer.consent} serviceSlugs={consultOffer.serviceSlugs} /> : <ConsultCta />}</div>
         </div>
       </section>
 

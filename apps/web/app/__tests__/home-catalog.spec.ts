@@ -77,18 +77,24 @@ describe("ST01 home catalog helpers", () => {
   });
 
   describe("validateConsult", () => {
-    const valid: ConsultInput = { name: "Khách Demo", email: "khach@demo.vn", phone: "", websiteType: "Khác", message: "", consent: true };
+    const valid: ConsultInput = { name: "Khách Demo", email: "khach@demo.vn", phone: "", websiteType: "Khác", message: "Cần website bán hàng", consent: true };
 
     it("accepts a complete form without a phone number", () => {
       expect(validateConsult(valid)).toEqual({});
     });
 
-    it("requires name, a valid email and consent", () => {
-      expect(validateConsult({ ...valid, name: " ", email: "sai-email", consent: false })).toEqual({
+    it("requires name, a valid email, a description and consent", () => {
+      expect(validateConsult({ ...valid, name: " ", email: "sai-email", message: "  ", consent: false })).toEqual({
         name: "Vui lòng nhập họ và tên",
         email: "Email chưa đúng định dạng",
-        consent: "Vui lòng đồng ý để chúng tôi liên hệ tư vấn",
+        message: "Vui lòng mô tả nhu cầu của bạn",
+        consent: "Vui lòng đồng ý để chúng tôi xử lý thông tin và liên hệ tư vấn",
       });
+    });
+
+    it("keeps the description within what the API accepts", () => {
+      expect(validateConsult({ ...valid, message: "x".repeat(4800) })).toEqual({});
+      expect(validateConsult({ ...valid, message: "x".repeat(4801) }).message).toBe("Tối đa 4800 ký tự");
     });
 
     it("accepts Vietnamese phone formats and rejects malformed ones", () => {

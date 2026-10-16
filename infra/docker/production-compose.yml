@@ -125,8 +125,6 @@ services:
       INTERNAL_API_URL: http://api:4000
       NEXT_PUBLIC_SITE_URL: https://${WEB_DOMAIN}
       NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
-      # Staging only: show the simulated ST01 consultation form. Keep false on production.
-      FEATURE_CONSULT_FORM_DEMO: ${FEATURE_CONSULT_FORM_DEMO:-false}
     depends_on:
       api:
         condition: service_healthy

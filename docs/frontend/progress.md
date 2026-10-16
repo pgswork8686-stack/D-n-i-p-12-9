@@ -24,7 +24,7 @@ Design: Figma "Hệ Thống Figma PGS". QA: `Not run / Failed / Passed / Approve
 
 | ID | Design | Code | QA |
 |---|---|---|---|
-| ST01 | Figma xong | Route `/` chạy thật; header/footer theo danh mục API; khối tư vấn theo cờ `FEATURE_CONSULT_FORM_DEMO` (production: CTA thật) | **Passed** (chưa Approved): unit 32/32; E2E staging gần production 35 đạt / 7 bỏ qua có lý do, lượt demo 35 đạt / 7 bỏ qua — chờ duyệt `st01-acceptance.md` §7–8 |
+| ST01 | Figma xong | Route `/` chạy thật; header/footer theo danh mục API; khối tư vấn: form gửi thật tới `POST /v1/service-inquiries` khi Services bật và sẵn sàng, ngược lại CTA hỗ trợ (cờ demo đã gỡ) | **Passed** (chưa Approved): unit 32/32; E2E staging gần production 35 đạt / 7 bỏ qua có lý do, lượt demo 35 đạt / 7 bỏ qua — chờ duyệt `st01-acceptance.md` §7–8 |
 | ST02–ST13 | Figma xong, chờ duyệt | Chưa (ST13 Demo-only) | Not run |
 | PT01–PT14 | Figma xong, chờ duyệt | Chưa | Not run |
 | AD01–AD20 | Figma xong, chờ duyệt | Chưa | Not run |
@@ -61,6 +61,6 @@ Chưa chạy: worker smoke, acceptance phase 4–18 (cần MinIO; B1 không đ�
 | Lỗi console | 0 | 0 | 0 |
 | Thứ tự khu: Hero → Mới tuyển chọn → WordPress → Plugins & UI Kits → Web/Mobile/Chatbot → Quy trình → Tư vấn → Tin tức | ✓ | ✓ | ✓ |
 
-Form tư vấn: gửi trống → 3 lỗi (họ tên, email, đồng ý); gửi hợp lệ → thông báo "Mô phỏng — yêu cầu chưa được gửi", không lưu, không gọi API.
+Form tư vấn: gửi trống → 4 lỗi (họ tên, email, mô tả, đồng ý); gửi hợp lệ → `POST /v1/service-inquiries`, chỉ báo "Đã nhận yêu cầu tư vấn" khi API trả 201.
 
 **Khác so với Figma (theo dữ liệu thật):** API không có cờ "nổi bật" nên khu showcase hiển thị **sản phẩm mới nhất** (nhãn "Mới phát hành") và tiêu đề lưới là "Sản phẩm mới tuyển chọn"; số "Xem toàn bộ N sản phẩm" là `total` từ API; khu nhóm nào không có danh mục tương ứng thì ẩn; footer chưa link trang chính sách (ST13 chưa có nội dung pháp lý duyệt).

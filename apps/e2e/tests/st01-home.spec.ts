@@ -7,8 +7,8 @@ type Category = { slug: string; name: string; parentId?: string | null; sortOrde
 // Section headings in the order of the Figma ST01 frame. Topic rows are only
 // rendered when the catalog has a matching category, so the seeded demo data
 // (apps/e2e/fixtures) must be present.
-/** Which ST01 consultation block the stack under test serves: `cta` (production default) or `demo` (FEATURE_CONSULT_FORM_DEMO=true). */
-const CONSULT_MODE = process.env.E2E_CONSULT_MODE === "demo" ? "demo" : "cta";
+/** Which ST01 consultation block the stack under test serves: `cta` (Services module off / default service not published) or `form` (real inquiry form). */
+const CONSULT_MODE = process.env.E2E_CONSULT_MODE === "form" ? "form" : "cta";
 
 const SECTION_ORDER = [
   "hero-heading",
@@ -139,8 +139,8 @@ test.describe("ST01 · Trang chủ", () => {
     }
   });
 
-  test("production mode: no simulated form, the consultation CTA goes to a real channel", async ({ page }) => {
-    test.skip(CONSULT_MODE !== "cta", "stack runs with FEATURE_CONSULT_FORM_DEMO=true (E2E_CONSULT_MODE=demo)");
+  test("fallback mode: no form, the consultation CTA goes to a real channel", async ({ page }) => {
+    test.skip(CONSULT_MODE !== "cta", "stack serves the real form (E2E_CONSULT_MODE=form)");
     await page.goto("/");
     const section = page.locator("section[aria-labelledby=consult-heading]");
     await expect(section.locator("form")).toHaveCount(0);
@@ -149,31 +149,48 @@ test.describe("ST01 · Trang chủ", () => {
     await expect(cta).toHaveAttribute("href", /\/tickets$/);
   });
 
-  test("consultation form validates and never sends a request", async ({ page }) => {
-    test.skip(CONSULT_MODE !== "demo", "simulated form is off (FEATURE_CONSULT_FORM_DEMO not true) — production configuration");
-    const writes: string[] = [];
-    page.on("request", (r) => r.method() !== "GET" && !r.url().includes("/_next/") && writes.push(`${r.method()} ${r.url()}`));
+  test("consultation form validates, then sends a real inquiry with explicit consent", async ({ page }) => {
+    test.skip(CONSULT_MODE !== "form", "Services module is off on this stack (E2E_CONSULT_MODE=cta)");
     await page.goto("/");
-    await expect(page.getByText("Mô phỏng — kênh nhận yêu cầu tư vấn chưa hoạt động")).toBeVisible();
+    await expect(page.getByText("Mô phỏng")).toHaveCount(0);
+    const consent = page.locator("#consult-consent");
+    const marketing = page.locator("#consult-marketing");
+    // neither consent box is pre-ticked; the policy link is a real link opening in a new tab
+    await expect(consent).not.toBeChecked();
+    await expect(marketing).not.toBeChecked();
+    await expect(page.getByRole("link", { name: "Chính sách quyền riêng tư" })).toHaveAttribute("target", "_blank");
+
     await page.getByRole("button", { name: "Gửi yêu cầu tư vấn" }).click();
-    await expect(page.locator(".field-error")).toHaveCount(3);
+    // name, email, description and consent are required
+    await expect(page.locator(".field-error")).toHaveCount(4);
     await expect(page.locator("#consult-name")).toHaveAttribute("aria-invalid", "true");
     // the error summary takes focus so keyboard and screen-reader users land on it
     expect(await page.evaluate(() => document.activeElement?.getAttribute("role"))).toBe("alert");
-    await page.fill("#consult-name", "Khách Demo");
-    await page.fill("#consult-email", "khach@demo.vn");
+
+    await page.fill("#consult-name", "Khách E2E");
+    await page.fill("#consult-email", `e2e-${Date.now()}@example.com`);
     await page.fill("#consult-phone", "12345");
-    await page.check("#consult-consent");
+    await page.fill("#consult-message", "Kiểm thử E2E: cần website bán hàng");
+    await consent.check();
     await page.getByRole("button", { name: "Gửi yêu cầu tư vấn" }).click();
     // shown next to the field and linked from the error summary
     await expect(page.locator("#consult-phone-error")).toHaveText("Số điện thoại chưa đúng định dạng");
     await expect(page.getByRole("link", { name: "Số điện thoại chưa đúng định dạng" })).toHaveAttribute("href", "#consult-phone");
-    await page.fill("#consult-phone", "0901 234 567");
-    await page.getByRole("button", { name: "Gửi yêu cầu tư vấn" }).click();
-    await expect(page.getByText("Mô phỏng — yêu cầu chưa được gửi")).toBeVisible();
-    expect(writes).toEqual([]);
-  });
 
+    await page.fill("#consult-phone", "0901 234 567");
+    const [request, response] = await Promise.all([
+      page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/v1/service-inquiries")),
+      page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/v1/service-inquiries")),
+      page.getByRole("button", { name: "Gửi yêu cầu tư vấn" }).click(),
+    ]);
+    expect(response.status()).toBe(201);
+    const body = request.postData() ?? "";
+    // consent travels as explicit literals; the unticked marketing box is sent as false, not omitted
+    expect(body).toMatch(/name="consentAccepted"\r?\n\r?\ntrue/);
+    expect(body).toMatch(/name="marketingConsent"\r?\n\r?\nfalse/);
+    await expect(page.getByText("Đã nhận yêu cầu tư vấn")).toBeVisible();
+    await expect(page.getByText(/SI-\d{6}-[0-9A-F]{6}/)).toBeVisible();
+  });
   test("keyboard: skip link comes first and moves focus to the content", async ({ page }) => {
     await page.goto("/");
     await page.keyboard.press("Tab");

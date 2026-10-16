@@ -15,7 +15,7 @@ Ghi chú: hiện chưa tạo được GitHub Issue (GitHub CLI chưa được c�
 | ID | Việc | Ưu tiên đề xuất | Ảnh hưởng frontend khi có | Đề xuất |
 |---|---|---|---|---|
 | BL-2 (P1) | Vị trí trưng bày sản phẩm (`product_placements`) — sản phẩm nổi bật, sắp xếp thủ công | Cao | ST01 showcase "Theme nổi bật" thay "Mới phát hành" (đóng điểm lệch D3) | P1 |
-| BL-3 (P3) | API nhận yêu cầu tư vấn `POST /v1/leads` + chống spam + lưu đồng ý | Trung bình | Bật form tư vấn thật trên production, bỏ `FEATURE_CONSULT_FORM_DEMO` | P3 |
+| BL-3 (P3) | API nhận yêu cầu tư vấn `POST /v1/leads` + chống spam + lưu đồng ý | Trung bình | **Đã xử lý** bằng Services Foundation (`POST /v1/service-inquiries`, consent, chống spam, thông báo) và cờ demo đã gỡ; còn lại: bật `FEATURE_SERVICES` theo điều kiện production | P3 |
 | BL-4 (P4) | `total` cho `GET /orders`, `/entitlements`, `/licenses`, `/tickets` | Trung bình | PT01/PT08 hiển thị được số tổng | P4 |
 | BL-5 | Endpoint public cho nội dung `PAGE` (chính sách) | Trung bình | ST13 thành trang thật; footer link được trang chính sách (đóng D7) | route-audit §2 |
 

@@ -14,7 +14,7 @@ E2E_API_URL=http://localhost:4000 pnpm --filter @nexus/e2e seed:demo
 E2E_BASE_URL=http://localhost:3000 E2E_API_URL=http://localhost:4000 pnpm --filter @nexus/e2e test:e2e
 ```
 
-`E2E_CONSULT_MODE=cta` (mặc định — cấu hình production, `FEATURE_CONSULT_FORM_DEMO` tắt) hoặc `demo` (stack bật `FEATURE_CONSULT_FORM_DEMO=true`): chọn bộ test của khối tư vấn ST01; test của chế độ còn lại bị bỏ qua có ghi lý do.
+`E2E_CONSULT_MODE=cta` (mặc định — Services tắt hoặc chưa có dịch vụ `custom-web-app-development` đang ACTIVE: trang chủ hiện CTA hỗ trợ) hoặc `form` (stack bật `FEATURE_SERVICES=true`, đã seed và công khai dịch vụ, API đã cấu hình `SERVICE_CONSENT_VERSION`/`PRIVACY_POLICY_URL`: trang chủ hiện form gửi thật): chọn bộ test của khối tư vấn ST01; test của chế độ còn lại bị bỏ qua có ghi lý do. Chế độ `form` tạo yêu cầu thật trong DB của stack đang test, chỉ chạy trên stack dùng thử.
 
 Trình duyệt chạy trong container mà trang tham chiếu origin của máy host: dùng `E2E_REWRITE="http://localhost:4000=http://<api-host>:4000,http://localhost:9232=http://host.docker.internal:9232"`.
 

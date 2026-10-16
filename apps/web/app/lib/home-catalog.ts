@@ -76,6 +76,9 @@ export interface ConsultInput {
 
 export type ConsultErrors = Partial<Record<keyof ConsultInput, string>>;
 
+/** Length the API accepts for the request text, minus room for the website-type prefix added on send. */
+export const MAX_CONSULT_MESSAGE = 4800;
+
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 // Vietnamese mobile/landline: optional +84 or 0, then 9–10 digits.
 const PHONE = /^(\+84|0)\d{9,10}$/;
@@ -87,6 +90,9 @@ export function validateConsult(input: ConsultInput): ConsultErrors {
   else if (!EMAIL.test(input.email.trim())) errors.email = "Email chưa đúng định dạng";
   const phone = input.phone.replace(/[\s.-]/g, "");
   if (phone && !PHONE.test(phone)) errors.phone = "Số điện thoại chưa đúng định dạng";
-  if (!input.consent) errors.consent = "Vui lòng đồng ý để chúng tôi liên hệ tư vấn";
+  // The inquiry API rejects an empty request text and stores at most 5000 characters.
+  if (!input.message.trim()) errors.message = "Vui lòng mô tả nhu cầu của bạn";
+  else if (input.message.length > MAX_CONSULT_MESSAGE) errors.message = `Tối đa ${MAX_CONSULT_MESSAGE} ký tự`;
+  if (!input.consent) errors.consent = "Vui lòng đồng ý để chúng tôi xử lý thông tin và liên hệ tư vấn";
   return errors;
 }
