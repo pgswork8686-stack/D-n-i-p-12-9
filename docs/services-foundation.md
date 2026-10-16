@@ -66,6 +66,11 @@ Quyền mới được gán: `support_agent` (inquiry.read/manage, project.read)
 - **File**: MIME xác định bằng magic bytes (không tin client), whitelist PDF/PNG/JPEG/WebP/TXT/DOCX/XLSX/PPTX, ≤ 10 MB, tên file được làm sạch (kể cả khôi phục UTF-8 bị multipart decode sai), storage key do server sinh, object private + signed URL 120 giây. Upload lỗi giữa chừng sẽ dọn object mồ côi. Khách ẩn danh không được đính kèm file.
 - **Toàn vẹn**: cập nhật trạng thái dùng compare-and-set (`updateMany where status = cũ`) → 409 khi xung đột; chuyển yêu cầu thành dự án trong một transaction, idempotent nhờ `inquiry_id` unique; audit log ghi trong cùng transaction với thay đổi.
 - **Rate limit cho khách đã đăng nhập**: 30 tin nhắn/giờ, 20 lần tải tài liệu/giờ mỗi tài khoản.
+- **Giới hạn kích thước request theo endpoint (F-08)**, ba lớp độc lập:
+  1. Edge (`infra/docker/Caddyfile`, miền API): form yêu cầu `53 MiB` (5 × 10 MiB + 2 MiB trường + 1 MiB dư), upload tài liệu dự án `13 MiB`, upload file phiên bản `60 MiB` (như trước), mọi đường dẫn còn lại `5 MiB` (trước đây toàn miền là 60 MB).
+  2. Ứng dụng (`maxRequestBytes`, `apps/api/src/common/max-request-bytes.guard.ts`): từ chối `413` theo `Content-Length` trước khi Multer đọc body; vẫn đúng nếu API bị gọi không qua Caddy.
+  3. Multer `limits`: chặn bộ nhớ thực tế khi header thiếu hoặc sai (chunked).
+  Khi đổi `SERVICE_FILE_MAX_BYTES`, `SERVICE_INQUIRY_MAX_FILES` hoặc `MAX_UPLOAD_BYTES`, phải đổi cả ba nơi. Giới hạn tốc độ ở edge (Cloudflare rate rule cho `POST /v1/service-inquiries`) là việc cấu hình hạ tầng, chưa nằm trong repo. IP của khách phụ thuộc `TRUST_PROXY_HOPS` (xem `docs/deployment/proxy-topology.md`, F-07).
 
 ## Consent và thông báo yêu cầu mới (F-12)
 
