@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getSupabaseClient } from "../lib/supabase";
 import { recoveryRedirectUrl } from "../lib/password-recovery";
 
@@ -10,7 +10,10 @@ export function ForgotPasswordForm() {
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const configured = Boolean(getSupabaseClient());
+  const [configured, setConfigured] = useState<boolean | null>(null);
+
+  // Avoid SSR/client hydration mismatch: Supabase is browser-only.
+  useEffect(() => setConfigured(Boolean(getSupabaseClient())), []);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -55,7 +58,7 @@ export function ForgotPasswordForm() {
               <input
                 id="recovery-email" type="email" autoComplete="email" required
                 value={email} onChange={(event) => setEmail(event.target.value)}
-                disabled={!configured || submitting} className="field-input"
+                disabled={configured !== true || submitting} className="field-input"
               />
             </div>
             {error && <p role="alert" className="text-sm text-danger">{error}</p>}
