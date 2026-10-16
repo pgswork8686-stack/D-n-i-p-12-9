@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
-import { prisma } from "@nexus/database";
+import { prisma, Prisma } from "@nexus/database";
 import { ServiceProjectsService } from "./service-projects.service";
 
 const PDF = Buffer.from("%PDF-1.7 test");
@@ -220,6 +220,30 @@ describe("ServiceProjectsService", () => {
 
       expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { projectId_userId: { projectId: "prj-1", userId: "staff-2" } } }));
       expect(event).toHaveBeenCalledWith({ data: expect.objectContaining({ type: "MEMBER_ASSIGNED" }) });
+    });
+
+    it("retries once when a concurrent assignment wins the insert race (no 500)", async () => {
+      const { service } = makeService();
+      jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValueOnce({ id: "prj-1", status: "PLANNING" } as any);
+      jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "staff-2", userRoles: [{ role: { name: "support_agent" } }] } as any);
+      const p2002 = new Prisma.PrismaClientKnownRequestError("dup", { code: "P2002", clientVersion: "test" });
+      const upsert = jest
+        .spyOn(prisma.serviceProjectMember, "upsert")
+        .mockRejectedValueOnce(p2002)
+        .mockResolvedValue({} as any);
+      jest.spyOn(prisma.serviceProjectEvent, "create").mockResolvedValue({} as any);
+      jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue(projectRow() as any);
+
+      await expect(service.assignMember("prj-1", { userId: "staff-2" }, actor)).resolves.toBeDefined();
+      expect(upsert).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not swallow non-unique database errors", async () => {
+      const { service } = makeService();
+      jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValueOnce({ id: "prj-1", status: "PLANNING" } as any);
+      jest.spyOn(prisma.user, "findUnique").mockResolvedValue({ id: "staff-2", userRoles: [{ role: { name: "support_agent" } }] } as any);
+      jest.spyOn(prisma.serviceProjectMember, "upsert").mockRejectedValue(new Error("db down"));
+      await expect(service.assignMember("prj-1", { userId: "staff-2" }, actor)).rejects.toThrow("db down");
     });
   });
 

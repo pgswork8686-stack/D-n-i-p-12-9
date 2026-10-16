@@ -288,26 +288,35 @@ export class ServiceProjectsService {
     }
     const role = dto.role ?? ServiceProjectMemberRole.MEMBER;
 
-    await prisma.$transaction(async (tx) => {
-      await tx.serviceProjectMember.upsert({
-        where: { projectId_userId: { projectId, userId: dto.userId } },
-        update: { role, assignedById: actor.userId },
-        create: { projectId, userId: dto.userId, role, assignedById: actor.userId },
+    const assign = () =>
+      prisma.$transaction(async (tx) => {
+        await tx.serviceProjectMember.upsert({
+          where: { projectId_userId: { projectId, userId: dto.userId } },
+          update: { role, assignedById: actor.userId },
+          create: { projectId, userId: dto.userId, role, assignedById: actor.userId },
+        });
+        await tx.serviceProjectEvent.create({
+          // Staffing changes reference internal user ids: keep them out of the customer history.
+          data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_ASSIGNED, isInternal: true, details: { userId: dto.userId, role } },
+        });
+        await this.audit.logActionWithClient(tx, {
+          action: "SERVICE_PROJECT_MEMBER_ASSIGNED",
+          entity: "ServiceProject",
+          entityId: projectId,
+          actorId: actor.userId,
+          details: { userId: dto.userId, role },
+          ipAddress: actor.ipAddress,
+          userAgent: actor.userAgent,
+        });
       });
-      await tx.serviceProjectEvent.create({
-        // Staffing changes reference internal user ids: keep them out of the customer history.
-        data: { projectId, actorId: actor.userId, type: ServiceProjectEventType.MEMBER_ASSIGNED, isInternal: true, details: { userId: dto.userId, role } },
-      });
-      await this.audit.logActionWithClient(tx, {
-        action: "SERVICE_PROJECT_MEMBER_ASSIGNED",
-        entity: "ServiceProject",
-        entityId: projectId,
-        actorId: actor.userId,
-        details: { userId: dto.userId, role },
-        ipAddress: actor.ipAddress,
-        userAgent: actor.userAgent,
-      });
-    });
+    try {
+      await assign();
+    } catch (err) {
+      // Two concurrent assignments of the same person can both miss the row and race to insert it.
+      // The loser retries once and takes the update path, so the call stays idempotent instead of 500.
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") throw err;
+      await assign();
+    }
     return loadAdminProject(projectId);
   }
 
