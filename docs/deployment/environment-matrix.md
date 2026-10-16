@@ -25,6 +25,7 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `ADMIN_DOMAIN` | Caddy, Compose | REQUIRED_PRODUCTION | PUBLIC | `admin-staging.nexustheme.vn` | `.env.production` | Caddy lỗi config |
 | `API_DOMAIN` | Caddy, Compose | REQUIRED_PRODUCTION | PUBLIC | `api-staging.nexustheme.vn` | `.env.production` | Caddy lỗi config |
 | `ACME_EMAIL` | Caddy | REQUIRED_PRODUCTION | PUBLIC | `ops@nexustheme.vn` | `.env.production` | Let's Encrypt không gửi thông báo chứng chỉ |
+| `TRUST_PROXY_HOPS` | API | RECOMMENDED_PRODUCTION | PUBLIC | `1` (Caddy only) hoặc `2` (Cloudflare proxied + Caddy) | `.env.production` | Số proxy tin cậy trước API. Để trống = `1` kèm cảnh báo. Sai số làm vô hiệu hoặc gộp chung mọi rate limit theo IP; `0` bị cấm ở production; giá trị ngoài 0-5 làm API không khởi động. Xem [proxy-topology.md](proxy-topology.md) |
 | `POSTGRES_USER` | Postgres, API, Worker, Migrate | REQUIRED_PRODUCTION | PUBLIC | `nexus_staging` | `.env.production` | Postgres container từ chối khởi động |
 | `POSTGRES_PASSWORD` | Postgres, API, Worker, Migrate | REQUIRED_PRODUCTION | SECRET | `(random-strong-pw)` | `.env.production` | Compose validation bắt buộc `:?` -> Crash ngay |
 | `POSTGRES_DB` | Postgres, API, Worker, Migrate | REQUIRED_PRODUCTION | PUBLIC | `marketplace_staging` | `.env.production` | Postgres không tạo database |

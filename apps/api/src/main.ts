@@ -6,6 +6,7 @@ import { AllExceptionsFilter } from "./common/filters/http-exception.filter";
 import { StructuredLoggingInterceptor } from "./common/interceptors/structured-logging.interceptor";
 import { resolveCorsOrigins } from "./common/cors";
 import { describeFeatureFlags } from "./common/feature-flags";
+import { resolveTrustProxyHops } from "./common/trust-proxy";
 
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
@@ -21,8 +22,16 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Behind Caddy/Cloudflare: trust the first proxy hop for client IPs.
-  app.getHttpAdapter().getInstance().set("trust proxy", 1);
+  // Client IPs come from X-Forwarded-For, skipping exactly the proxies we operate. The hop count
+  // must match the real topology (docs/deployment/proxy-topology.md): a wrong value either merges
+  // every visitor into one rate-limit bucket or lets clients forge their own IP.
+  const trustProxy = resolveTrustProxyHops(process.env);
+  app.getHttpAdapter().getInstance().set("trust proxy", trustProxy.hops);
+  if (!trustProxy.explicit) {
+    logger.warn(
+      `TRUST_PROXY_HOPS is not set; assuming ${trustProxy.hops} (Caddy only). Set it to match your topology before relying on per-IP limits.`,
+    );
+  }
   app.enableShutdownHooks();
 
   app.useGlobalPipes(
