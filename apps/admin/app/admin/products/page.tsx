@@ -4,6 +4,8 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
 import { getApiUrl } from "../../lib/api";
+import { useAuth } from "../../context/auth-context";
+import { effectiveAdminToken } from "../../lib/admin-access-token";
 
 const isDevAuthToolsEnabled =
   process.env.NODE_ENV !== "production" &&
@@ -13,9 +15,11 @@ export default function AdminProductsPage() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
+  const { token, isLoading: authLoading } = useAuth();
+  // Simulated identity requires explicit developer interaction. Production
+  // always uses the centralized, Supabase-backed AuthProvider session.
+  const [devToken, setDevToken] = useState<string | null>(null);
+  const authToken = effectiveAdminToken(token, devToken, isDevAuthToolsEnabled);
 
   const fetchProducts = () => {
     if (!authToken) {
@@ -59,8 +63,8 @@ export default function AdminProductsPage() {
   };
 
   useEffect(() => {
-    fetchProducts();
-  }, [authToken]);
+    if (!authLoading) fetchProducts();
+  }, [authToken, authLoading]);
 
   return (
     <main className="max-w-6xl mx-auto py-10 px-6 font-sans">
@@ -69,19 +73,19 @@ export default function AdminProductsPage() {
           <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
           <div className="flex gap-2">
             <button
-              onClick={() => setAuthToken("dev-admin-token")}
+              onClick={() => setDevToken("dev-admin-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"}`}
             >
               Admin Token
             </button>
             <button
-              onClick={() => setAuthToken("dev-customer-token")}
+              onClick={() => setDevToken("dev-customer-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"}`}
             >
               Customer Token (403)
             </button>
             <button
-              onClick={() => setAuthToken("")}
+              onClick={() => setDevToken("")}
               className={`px-2.5 py-1 rounded border font-medium ${!authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"}`}
             >
               No Token (401)

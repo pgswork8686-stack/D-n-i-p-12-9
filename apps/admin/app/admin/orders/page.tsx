@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
 import { formatMoney } from "@nexus/utils";
 import { getApiUrl } from "../../lib/api";
+import { useAuth } from "../../context/auth-context";
+import { effectiveAdminToken } from "../../lib/admin-access-token";
 
 const isDevAuthToolsEnabled =
   process.env.NODE_ENV !== "production" &&
@@ -14,9 +16,11 @@ export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [authToken, setAuthToken] = useState<string>(
-    isDevAuthToolsEnabled ? "dev-admin-token" : "",
-  );
+  const { token, isLoading: authLoading } = useAuth();
+  // Simulated identity requires explicit developer interaction. Production
+  // always uses the centralized, Supabase-backed AuthProvider session.
+  const [devToken, setDevToken] = useState<string | null>(null);
+  const authToken = effectiveAdminToken(token, devToken, isDevAuthToolsEnabled);
 
   const fetchOrders = () => {
     if (!authToken) {
@@ -60,8 +64,8 @@ export default function AdminOrdersPage() {
   };
 
   useEffect(() => {
-    fetchOrders();
-  }, [authToken]);
+    if (!authLoading) fetchOrders();
+  }, [authToken, authLoading]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -85,14 +89,14 @@ export default function AdminOrdersPage() {
             <Button
               variant="outline"
               className="text-xs py-1 h-auto"
-              onClick={() => setAuthToken("dev-admin-token")}
+              onClick={() => setDevToken("dev-admin-token")}
             >
               Set Admin Token
             </Button>
             <Button
               variant="outline"
               className="text-xs py-1 h-auto text-red-600"
-              onClick={() => setAuthToken("")}
+              onClick={() => setDevToken("")}
             >
               Clear Token
             </Button>
