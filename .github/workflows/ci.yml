@@ -130,6 +130,9 @@ jobs:
           bash -n infra/scripts/staging-preflight-ci.sh
           bash infra/scripts/staging-preflight-ci.sh
 
+      - name: Validate content intake templates
+        run: node scripts/validate-content-intake.mjs
+
       - name: Lint
         run: pnpm lint
 
@@ -138,6 +141,9 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+      - name: Validate n8n workflows and inquiry email template
+        run: pnpm n8n:validate
 
       - name: Build
         run: pnpm build --concurrency=2
