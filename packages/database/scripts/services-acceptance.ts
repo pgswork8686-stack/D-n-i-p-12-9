@@ -345,14 +345,25 @@ async function run() {
     // Drive the real worker code (built dist) against the same database.
     process.env.SERVICE_INQUIRY_NOTIFY_EMAILS = NOTIFY_EMAIL;
     process.env.SERVICE_INQUIRY_NOTIFY_HOURLY_EMAIL_CAP = "1000";
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const workerOutbox = require(path.resolve(__dirname, "../../../apps/worker/dist/outbox-processor.js"));
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const workerNotifier = require(path.resolve(__dirname, "../../../apps/worker/dist/service-inquiry-notifier.js"));
-    for (let i = 0; i < 5; i++) {
-      const r = await workerOutbox.processOutboxEvents({ workerId: "services-acceptance", batchSize: 50 });
-      if (r.processedCount === 0) break;
-    }
+    // The worker runs as its own process, as in production.
+    const workerDist = path.resolve(__dirname, "../../../apps/worker/dist").replace(/\\/g, "/");
+    const runWorker = (body: string) =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(process.execPath, ["-e", `(async () => { ${body} })().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });`], {
+          env: process.env,
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let err = "";
+        child.stderr?.on("data", (d) => (err += d.toString()));
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`worker process failed (${code}): ${err.slice(-800)}`))));
+      });
+    await runWorker(`
+      const { processOutboxEvents } = require("${workerDist}/outbox-processor.js");
+      for (let i = 0; i < 5; i++) {
+        const r = await processOutboxEvents({ workerId: "services-acceptance", batchSize: 50 });
+        if (r.processedCount === 0) break;
+      }
+    `);
     const done = await prisma.outboxEvent.findFirst({ where: { eventType: "SERVICE_INQUIRY_CREATED", aggregateId: optedRow!.id } });
     gate("The worker processes the event to PROCESSED", done?.status === "PROCESSED", done);
 
@@ -374,8 +385,11 @@ async function run() {
       await prisma.automationJob.count({ where: { type: "SERVICE_INQUIRY_NOTIFY_EMAIL", sourceId: optedRow!.id } }),
       await prisma.auditLog.count({ where: { action: "SERVICE_INQUIRY_NOTIFIED", entityId: optedRow!.id } }),
     ];
-    await workerNotifier.processServiceInquiryCreatedEvent({ inquiryId: optedRow!.id }, "services-acceptance-replay");
-    await workerNotifier.processServiceInquiryCreatedEvent({ inquiryId: optedRow!.id }, "services-acceptance-replay");
+    await runWorker(`
+      const { processServiceInquiryCreatedEvent } = require("${workerDist}/service-inquiry-notifier.js");
+      await processServiceInquiryCreatedEvent({ inquiryId: "${optedRow!.id}" }, "services-acceptance-replay");
+      await processServiceInquiryCreatedEvent({ inquiryId: "${optedRow!.id}" }, "services-acceptance-replay");
+    `);
     const countsAfter = [
       await prisma.notification.count({ where: { type: "SERVICE_INQUIRY_CREATED", metadata: { path: ["inquiryId"], equals: optedRow!.id } } }),
       await prisma.automationJob.count({ where: { type: "SERVICE_INQUIRY_NOTIFY_EMAIL", sourceId: optedRow!.id } }),

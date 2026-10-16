@@ -10,7 +10,7 @@ import {
   IsArray,
   ValidateNested,
 } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { TicketPriority, TicketStatus } from "@nexus/database";
 import {
   CreateTicketRequest,
@@ -141,7 +141,9 @@ export class QueryTicketsDto implements QueryTicketsRequest {
 
 export class QueryNotificationsDto implements QueryNotificationsRequest {
   @IsOptional()
-  @Type(() => Boolean)
+  // `@Type(() => Boolean)` would turn the query string "false" into true (Boolean("false")), so
+  // `?isRead=false` returned the read notifications. Convert only the exact literals.
+  @Transform(({ value }) => (value === "true" || value === true ? true : value === "false" || value === false ? false : value))
   @IsBoolean()
   isRead?: boolean;
 
