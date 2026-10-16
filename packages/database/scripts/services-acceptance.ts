@@ -448,35 +448,52 @@ async function run() {
   }
 
   // ------------------------------------- production without a privacy policy
-  console.log("\n--- Production start-up without a consent policy (separate API process) ---");
-  const bootOutput = await new Promise<{ code: number | null; output: string }>((resolve) => {
-    const child = spawn(process.execPath, [path.resolve(__dirname, "../../../apps/api/dist/main.js")], {
-      env: {
-        ...process.env,
-        PORT: String(20000 + crypto.randomInt(0, 10000)),
-        NODE_ENV: "production",
-        FEATURE_SERVICES: "true",
-        SERVICE_INQUIRY_IP_SALT: "x".repeat(32),
-        SERVICE_CONSENT_VERSION: "",
-        PRIVACY_POLICY_URL: "",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+  // Constructs the compiled service in a child process with a production environment instead of
+  // booting the whole API: a full production boot is refused first by unrelated checks (for
+  // example CI sets STRIPE_MOCK_CLIENT=true and ENABLE_TEST_PAYMENT_PROVIDER=true, both forbidden
+  // in production), which would hide the consent check this gate is about. The service is the
+  // object whose constructor enforces it, so this exercises the real compiled code and the
+  // environment parsing, not a copy of the logic.
+  console.log("\n--- Production configuration of the consent policy (compiled build) ---");
+  const apiDir = path.resolve(__dirname, "../../../apps/api");
+  const constructService = (env: Record<string, string>) =>
+    new Promise<{ code: number | null; output: string }>((resolve) => {
+      const script = `
+        require("reflect-metadata");
+        const { ServiceInquiriesService } = require("./dist/modules/services/service-inquiries.service.js");
+        try {
+          new ServiceInquiriesService({}, {}, {}, { get: (k) => process.env[k] });
+          console.log("STARTED");
+        } catch (e) {
+          console.log("REFUSED: " + e.message);
+        }`;
+      const child = spawn(process.execPath, ["-e", script], {
+        cwd: apiDir,
+        env: { ...process.env, SERVICE_CONSENT_VERSION: "", PRIVACY_POLICY_URL: "", SERVICE_INQUIRY_IP_SALT: "x".repeat(32), ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let output = "";
+      child.stdout?.on("data", (d) => (output += d.toString()));
+      child.stderr?.on("data", (d) => (output += d.toString()));
+      const timer = setTimeout(() => child.kill(), 30000);
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        resolve({ code, output });
+      });
     });
-    let output = "";
-    child.stdout?.on("data", (d) => (output += d.toString()));
-    child.stderr?.on("data", (d) => (output += d.toString()));
-    const timer = setTimeout(() => child.kill(), 45000);
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      resolve({ code, output });
-    });
-  });
-  gate(
-    "API refuses to start in production with FEATURE_SERVICES on and no consent version / privacy-policy URL",
-    bootOutput.code !== 0 && /SERVICE_CONSENT_VERSION and PRIVACY_POLICY_URL are required/.test(bootOutput.output),
-    { code: bootOutput.code, tail: bootOutput.output.slice(-600) },
-  );
 
+  const noPolicy = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true" });
+  gate(
+    "Production with FEATURE_SERVICES on and no consent version / privacy-policy URL is refused",
+    /REFUSED: .*SERVICE_CONSENT_VERSION and PRIVACY_POLICY_URL are required/.test(noPolicy.output),
+    { code: noPolicy.code, output: noPolicy.output.slice(-500) },
+  );
+  const insecure = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true", SERVICE_CONSENT_VERSION: "2026-10", PRIVACY_POLICY_URL: "http://pgs.example/privacy" });
+  gate("A non-https privacy-policy URL is refused in production", /REFUSED: .*https/.test(insecure.output), { output: insecure.output.slice(-500) });
+  const configured = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "true", SERVICE_CONSENT_VERSION: "2026-10", PRIVACY_POLICY_URL: "https://pgs.example/privacy" });
+  gate("Production with a version and an https policy URL starts", /STARTED/.test(configured.output), { output: configured.output.slice(-500) });
+  const moduleOff = await constructService({ NODE_ENV: "production", FEATURE_SERVICES: "false" });
+  gate("Production with the Services module off still starts without a policy (marketplace unaffected)", /STARTED/.test(moduleOff.output), { output: moduleOff.output.slice(-500) });
   const failed = results.filter((r) => !r.passed);
   console.log("\n================================================================================");
   console.log(`   RESULT: ${results.length - failed.length}/${results.length} gates passed`);
