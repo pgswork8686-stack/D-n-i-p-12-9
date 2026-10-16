@@ -10,7 +10,8 @@ name: nexustheme
 
 x-backend-env: &backend-env
   env_file:
-    - ../../.env.production
+    # Override explicitly on staging; relative to infra/docker (not --env-file).
+    - ${APP_ENV_FILE:-../../.env.production}
   environment:
     NODE_ENV: production
     DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}

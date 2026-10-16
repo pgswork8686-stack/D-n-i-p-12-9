@@ -116,6 +116,7 @@ jobs:
           bash -n infra/scripts/verify-backup.sh
           bash -n infra/scripts/production-preflight.sh
           bash -n infra/scripts/staging-smoke.sh
+          bash -n infra/scripts/staging-preflight.sh
 
       # Actual production Caddyfile syntax and HTTP request-size enforcement.
       # Tests use an isolated Docker network and a mock API that consumes request bodies.
@@ -123,6 +124,11 @@ jobs:
         run: |
           bash -n infra/scripts/verify-caddy-limits.sh
           bash infra/scripts/verify-caddy-limits.sh
+
+      - name: Staging env isolation (synthetic CI-only credentials)
+        run: |
+          bash -n infra/scripts/staging-preflight-ci.sh
+          bash infra/scripts/staging-preflight-ci.sh
 
       - name: Lint
         run: pnpm lint
