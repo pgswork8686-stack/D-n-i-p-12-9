@@ -13,6 +13,30 @@
 | Log từng bước | [`services-foundation-steps-eec160a.tsv`](services-foundation-steps-eec160a.tsv) |
 | GitHub Actions trên cùng SHA | run [`38773363853`](https://github.com/pgswork8686-stack/D-n-i-p-12-9/actions/runs/38773363853) — **7/7 success** (verify + 6 docker) |
 
+### Bổ sung — HEAD mới `f2bf30a33e576ed6842411969659775561ff5ead` (2026-10-16)
+
+`f2bf30a` chỉ thêm bản sửa F-11 (`assignMember` thử lại một lần khi P2002) và 2 test. Phần bằng chứng bên dưới vẫn là của `eec160a`; các số liệu sau là của `f2bf30a`:
+
+| Hạng mục | Kết quả |
+|---|---|
+| GitHub Actions run [`38848035750`](https://github.com/pgswork8686-stack/D-n-i-p-12-9/actions/runs/38848035750) | **7/7 success** (verify + 6 docker) |
+| Unit test Services (`pnpm --filter @nexus/api test -- services`) | 7 suite, **98/98** pass (gồm 2 test mới cho F-11) |
+| Typecheck API (`tsc --noEmit`) | exit 0 |
+| Lint API | 0 lỗi |
+| Acceptance Services / phase 4→18 / Playwright | **chưa chạy lại** trên `f2bf30a`; dựa vào CI và kết quả `eec160a` ở trên |
+
+### Bổ sung — nhánh tích hợp Frontend B0/B1 `feat/frontend-integration-b0-b1` (`fc1d05e`)
+
+Merge `origin/feat/frontend-b1-foundation` (3 commit: `6a8a9bf`, `d513764`, `51bb27d`) vào `main` `1237c8c`; không xung đột. Kiểm tra cục bộ trong worktree riêng (Windows, Node v24.19.0):
+
+| Hạng mục | Kết quả |
+|---|---|
+| `pnpm install --frozen-lockfile` | PASS |
+| Lint (`pnpm -r run lint`) | PASS — 0 lỗi (chỉ cảnh báo có sẵn) |
+| Typecheck | PASS |
+| Unit test | PASS — mọi suite; 4 suite API bị OS giết worker Jest (SIGTERM) khi chạy song song, chạy lại `--runInBand` 4/4 pass, 42 test |
+| `next build` | **Không chạy được cục bộ**: chính sách Application Control của Windows chặn binary SWC. Bằng chứng build phải lấy từ CI/Docker |
+
 Không có kết quả nào trong tài liệu này lấy từ commit cũ. CI xanh của `de08d77` (HEAD trước) **không** được dùng làm bằng chứng.
 
 ---
