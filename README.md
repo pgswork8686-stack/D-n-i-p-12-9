@@ -20,6 +20,7 @@ Monorepo gồm **3 frontend Next.js + 1 API NestJS + 1 worker**, dùng PostgreSQ
 | License quản lý hộ (Elementor…) — duyệt tay | ✅ Sẵn sàng (xem lưu ý pháp lý bên dưới) |
 | CMS/SEO, blog, n8n automation | ✅ Sẵn sàng |
 | Helpdesk / ticket, thông báo | ✅ Sẵn sàng |
+| Services Foundation (danh mục dịch vụ, yêu cầu dự án, quản lý dự án) | 🟡 Mới — tắt mặc định ở production (`FEATURE_SERVICES`), xem [docs/services-foundation.md](docs/services-foundation.md) |
 | Hosting, Membership, Affiliate, Kế toán/Thuế | ⛔ Tắt bằng feature flag (`FEATURE_*`) — chưa hoàn thiện |
 
 Lưu ý: bán quyền dùng từ một tài khoản Elementor Pro dùng chung có thể vi phạm điều khoản của nhà cung cấp. Hãy kiểm tra hợp đồng hoặc chương trình reseller trước khi mở bán loại sản phẩm này.

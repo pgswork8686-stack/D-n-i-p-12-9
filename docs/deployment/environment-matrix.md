@@ -59,6 +59,11 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `FEATURE_MEMBERSHIP` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API membership trả về 404 |
 | `FEATURE_AFFILIATE` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API affiliate trả về 404 |
 | `FEATURE_FINANCE` | API, Worker | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API finance trả về 404 |
+| `FEATURE_SERVICES` | API | FEATURE_FLAG | PUBLIC | `false` | `.env.production` | API dịch vụ/yêu cầu/dự án trả về 404; Storefront và Portal ẩn menu |
+| `SERVICE_INQUIRY_RATE_LIMIT_PER_IP` | API | OPTIONAL | PUBLIC | `5` | `.env.production` | Số yêu cầu tư vấn tối đa mỗi IP trong một cửa sổ |
+| `SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL` | API | OPTIONAL | PUBLIC | `3` | `.env.production` | Số yêu cầu tối đa mỗi email trong một cửa sổ |
+| `SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS` | API | OPTIONAL | PUBLIC | `3600` | `.env.production` | Độ dài cửa sổ rate limit (giây) |
+| `SERVICE_INQUIRY_IP_SALT` | API | REQUIRED (production, khi bật FEATURE_SERVICES) | SECRET | Chuỗi ngẫu nhiên ≥ 32 ký tự | `.env.production` | Salt khi băm IP người gửi; thiếu thì API dừng khởi động |
 | `ENABLE_TEST_PAYMENT_PROVIDER` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Bị cấm bởi `NODE_ENV === "production"` |
 | `STRIPE_MOCK_CLIENT` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Ném lỗi crash nếu bật trong production |
 | `SEED_DEV_USERS` | DB seed | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Không tạo user mock |
