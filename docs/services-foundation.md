@@ -91,6 +91,14 @@ Migration `20261016000000_20261016_services_consent_notifications` (additive): 4
 - Admin: banner "yêu cầu dịch vụ mới" trên mọi màn Services, dùng `GET /v1/notifications` của chính người dùng.
 - **Chưa có trong repo:** workflow n8n nhận `/webhook/service-inquiry-notify-email` và gửi mail thật. Cho tới khi workflow được triển khai, email chưa thể gửi (job sẽ retry rồi FAILED); thông báo trong Admin không phụ thuộc điều này.
 
+**Triển khai (thứ tự bắt buộc)**
+1. Áp migration `20261016000000_…` (additive, chạy được khi API/worker cũ còn chạy).
+2. **Deploy worker mới trước API mới.** Worker cũ không nhận ra event `SERVICE_INQUIRY_CREATED` và xử lý như event lạ: retry theo back-off rồi chuyển `FAILED`, nên thông báo của các yêu cầu gửi trong khoảng API mới đã chạy mà worker mới chưa chạy sẽ bị bỏ. Nếu lỡ xảy ra, các event `FAILED` đó có thể được đặt lại `PENDING` sau khi worker mới chạy; handler idempotent nên xử lý lại an toàn.
+3. Deploy API mới, rồi Storefront/Admin (form và banner dùng endpoint `GET /v1/service-inquiries/consent`).
+4. Import workflow n8n `service-inquiry-notify-email` (PR riêng) nếu muốn bật email.
+
+**`FEATURE_SERVICES` vẫn tắt trên production** cho tới khi hoàn tất: chính sách quyền riêng tư đã duyệt (`PRIVACY_POLICY_URL`, `SERVICE_CONSENT_VERSION`), xác minh topology proxy (`TRUST_PROXY_HOPS`, F-07), giới hạn kích thước request (F-08), acceptance trên staging với Supabase và R2 thật, và staff duyệt các dịch vụ seed từ `DRAFT` sang `ACTIVE`. Với cờ tắt, merge F-12 không đổi hành vi production: mọi route Services trả 404, trang chủ hiện CTA hỗ trợ thay cho form tư vấn.
+
 ## Tương thích với PR #23 (AI Marketing OS)
 
 PR #23 thêm `Tenant`/`TenantMember` (ORGANIZATION/CLIENT) cho analytics và bật `multiSchema` (`schemas = ["public", "analytics"]`, mọi model gắn `@@schema("public")`).
