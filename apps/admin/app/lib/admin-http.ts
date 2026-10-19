@@ -24,9 +24,11 @@ export async function adminFetch<T>(
   subject: string,
   init: RequestInit = {},
 ): Promise<T> {
+  // FormData must set its own multipart boundary, so only JSON bodies get a Content-Type.
+  const isForm = typeof FormData !== "undefined" && init.body instanceof FormData;
   const headers: Record<string, string> = {
     Authorization: "Bearer " + token,
-    ...(init.body ? { "Content-Type": "application/json" } : {}),
+    ...(init.body && !isForm ? { "Content-Type": "application/json" } : {}),
     ...((init.headers as Record<string, string> | undefined) ?? {}),
   };
   const res = await fetch(getApiUrl() + path, { ...init, headers, cache: "no-store" });

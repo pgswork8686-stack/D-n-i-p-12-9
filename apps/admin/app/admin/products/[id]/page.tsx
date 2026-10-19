@@ -232,6 +232,12 @@ export default function ProductDetailPage() {
           <p className="text-gray-500 text-sm font-mono mt-1">slug: {product.slug}</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href={`/admin/products/${encodeURIComponent(product.id)}/versions`}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+          >
+            Phiên bản &amp; file
+          </Link>
           {product.status !== "ACTIVE" && (
             <Button variant="primary" onClick={() => handleStatusChange("ACTIVE")}>
               Publish (ACTIVE)
