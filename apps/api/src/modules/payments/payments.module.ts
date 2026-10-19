@@ -9,16 +9,20 @@ import { TestPaymentProvider } from "./test-payment.provider";
 import { StripePaymentProvider } from "./stripe-payment.provider";
 import { PaymentProviderFactory } from "./payment-provider.factory";
 import { SepayPaymentProvider } from "./sepay-payment.provider";
+import { PaymentReconciliationService } from "./payment-reconciliation.service";
+import { PaymentReconciliationController } from "./payment-reconciliation.controller";
 
 @Module({
   imports: [AuditModule, AuthModule],
   controllers: [
     PaymentsController,
+    PaymentReconciliationController,
     PaymentWebhooksController,
     PaymentSessionController,
   ],
   providers: [
     PaymentsService,
+    PaymentReconciliationService,
     TestPaymentProvider,
     StripePaymentProvider,
     SepayPaymentProvider,

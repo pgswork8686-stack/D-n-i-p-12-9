@@ -13,6 +13,8 @@ import {
   NormalizedPaymentEvent,
   NormalizedPaymentStatus,
   BankTransferInstructions,
+  ProviderTransferView,
+  ReviewableTransfer,
 } from "./payment-provider.interface";
 
 /**
@@ -258,11 +260,12 @@ export class SepayPaymentProvider implements PaymentProviderAdapter {
       referenceCode: payload.referenceCode,
       code: payload.code,
     };
-    const ignored = (reason: string): NormalizedPaymentEvent => {
+    const ignored = (reason: string, review?: ReviewableTransfer): NormalizedPaymentEvent => {
       this.logger.warn(
         JSON.stringify({ event: "sepay_webhook_ignored", reason, externalEventId }),
       );
       return {
+        ...(review ? { review } : {}),
         externalEventId,
         eventType: "ignored",
         orderId: "",
@@ -287,15 +290,30 @@ export class SepayPaymentProvider implements PaymentProviderAdapter {
     if (!Number.isInteger(amount) || amount <= 0) return ignored("invalid_amount");
 
     const code = this.extractTransferCode(payload, config.codePrefix);
-    if (!code) return ignored("no_transfer_code");
+    if (!code) {
+      return ignored("no_transfer_code", { reason: "NO_TRANSFER_CODE", receivedAmount: amount });
+    }
 
     const payment = await prisma.payment.findFirst({
       where: { provider: this.providerName, providerReference: code },
     });
-    if (!payment) return ignored("unknown_transfer_code");
+    if (!payment) {
+      return ignored("unknown_transfer_code", {
+        reason: "UNKNOWN_TRANSFER_CODE",
+        receivedAmount: amount,
+        transferCode: code,
+      });
+    }
     if (payment.amount !== amount) {
       // Under/over-payment needs a human decision; never auto-mark PAID.
-      return ignored("amount_mismatch_manual_review");
+      return ignored("amount_mismatch_manual_review", {
+        reason: "AMOUNT_MISMATCH",
+        receivedAmount: amount,
+        expectedAmount: payment.amount,
+        transferCode: code,
+        paymentId: payment.id,
+        orderId: payment.orderId,
+      });
     }
 
     return {
@@ -309,6 +327,47 @@ export class SepayPaymentProvider implements PaymentProviderAdapter {
       rawPayloadHash,
       sanitizedPayload,
     };
+  }
+
+  /**
+   * Read-only lookup of incoming SePay transactions that carry `transferCode`, whatever their
+   * amount. Used by staff reconciliation to see what the bank really received. It NEVER confirms
+   * a payment. Returns null when the API token is not configured or SePay cannot be reached.
+   */
+  async lookupTransfersByCode(transferCode: string): Promise<ProviderTransferView[] | null> {
+    const config = this.requireConfig();
+    if (!config.apiToken) return null;
+
+    const url = new URL(`${config.apiBaseUrl}/transactions/list`);
+    url.searchParams.set("account_number", config.accountNumber);
+    url.searchParams.set("limit", "200");
+
+    let body: any;
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${config.apiToken}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) return null;
+      body = await res.json();
+    } catch (err: any) {
+      this.logger.warn(`SePay lookup failed: ${err?.message}`);
+      return null;
+    }
+
+    const transactions: any[] = Array.isArray(body?.transactions) ? body.transactions : [];
+    return transactions
+      .filter((tx) => Number(tx?.amount_in) > 0)
+      .map((tx) => ({
+        id: String(tx.id),
+        amount: Number(tx.amount_in),
+        transferCode: this.extractTransferCode(
+          { code: tx?.code, content: tx?.transaction_content },
+          config.codePrefix,
+        ),
+        occurredAt: tx?.transaction_date ? String(tx.transaction_date) : null,
+      }))
+      .filter((tx) => tx.transferCode === transferCode);
   }
 
   /**
