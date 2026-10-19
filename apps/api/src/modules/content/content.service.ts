@@ -580,11 +580,23 @@ export class ContentService {
   }
 
   async getPublicPostBySlug(slug: string): Promise<PublicContentPostDto> {
+    return this.getPublicContentBySlug(slug, ContentType.ARTICLE);
+  }
+
+  /** Only an explicitly published PAGE can be served publicly (not drafts or articles). */
+  async getPublicPageBySlug(slug: string): Promise<PublicContentPostDto> {
+    return this.getPublicContentBySlug(slug, ContentType.PAGE);
+  }
+
+  private async getPublicContentBySlug(
+    slug: string,
+    contentType: ContentType,
+  ): Promise<PublicContentPostDto> {
     const post = await prisma.contentPost.findFirst({
       where: {
         slug,
         status: ContentStatus.PUBLISHED,
-        contentType: ContentType.ARTICLE, // Strictly ARTICLE only
+        contentType, // Explicitly scoped: ARTICLE blog or published PAGE
       },
       select: {
         id: true,
@@ -610,7 +622,7 @@ export class ContentService {
 
     if (!post) {
       // Clean 404 for non-existent or non-published posts (anti-enumeration)
-      throw new NotFoundException(`Article '${slug}' not found.`);
+      throw new NotFoundException(`${contentType === ContentType.PAGE ? "Page" : "Article"} '${slug}' not found.`);
     }
 
     return {
