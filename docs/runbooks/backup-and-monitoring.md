@@ -43,10 +43,15 @@ Phạm vi: chuẩn bị hạ tầng (P2). Mọi script đã được kiểm ch�
 
 `bash infra/monitoring/selftest.sh`: webhook giả nhận đúng 1 cảnh báo FIRING khi ứng dụng sập (không lặp), 1 RESOLVED khi hồi phục, và cảnh báo khi dấu thời gian sao lưu quá cũ hoặc thiếu bản sao ngoài.
 
-## 5. Việc cần bạn quyết định / cung cấp
+## 5. Quyết định đã chốt và việc còn lại (cần người có quyền thực hiện)
 
-1. Nhà cung cấp và tài khoản lưu ngoài máy chủ (R2/B2/S3) và chính sách giữ bản (hiện 30 ngày cục bộ).
-2. Kênh nhận cảnh báo (Telegram/Slack/email) và người trực.
-3. Nơi cất giữ khóa mã hóa.
-4. Dịch vụ giám sát từ bên ngoài.
-5. RPO/RTO thật sự chấp nhận được.
+Quyết định (2026-10-19): lưu ngoài máy chủ ưu tiên **Cloudflare R2** (bucket backup riêng, private, token chỉ đúng quyền cần); cảnh báo ưu tiên **Telegram** cho nhân sự vận hành, bổ sung giám sát uptime bên ngoài; khóa mã hóa lưu trong **trình quản lý mật khẩu / secret manager độc lập với máy chủ**, không đưa vào GitHub; **staging chưa triển khai**, tiếp tục dùng môi trường thử nghiệm cách ly.
+
+Script đã sẵn sàng cho các lựa chọn này (`BACKUP_R2_BUCKET` + `STORAGE_ENDPOINT` + khóa AWS cho R2; `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` cho cảnh báo). Phần dưới đây cần người có quyền truy cập tài khoản, tôi không thể và không nên tự làm:
+
+1. Tạo bucket R2 riêng cho backup (private, không gắn domain công khai); tạo API token chỉ có quyền Object Read/Write trên đúng bucket đó; bật lifecycle giữ bản theo chính sách (hiện cục bộ 30 ngày).
+2. Tạo bot Telegram (BotFather) và nhóm vận hành; lấy `TELEGRAM_CHAT_ID`; thử bằng `infra/monitoring/alert.sh INFO "thử" "xin chào"`.
+3. Sinh khóa mã hóa (`openssl rand -base64 48`), cất bản sao trong trình quản lý mật khẩu của PGS **trước khi** chạy backup đầu tiên; kiểm tra bằng một lần diễn tập khôi phục từ bản R2.
+4. Đăng ký một dịch vụ uptime bên ngoài (UptimeRobot / Better Stack) cho API, web, portal, admin; có thể thêm ping healthchecks.io từ job sao lưu để phát hiện khi cả máy chủ ngừng.
+5. Chốt RPO/RTO chấp nhận được (hiện RPO = chu kỳ sao lưu).
+6. Chưa sao lưu: object storage (bản phát hành sản phẩm), n8n, `.env.production` — cần quyết định riêng.
