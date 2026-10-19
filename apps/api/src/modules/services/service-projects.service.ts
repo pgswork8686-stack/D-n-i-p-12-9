@@ -135,7 +135,7 @@ export class ServiceProjectsService {
   async customerUploadDocument(userId: string, projectId: string, file: UploadedServiceFile, ctx: Omit<ActorContext, "userId">): Promise<ServiceProjectDto> {
     const project = await this.requireOwnedOpenProject(userId, projectId);
     if (!file) throw new BadRequestException("Thiếu tệp tài liệu.");
-    await this.rateLimiter.consume({ key: `ratelimit:service-project:upload:${userId}`, limit: 20, windowSeconds: 3600 });
+    // The per-account upload quota is enforced by UploadQuotaGuard before the body is buffered.
     // Customers can only share documents with the project team, never mark them internal.
     await this.storeDocument(project.id, file, ServiceDocumentVisibility.CUSTOMER, ServiceSenderType.CUSTOMER, { userId, ...ctx });
     return this.getMine(userId, project.id);

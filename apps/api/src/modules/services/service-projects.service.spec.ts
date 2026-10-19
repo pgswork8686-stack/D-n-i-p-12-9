@@ -117,7 +117,7 @@ describe("ServiceProjectsService", () => {
       await expect(service.customerPostMessage("cust-1", "prj-1", { body: "hi" })).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it("forces customer-uploaded documents to CUSTOMER visibility and rate-limits uploads", async () => {
+    it("forces customer-uploaded documents to CUSTOMER visibility (quota is enforced by UploadQuotaGuard)", async () => {
       const { service, rateLimiter } = makeService();
       jest.spyOn(prisma.serviceProject, "findUnique").mockResolvedValue({ id: "prj-1", customerId: "cust-1", status: "IN_PROGRESS" } as any);
       const create = jest.spyOn(prisma.serviceProjectDocument, "create").mockResolvedValue({ id: "d9", fileName: "a.pdf", sizeBytes: 1, sha256: "x" } as any);
@@ -127,7 +127,8 @@ describe("ServiceProjectsService", () => {
 
       await service.customerUploadDocument("cust-1", "prj-1", { originalname: "a.pdf", mimetype: "application/pdf", size: PDF.length, buffer: PDF }, {});
 
-      expect(rateLimiter.consume).toHaveBeenCalledWith(expect.objectContaining({ key: "ratelimit:service-project:upload:cust-1" }));
+      // Counted once, before buffering, by the guard — not again after the body was read.
+      expect(rateLimiter.consume).not.toHaveBeenCalled();
       const data = create.mock.calls[0][0].data as any;
       expect(data.visibility).toBe("CUSTOMER");
       expect(data.uploaderType).toBe("CUSTOMER");

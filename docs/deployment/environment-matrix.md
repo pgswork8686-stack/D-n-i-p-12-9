@@ -65,6 +65,8 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL` | API | OPTIONAL | PUBLIC | `3` | `.env.production` | Số yêu cầu tối đa mỗi email trong một cửa sổ |
 | `SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS` | API | OPTIONAL | PUBLIC | `3600` | `.env.production` | Độ dài cửa sổ rate limit (giây) |
 | `SERVICE_INQUIRY_IP_SALT` | API | REQUIRED (production, khi bật FEATURE_SERVICES) | SECRET | Chuỗi ngẫu nhiên ≥ 32 ký tự | `.env.production` | Salt khi băm IP người gửi; thiếu thì API dừng khởi động |
+| `SERVICE_INQUIRY_UPLOAD_LIMIT_PER_USER` | API | OPTIONAL | PUBLIC | `10` | `.env.production` | Số request multipart mỗi tài khoản mỗi giờ ở form yêu cầu; áp trước khi đọc body (F-13) |
+| `SERVICE_PROJECT_UPLOAD_LIMIT_PER_USER` | API | OPTIONAL | PUBLIC | `20` | `.env.production` | Số lần khách tải tài liệu dự án mỗi giờ; áp trước khi đọc body (F-13) |
 | `SERVICE_CONSENT_VERSION` | API | REQUIRED (production, khi bật FEATURE_SERVICES) | PUBLIC | Nhãn phiên bản chính sách, vd `2026-10-v1` (chỉ `A-Za-z0-9._-`, ≤ 64) | `.env.production` | Phiên bản được lưu cùng consent của từng yêu cầu; đổi khi nội dung chính sách đổi. Thiếu thì API dừng khởi động |
 | `PRIVACY_POLICY_URL` | API | REQUIRED (production, khi bật FEATURE_SERVICES) | PUBLIC | URL `https` của chính sách quyền riêng tư đã được duyệt | `.env.production` | Link hiển thị trên form. Repo không kèm chính sách; phải xuất bản trước. Thiếu hoặc không phải https thì API dừng khởi động |
 | `SERVICE_INQUIRY_NOTIFY_EMAILS` | Worker | OPTIONAL | PUBLIC | Danh sách email, ngăn cách bằng dấu phẩy | `.env.production` | Hộp thư nhận thông báo yêu cầu mới. Trống = tắt email; thông báo trong Admin vẫn gửi. Không có giá trị mặc định |

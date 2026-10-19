@@ -18,6 +18,7 @@ import { ServiceProjectsService } from "./service-projects.service";
 import { ServiceFileStore } from "./service-file-store";
 import { InquiryRateLimiter } from "./inquiry-rate-limiter";
 import { OptionalAuthGuard } from "./optional-auth.guard";
+import { UploadQuotaGuard } from "./upload-quota.guard";
 
 /**
  * Services Foundation: service catalog, project inquiries and the project
@@ -42,6 +43,7 @@ import { OptionalAuthGuard } from "./optional-auth.guard";
     ServiceFileStore,
     InquiryRateLimiter,
     OptionalAuthGuard,
+    UploadQuotaGuard,
   ],
 })
 export class ServicesModule {}
