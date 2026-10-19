@@ -168,6 +168,11 @@ jobs:
 
       # ST01 tests exercise real API + DB + browser and axe at 1440/768/390
       # with the Services-off CTA. Form mode remains a separate staging gate.
+      - name: Runtime smoke (API + Storefront + Portal + Admin)
+        run: |
+          bash -n infra/scripts/fullstack-runtime-smoke-ci.sh
+          bash infra/scripts/fullstack-runtime-smoke-ci.sh
+
       - name: ST01 Playwright browser acceptance (CTA)
         run: |
           bash -n infra/scripts/st01-playwright-ci.sh
