@@ -135,15 +135,7 @@ export default function EntitlementDetailPage() {
                     if (!actionCta) return null;
                     return (
                       <Link href={actionCta.href}>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          aria-label={
-                            entitlement.fulfillmentType === "EXTERNAL_MANAGED"
-                              ? "Quản lý tên miền"
-                              : actionCta.label
-                          }
-                        >
+                        <Button variant="primary" size="sm">
                           {actionCta.label}
                         </Button>
                       </Link>

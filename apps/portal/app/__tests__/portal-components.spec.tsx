@@ -534,12 +534,12 @@ describe("Portal Components Acceptance & Security Suites", () => {
     it("resolves correct action CTA for EXTERNAL_MANAGED and INTERNAL_LICENSE using resolveEntitlementActionCta", () => {
       const extCta = resolveEntitlementActionCta("EXTERNAL_MANAGED");
       expect(extCta).not.toBeNull();
-      expect(extCta?.label).toBe("Manage Domain Allocations 🌐");
+      expect(extCta?.label).toBe("Quản lý tên miền");
       expect(extCta?.href).toBe("/allocations");
 
       const intCta = resolveEntitlementActionCta("INTERNAL_LICENSE");
       expect(intCta).not.toBeNull();
-      expect(intCta?.label).toBe("View License Keys 🔑");
+      expect(intCta?.label).toBe("Xem license");
       expect(intCta?.href).toBe("/licenses");
 
       const downloadCta = resolveEntitlementActionCta("DOWNLOAD_ONLY");

@@ -9,10 +9,10 @@ export function resolveEntitlementActionCta(
   fulfillmentType?: string | null,
 ): EntitlementActionCta | null {
   if (fulfillmentType === "INTERNAL_LICENSE") {
-    return { label: "View License Keys 🔑", href: "/licenses" };
+    return { label: "Xem license", href: "/licenses" };
   }
   if (fulfillmentType === "EXTERNAL_MANAGED") {
-    return { label: "Manage Domain Allocations 🌐", href: "/allocations" };
+    return { label: "Quản lý tên miền", href: "/allocations" };
   }
   return null;
 }

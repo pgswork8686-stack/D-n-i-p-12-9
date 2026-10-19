@@ -1231,15 +1231,26 @@ async function runPhase10Acceptance() {
 
   // Gate 55: EXTERNAL_MANAGED Entitlement Detail Shows Allocation Action
   console.log("\n[Gate 55] EXTERNAL_MANAGED entitlement detail displays allocation action CTA...");
+  // Checks behaviour, not copy: the CTA label is translated, the routing rule is not.
+  const { resolveEntitlementActionCta } = require("../../../apps/portal/app/lib/portal-actions") as {
+    resolveEntitlementActionCta: (t?: string | null) => { label: string; href: string } | null;
+  };
+  const externalCta = resolveEntitlementActionCta("EXTERNAL_MANAGED");
+  if (!externalCta || externalCta.href !== "/allocations" || !externalCta.label.trim()) {
+    throw new Error(`Gate 55 failed: EXTERNAL_MANAGED must link to /allocations with a label, got ${JSON.stringify(externalCta)}`);
+  }
+  for (const other of ["INTERNAL_LICENSE", "DIGITAL_DOWNLOAD", "MANUAL_SERVICE", null, undefined]) {
+    const cta = resolveEntitlementActionCta(other);
+    if (cta?.href === "/allocations") {
+      throw new Error(`Gate 55 failed: ${String(other)} entitlements must not offer the allocation action`);
+    }
+  }
   const entDetailPageSource = fs.readFileSync(
     path.resolve(__dirname, "../../../apps/portal/app/entitlements/[id]/page.tsx"),
     "utf-8",
   );
-  if (!entDetailPageSource.includes('fulfillmentType === "EXTERNAL_MANAGED"')) {
-    throw new Error("Gate 55 failed: Entitlement detail page does not check EXTERNAL_MANAGED for allocation action CTA");
-  }
-  if (!entDetailPageSource.includes("Manage Domain Allocations")) {
-    throw new Error("Gate 55 failed: Entitlement detail page missing 'Manage Domain Allocations' CTA");
+  if (!entDetailPageSource.includes("resolveEntitlementActionCta(entitlement.fulfillmentType)")) {
+    throw new Error("Gate 55 failed: Entitlement detail page does not derive its action CTA from the entitlement's fulfillmentType");
   }
   console.log("✓ Gate 55 passed: Entitlement detail page renders allocation action exclusively for EXTERNAL_MANAGED");
 
