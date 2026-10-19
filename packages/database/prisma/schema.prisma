@@ -547,6 +547,42 @@ model PaymentEvent {
   @@map("payment_events")
 }
 
+/// A bank transfer that the payment webhook could NOT safely attach to an order
+/// (wrong amount, unknown/missing transfer code). It never changes an order by itself:
+/// staff review it, optionally re-query the provider, and record a manual decision.
+model PaymentReconciliationCase {
+  id               String    @id @default(uuid())
+  provider         String
+  externalEventId  String    @map("external_event_id")
+  /// AMOUNT_MISMATCH | UNKNOWN_TRANSFER_CODE | NO_TRANSFER_CODE
+  reason           String
+  /// OPEN | RESOLVED | DISMISSED
+  status           String    @default("OPEN")
+  paymentId        String?   @map("payment_id")
+  orderId          String?   @map("order_id")
+  transferCode     String?   @map("transfer_code")
+  /// BigInt: a large legitimate transfer must be storable; if it were not, the webhook could never be acknowledged.
+  expectedAmount   BigInt?   @map("expected_amount")
+  receivedAmount   BigInt    @map("received_amount")
+  currency         String    @default("VND")
+  rawPayloadHash   String?   @map("raw_payload_hash")
+  sanitizedPayload Json      @map("sanitized_payload")
+  /// Last provider re-query result (informational only; never confirms the payment).
+  lastRequery      Json?     @map("last_requery")
+  lastRequeryAt    DateTime? @map("last_requery_at")
+  resolutionNote   String?   @map("resolution_note")
+  resolvedById     String?   @map("resolved_by_id")
+  resolvedAt       DateTime? @map("resolved_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([provider, externalEventId])
+  @@index([status, createdAt])
+  @@index([paymentId])
+  @@index([orderId])
+  @@map("payment_reconciliation_cases")
+}
+
 model OutboxEvent {
   id            String            @id @default(uuid())
   eventType     String            @map("event_type")

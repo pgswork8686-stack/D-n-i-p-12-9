@@ -100,22 +100,22 @@ describe("Portal Components Acceptance & Security Suites", () => {
       // Verify email input exists and is enabled
       expect(html).toContain('type="email"');
       expect(html).toContain('id="email"');
-      expect(html).toContain("Email Address");
+      expect(html).toContain(">Email</label>");
 
       // Verify password input exists and is enabled
       expect(html).toContain('type="password"');
       expect(html).toContain('id="password"');
-      expect(html).toContain("Password");
+      expect(html).toContain(">Mật khẩu</label>");
 
       // Verify raw bearer token input is NOT present
       expect(html).not.toContain("Session Bearer Token");
       expect(html).not.toContain("paste a valid JWT or access token");
 
       // Verify dev presets are completely omitted in production
-      expect(html).not.toContain("Development Presets");
+      expect(html).not.toContain("Đăng nhập nhanh");
       expect(html).not.toContain("Customer 1");
       expect(html).not.toContain("dev-customer-token");
-      expect(html).not.toContain("Authentication service is currently unavailable");
+      expect(html).not.toContain("Dịch vụ đăng nhập hiện không khả dụng");
     });
 
     it("renders safe configuration warning and disables inputs when Supabase is unconfigured in production", () => {
@@ -126,9 +126,9 @@ describe("Portal Components Acceptance & Security Suites", () => {
 
       const html = renderToString(<LoginPage />);
 
-      expect(html).toContain("Authentication service is currently unavailable");
+      expect(html).toContain("Dịch vụ đăng nhập hiện không khả dụng");
       expect(html).toContain("disabled");
-      expect(html).not.toContain("Development Presets");
+      expect(html).not.toContain("Đăng nhập nhanh");
     });
 
     it("renders dev presets ONLY when explicit dev auth flags are enabled in non-production", () => {
@@ -136,7 +136,7 @@ describe("Portal Components Acceptance & Security Suites", () => {
       (process.env as any).NEXT_PUBLIC_DEV_AUTH_ENABLED = "true";
 
       const html = renderToString(<LoginPage />);
-      expect(html).toContain("Development Presets");
+      expect(html).toContain("Đăng nhập nhanh");
       expect(html).toContain("Customer 1");
       expect(html).toContain("Admin");
     });
@@ -534,12 +534,12 @@ describe("Portal Components Acceptance & Security Suites", () => {
     it("resolves correct action CTA for EXTERNAL_MANAGED and INTERNAL_LICENSE using resolveEntitlementActionCta", () => {
       const extCta = resolveEntitlementActionCta("EXTERNAL_MANAGED");
       expect(extCta).not.toBeNull();
-      expect(extCta?.label).toBe("Manage Domain Allocations 🌐");
+      expect(extCta?.label).toBe("Quản lý tên miền");
       expect(extCta?.href).toBe("/allocations");
 
       const intCta = resolveEntitlementActionCta("INTERNAL_LICENSE");
       expect(intCta).not.toBeNull();
-      expect(intCta?.label).toBe("View License Keys 🔑");
+      expect(intCta?.label).toBe("Xem license");
       expect(intCta?.href).toBe("/licenses");
 
       const downloadCta = resolveEntitlementActionCta("DOWNLOAD_ONLY");

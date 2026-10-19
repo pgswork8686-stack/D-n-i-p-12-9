@@ -41,7 +41,7 @@ export default function DashboardPage() {
       setEntitlements(entitlementsRes.items || []);
       setLicenses(licensesRes || []);
     } catch (err: any) {
-      setError(err.message || "Failed to load dashboard data");
+      setError(err.message || "Không tải được dữ liệu tổng quan.");
     } finally {
       setLoading(false);
     }
@@ -59,16 +59,16 @@ export default function DashboardPage() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl md:text-3xl font-black text-slate-900 tracking-tight">
-                Welcome back, {user?.profile?.displayName || user?.email?.split("@")[0] || "Customer"} 👋
+                Chào {user?.profile?.displayName || user?.email?.split("@")[0] || "bạn"} 👋
               </h1>
               <p className="text-slate-500 text-sm mt-1">
-                Manage your digital products, licenses, downloads, and service allocations.
+                Quản lý sản phẩm, license, tải xuống và đơn hàng của bạn.
               </p>
             </div>
             <div className="flex items-center gap-3">
               <Link href="/downloads">
                 <Button variant="primary" size="sm">
-                  Downloads Hub ⬇️
+                  Trung tâm tải xuống
                 </Button>
               </Link>
             </div>
@@ -91,7 +91,7 @@ export default function DashboardPage() {
               <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Active Products
+                    Sản phẩm của tôi
                   </span>
                   <span className="text-xl">✨</span>
                 </div>
@@ -103,7 +103,7 @@ export default function DashboardPage() {
               <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Total Orders
+                    Đơn hàng
                   </span>
                   <span className="text-xl">📦</span>
                 </div>
@@ -115,7 +115,7 @@ export default function DashboardPage() {
               <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Internal Licenses
+                    License
                   </span>
                   <span className="text-xl">🔑</span>
                 </div>
@@ -127,7 +127,7 @@ export default function DashboardPage() {
               <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Downloads Ready
+                    Tải xuống
                   </span>
                   <span className="text-xl">⬇️</span>
                 </div>
@@ -148,14 +148,14 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Recent Orders Section */}
             <Card
-              title="Recent Orders"
-              subtitle="Latest transactions and payment statuses"
+              title="Đơn hàng gần đây"
+              subtitle="Các giao dịch mới nhất và trạng thái thanh toán"
               headerAction={
                 <Link
                   href="/orders"
                   className="text-xs font-semibold text-[#0037b0] hover:underline"
                 >
-                  View All Orders →
+                  Xem tất cả đơn hàng →
                 </Link>
               }
             >
@@ -167,8 +167,8 @@ export default function DashboardPage() {
                 </div>
               ) : orders.length === 0 ? (
                 <EmptyState
-                  title="No Orders Found"
-                  description="You have not placed any orders yet."
+                  title="Chưa có đơn hàng"
+                  description="Bạn chưa đặt đơn hàng nào."
                   actionText="Browse Marketplace"
                   actionHref={
                     process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000"
@@ -205,16 +205,16 @@ export default function DashboardPage() {
               )}
             </Card>
 
-            {/* My Active Products Section */}
+            {/* My Sản phẩm của tôi Section */}
             <Card
-              title="My Products & Entitlements"
-              subtitle="Active product rights and support windows"
+              title="Sản phẩm của tôi"
+              subtitle="Quyền sử dụng và thời hạn hỗ trợ đang có hiệu lực"
               headerAction={
                 <Link
                   href="/entitlements"
                   className="text-xs font-semibold text-[#0037b0] hover:underline"
                 >
-                  View All Products →
+                  Xem tất cả sản phẩm →
                 </Link>
               }
             >
@@ -226,9 +226,9 @@ export default function DashboardPage() {
                 </div>
               ) : entitlements.length === 0 ? (
                 <EmptyState
-                  title="No Active Entitlements"
-                  description="Complete a purchase to unlock licenses and downloads."
-                  actionText="Shop Themes & Plugins"
+                  title="Chưa có sản phẩm"
+                  description="Hoàn tất một đơn hàng để nhận license và bản tải xuống."
+                  actionText="Khám phá cửa hàng"
                   actionHref={
                     process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000"
                   }
@@ -258,7 +258,7 @@ export default function DashboardPage() {
                         <StatusBadge status={ent.status} />
                         <Link href={`/entitlements/${ent.id}`}>
                           <Button variant="outline" size="sm">
-                            Manage
+                            Quản lý
                           </Button>
                         </Link>
                       </div>
@@ -280,12 +280,12 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3 shrink-0">
               <Link href="/downloads">
                 <Button variant="secondary" size="sm">
-                  Get Updates
+                  Tải bản cập nhật
                 </Button>
               </Link>
               <Link href="/licenses">
                 <Button variant="outline" size="sm" className="text-white border-white/40 hover:bg-white/10">
-                  Manage Keys
+                  Quản lý license
                 </Button>
               </Link>
             </div>

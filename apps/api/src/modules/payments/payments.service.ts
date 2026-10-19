@@ -5,7 +5,9 @@ import {
   BadRequestException,
   ForbiddenException,
   BadGatewayException,
+  ServiceUnavailableException,
   Logger,
+  Optional,
 } from "@nestjs/common";
 import { prisma, PaymentStatus, OrderStatus } from "@nexus/database";
 import {
@@ -26,6 +28,7 @@ import {
 } from "./dto/payments.dto";
 import { TestPaymentProvider } from "./test-payment.provider";
 import { PaymentProviderFactory } from "./payment-provider.factory";
+import { PaymentReconciliationService } from "./payment-reconciliation.service";
 
 interface AuthoritativePaymentEvidence {
   provider: string;
@@ -51,6 +54,7 @@ export class PaymentsService {
     private readonly auditService: AuditService,
     private readonly testProvider: TestPaymentProvider,
     private readonly providerFactory: PaymentProviderFactory,
+    @Optional() private readonly reconciliation?: PaymentReconciliationService,
   ) {}
 
   private isPaymentEventUniqueError(err: any): boolean {
@@ -549,6 +553,15 @@ export class PaymentsService {
     const normalizedEvent = await adapter.verifyWebhook(rawBody, headers);
 
     if (normalizedEvent.eventType === "ignored") {
+      // Transfers that arrived but cannot be attached to an order are queued for staff review
+      // (and audited); they never change an order.
+      if (normalizedEvent.review) {
+        // Fail closed: never ACK a transfer we could not queue for review (the provider will retry).
+        if (!this.reconciliation) {
+          throw new ServiceUnavailableException("Reconciliation queue is unavailable");
+        }
+        await this.reconciliation.recordFromWebhook(adapter.providerName, normalizedEvent);
+      }
       return {
         success: true,
         duplicate: false,

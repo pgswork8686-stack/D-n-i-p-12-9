@@ -56,6 +56,33 @@ export interface NormalizedPaymentEvent {
   providerReference: string;
   rawPayloadHash?: string;
   sanitizedPayload: Record<string, any>;
+  /**
+   * Set on "ignored" events that a human must look at (the transfer arrived but could not be
+   * safely attached to an order). Plain noise (outgoing transfers, other accounts) leaves it unset.
+   */
+  review?: ReviewableTransfer;
+}
+
+export type ReconciliationReason =
+  | "AMOUNT_MISMATCH"
+  | "UNKNOWN_TRANSFER_CODE"
+  | "NO_TRANSFER_CODE";
+
+export interface ReviewableTransfer {
+  reason: ReconciliationReason;
+  receivedAmount: number;
+  expectedAmount?: number;
+  transferCode?: string;
+  paymentId?: string;
+  orderId?: string;
+}
+
+/** One incoming bank transaction as reported by the provider API (read-only view). */
+export interface ProviderTransferView {
+  id: string;
+  amount: number;
+  transferCode: string | null;
+  occurredAt: string | null;
 }
 
 export interface NormalizedPaymentStatus {

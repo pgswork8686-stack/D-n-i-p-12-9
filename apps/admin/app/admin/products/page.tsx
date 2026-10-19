@@ -1,5 +1,6 @@
 "use client";
 
+import { catalogStatusLabel, fulfillmentLabel, productTypeLabel } from "../../lib/catalog-labels";
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
@@ -23,7 +24,7 @@ export default function AdminProductsPage() {
 
   const fetchProducts = () => {
     if (!authToken) {
-      setError("Access Denied (401 Unauthorized): Please provide an authenticated admin token or login via Supabase session.");
+      setError("Không có quyền truy cập (401). Vui lòng đăng nhập bằng tài khoản quản trị.");
       setLoading(false);
       setProducts([]);
       return;
@@ -33,7 +34,7 @@ export default function AdminProductsPage() {
     try {
       apiUrl = getApiUrl();
     } catch {
-      setError("Admin API configuration unavailable");
+      setError("Chưa cấu hình địa chỉ API quản trị.");
       setLoading(false);
       setProducts([]);
       return;
@@ -70,25 +71,25 @@ export default function AdminProductsPage() {
     <main className="max-w-6xl mx-auto py-10 px-6 font-sans">
       {isDevAuthToolsEnabled && (
         <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
-          <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
+          <span className="font-semibold text-gray-700">Giả lập token (chỉ môi trường thử nghiệm):</span>
           <div className="flex gap-2">
             <button
               onClick={() => setDevToken("dev-admin-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"}`}
             >
-              Admin Token
+              Token quản trị
             </button>
             <button
               onClick={() => setDevToken("dev-customer-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"}`}
             >
-              Customer Token (403)
+              Token khách hàng (403)
             </button>
             <button
               onClick={() => setDevToken("")}
               className={`px-2.5 py-1 rounded border font-medium ${!authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"}`}
             >
-              No Token (401)
+              Không token (401)
             </button>
           </div>
         </div>
@@ -97,50 +98,50 @@ export default function AdminProductsPage() {
         <div>
           <div className="flex items-center gap-3">
             <Link href="/" className="text-sm text-gray-500 hover:text-gray-700">
-              ← Dashboard
+              ← Tổng quan
             </Link>
           </div>
           <h1 className="text-3xl font-extrabold text-[#0037b0] mt-2">
-            Catalog Management
+            Quản lý sản phẩm
           </h1>
           <p className="text-gray-500 text-sm mt-1">
-            Manage digital products, variants, and pricing structures
+            Quản lý sản phẩm số, gói bán và giá
           </p>
         </div>
         <Link href="/admin/categories" className="mr-4 font-semibold text-blue-700 hover:underline">Danh mục</Link>
         <Link href="/admin/products/new">
-          <Button variant="primary">+ New Product</Button>
+          <Button variant="primary">+ Thêm sản phẩm</Button>
         </Link>
       </div>
 
       {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-6 border border-red-200 text-sm">
-          <strong>Error:</strong> {error}
+          <strong>Lỗi:</strong> {error}
         </div>
       )}
 
       {loading ? (
-        <div className="p-8 text-center text-gray-500">Loading catalog products...</div>
+        <div className="p-8 text-center text-gray-500">Đang tải danh sách sản phẩm…</div>
       ) : (
         <Card className="overflow-hidden p-0 border border-gray-200">
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 font-semibold">
-                  <th className="py-3 px-4">Product Name</th>
+                  <th className="py-3 px-4">Tên sản phẩm</th>
                   <th className="py-3 px-4">Slug</th>
-                  <th className="py-3 px-4">Type</th>
-                  <th className="py-3 px-4">Fulfillment</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Variants</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="py-3 px-4">Loại</th>
+                  <th className="py-3 px-4">Bàn giao</th>
+                  <th className="py-3 px-4">Trạng thái</th>
+                  <th className="py-3 px-4">Gói bán</th>
+                  <th className="py-3 px-4 text-right"><span className="sr-only">Thao tác</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {products.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-8 text-center text-gray-400">
-                      No products found. Click &quot;+ New Product&quot; to create one.
+                      Chưa có sản phẩm. Chọn “+ Thêm sản phẩm” để tạo mới.
                     </td>
                   </tr>
                 ) : (
@@ -157,12 +158,12 @@ export default function AdminProductsPage() {
                       </td>
                       <td className="py-3 px-4">
                         <span className="inline-block px-2 py-0.5 rounded text-xs bg-blue-50 text-blue-700 font-medium border border-blue-200">
-                          {p.productType}
+                          {productTypeLabel(p.productType)}
                         </span>
                       </td>
                       <td className="py-3 px-4">
                         <span className="inline-block px-2 py-0.5 rounded text-xs bg-purple-50 text-purple-700 font-medium border border-purple-200">
-                          {p.fulfillmentType}
+                          {fulfillmentLabel(p.fulfillmentType)}
                         </span>
                       </td>
                       <td className="py-3 px-4">
@@ -175,18 +176,18 @@ export default function AdminProductsPage() {
                                 : "error"
                           }
                         >
-                          {p.status}
+                          {catalogStatusLabel(p.status)}
                         </Badge>
                       </td>
                       <td className="py-3 px-4 text-gray-600">
-                        {p.variants?.length || 0} variant(s)
+                        {p.variants?.length || 0} gói
                       </td>
                       <td className="py-3 px-4 text-right">
                         <Link
                           href={`/admin/products/${p.id}`}
                           className="text-blue-600 hover:text-blue-800 font-medium text-xs underline"
                         >
-                          Edit & Variants
+                          Sửa & gói bán
                         </Link>
                       </td>
                     </tr>

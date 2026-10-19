@@ -1,43 +1,19 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# NEXUSTHEME ENTERPRISE DISASTER RECOVERY — BACKUP INTEGRITY VERIFIER
-# Verifies gzip integrity and SHA256 cryptographic signature
-# Usage: ./infra/scripts/verify-backup.sh <PATH_TO_BACKUP_SQL_GZ>
-# ==============================================================================
-
+# Backup integrity verifier.
+# Usage: ./infra/scripts/verify-backup.sh <backup.sql.gz.enc | backup.sql.gz>
+#   Encrypted: needs BACKUP_ENCRYPTION_KEY_FILE; checks the HMAC tag, the encrypted manifest and the checksum.
+#   Plaintext (dev only): checks gzip integrity and the SHA-256 file, which must exist.
 set -euo pipefail
-
+source "$(dirname "${BASH_SOURCE[0]}")/backup-lib.sh"
 BACKUP_FILE="${1:-}"
+[[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]] || { echo "[ERROR] Usage: $0 <path-to-backup>" >&2; exit 1; }
 
-if [ -z "${BACKUP_FILE}" ] || [ ! -f "${BACKUP_FILE}" ]; then
-  echo "[ERROR] Usage: $0 <path-to-nexustheme-backup.sql.gz>" >&2
-  exit 1
+if [[ "$BACKUP_FILE" == *.enc ]]; then
+  verify_backup_mac "$BACKUP_FILE" "${BACKUP_ENCRYPTION_KEY_FILE:-}" || exit 3
+  decrypt_stream "$BACKUP_FILE" "$BACKUP_ENCRYPTION_KEY_FILE" | gzip -t || { echo "[FAIL] Dump does not decrypt to valid gzip" >&2; exit 2; }
+else
+  gzip -t "$BACKUP_FILE" 2>/dev/null || { echo "[FAIL] Corrupt gzip archive: $BACKUP_FILE" >&2; exit 2; }
+  [[ -f "$BACKUP_FILE.sha256" ]] || { echo "[FAIL] Missing checksum file" >&2; exit 3; }
+  [[ "$(sha256_of "$BACKUP_FILE")" == "$(awk '{print $1}' "$BACKUP_FILE.sha256")" ]] || { echo "[FAIL] SHA256 mismatch" >&2; exit 3; }
 fi
-
-CHECKSUM_FILE="${BACKUP_FILE}.sha256"
-
-echo "Checking ${BACKUP_FILE}..."
-
-# Test gzip
-if ! gzip -t "${BACKUP_FILE}" 2>/dev/null; then
-  echo "[FAIL] Corrupt gzip archive: ${BACKUP_FILE}" >&2
-  exit 2
-fi
-
-# Test SHA256 if present
-if [ -f "${CHECKSUM_FILE}" ]; then
-  EXPECTED=$(cat "${CHECKSUM_FILE}" | awk '{print $1}')
-  if command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL=$(sha256sum "${BACKUP_FILE}" | awk '{print $1}')
-  else
-    ACTUAL=$(openssl dgst -sha256 "${BACKUP_FILE}" | awk '{print $NF}')
-  fi
-
-  if [ "${EXPECTED}" != "${ACTUAL}" ]; then
-    echo "[FAIL] SHA256 mismatch for ${BACKUP_FILE} (Expected ${EXPECTED}, got ${ACTUAL})" >&2
-    exit 3
-  fi
-fi
-
-echo "[PASS] Backup integrity verified: ${BACKUP_FILE}"
-exit 0
+echo "[PASS] Backup integrity verified: $BACKUP_FILE"

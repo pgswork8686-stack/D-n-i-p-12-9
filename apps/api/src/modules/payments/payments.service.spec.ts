@@ -3,6 +3,7 @@ import {
   BadGatewayException,
   ForbiddenException,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { PaymentsService } from "./payments.service";
@@ -568,6 +569,49 @@ describe("PaymentsService", () => {
       } as any);
       expect(owner.metadata?.clientSecret).toBeUndefined();
       expect(owner.metadata?.safeNote).toBe("ok");
+    });
+  });
+
+  describe("AD10 webhook fail-closed for transfers needing review", () => {
+    const reviewEvent = {
+      externalEventId: "sepay_77",
+      eventType: "ignored",
+      orderId: "",
+      paymentId: "",
+      amount: 0,
+      currency: "VND",
+      providerReference: "",
+      sanitizedPayload: {},
+      review: { reason: "AMOUNT_MISMATCH", receivedAmount: 800000, expectedAmount: 890000 },
+    };
+    const stubAdapter = () => {
+      (service as any).providerFactory = {
+        getAdapter: jest.fn().mockReturnValue({ providerName: "sepay", verifyWebhook: jest.fn().mockResolvedValue(reviewEvent) }),
+      };
+    };
+
+    it("does NOT acknowledge the webhook when the case cannot be stored", async () => {
+      stubAdapter();
+      (service as any).reconciliation = {
+        recordFromWebhook: jest.fn().mockRejectedValue(new ServiceUnavailableException("db down")),
+      };
+      await expect(service.handleWebhook("sepay", Buffer.from("{}"), {})).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it("does NOT acknowledge the webhook when the reconciliation queue is not wired", async () => {
+      stubAdapter();
+      (service as any).reconciliation = undefined;
+      await expect(service.handleWebhook("sepay", Buffer.from("{}"), {})).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it("acknowledges (200) once the case is stored, and never moves the order", async () => {
+      stubAdapter();
+      const record = jest.fn().mockResolvedValue(undefined);
+      (service as any).reconciliation = { recordFromWebhook: record };
+      const res = await service.handleWebhook("sepay", Buffer.from("{}"), {});
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(res.orderStatus).toBe(OrderStatus.PENDING_PAYMENT);
+      expect(res.paymentStatus).toBe(PaymentStatus.PENDING);
     });
   });
 });

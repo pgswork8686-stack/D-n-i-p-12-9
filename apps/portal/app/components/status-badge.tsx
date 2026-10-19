@@ -1,36 +1,19 @@
 import React from "react";
 import { Badge } from "@nexus/ui";
+import { statusPresentation, type StatusKind } from "../lib/status-labels";
 
 interface StatusBadgeProps {
   status: string;
+  /** Disambiguates codes that read differently per module (e.g. entitlement ACTIVE). */
+  kind?: StatusKind;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
-  switch (status) {
-    case "PAID":
-    case "ACTIVE":
-    case "PUBLISHED":
-      return <Badge variant="success">{status}</Badge>;
-
-    case "PENDING":
-    case "PENDING_PAYMENT":
-    case "PROCESSING":
-    case "DRAFT":
-    case "DEACTIVATION_REQUESTED":
-      return <Badge variant="warning">{status}</Badge>;
-
-    case "CANCELLED":
-    case "FAILED":
-    case "REVOKED":
-    case "REJECTED":
-    case "EXPIRED":
-    case "ARCHIVED":
-    case "DEACTIVATED":
-    case "SUSPENDED":
-    case "TERMINATED":
-      return <Badge variant="error">{status}</Badge>;
-
-    default:
-      return <Badge variant="info">{status}</Badge>;
-  }
+export function StatusBadge({ status, kind }: StatusBadgeProps) {
+  const { label, tone, glyph } = statusPresentation(status, kind);
+  return (
+    <Badge variant={tone}>
+      <span aria-hidden="true" className="mr-1">{glyph}</span>
+      {label}
+    </Badge>
+  );
 }

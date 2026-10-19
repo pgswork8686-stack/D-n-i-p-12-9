@@ -40,11 +40,11 @@ export default function AdminLoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isProductionUnconfigured) {
-      setError("Authentication service is temporarily unavailable. Please contact system administration.");
+      setError("Dịch vụ đăng nhập tạm thời không khả dụng. Vui lòng liên hệ quản trị hệ thống.");
       return;
     }
     if (!email.trim() || !password) {
-      setError("Please enter both email and password.");
+      setError("Vui lòng nhập email và mật khẩu.");
       return;
     }
 
@@ -55,7 +55,7 @@ export default function AdminLoginPage() {
     if (result.success) {
       router.push("/");
     } else {
-      setError(result.error || "Authentication failed. Please verify credentials.");
+      setError(result.error || "Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.");
       setLoading(false);
     }
   };
@@ -68,7 +68,7 @@ export default function AdminLoginPage() {
     if (success) {
       router.push("/");
     } else {
-      setError("Dev authentication token rejected.");
+      setError("Token đăng nhập thử nghiệm bị từ chối.");
       setLoading(false);
     }
   };
@@ -83,17 +83,17 @@ export default function AdminLoginPage() {
             A
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-            NEXUSTHEME Super Admin
+            Quản trị NexusTheme
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            Sign in to access Central Operations, CMS & Platform Control
+            Đăng nhập để quản lý vận hành, nội dung và nền tảng
           </p>
         </div>
 
-        <Card title="Admin Sign In" subtitle="Authorized personnel credentials only">
+        <Card title="Đăng nhập quản trị" subtitle="Chỉ dành cho nhân sự được cấp quyền">
           {isProductionUnconfigured && (
             <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium">
-              ⚠️ Authentication service is currently unconfigured.
+              ⚠️ Dịch vụ đăng nhập chưa được cấu hình.
             </div>
           )}
 
@@ -103,7 +103,7 @@ export default function AdminLoginPage() {
                 htmlFor="email"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
               >
-                Admin Email
+                Email quản trị
               </label>
               <input
                 id="email"
@@ -124,7 +124,7 @@ export default function AdminLoginPage() {
                 htmlFor="password"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
               >
-                Password
+                Mật khẩu
               </label>
               <input
                 id="password"
@@ -143,7 +143,7 @@ export default function AdminLoginPage() {
             {showDevTools && (
               <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
                 <span className="text-[11px] font-bold text-blue-900 block uppercase tracking-wider">
-                  Development Mode (Dev Only):
+                  Chế độ thử nghiệm (chỉ môi trường dev):
                 </span>
                 <div className="flex gap-2">
                   <button
@@ -151,14 +151,14 @@ export default function AdminLoginPage() {
                     onClick={() => handleDevLogin("dev-admin-token")}
                     className="px-3 py-1 text-xs font-semibold rounded-lg border bg-[#0037b0] text-white border-[#0037b0] hover:bg-blue-800 transition"
                   >
-                    Quick Dev Admin
+                    Đăng nhập nhanh (quản trị)
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDevLogin("dev-customer-token")}
                     className="px-3 py-1 text-xs font-semibold rounded-lg border bg-white text-slate-700 border-slate-200 hover:bg-slate-50 transition"
                   >
-                    Customer (Unauthorized)
+                    Khách hàng (không có quyền)
                   </button>
                 </div>
               </div>
@@ -177,7 +177,7 @@ export default function AdminLoginPage() {
               className="w-full justify-center"
               disabled={loading || isProductionUnconfigured}
             >
-              {loading ? "Authenticating..." : "Sign In to Admin Operations →"}
+              {loading ? "Đang đăng nhập…" : "Đăng nhập →"}
             </Button>
           </form>
         </Card>

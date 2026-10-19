@@ -195,6 +195,55 @@ describe("SepayPaymentProvider", () => {
       expect((await provider.verifyWebhook(raw, headers)).eventType).toBe("ignored");
     });
 
+    it("marks only transfers that need a human with a review reason (AD10)", async () => {
+      const provider = new SepayPaymentProvider();
+
+      findFirst.mockResolvedValue({ id: PAYMENT_ID, orderId: "order-1", amount: 299000 });
+      let e = await provider.verifyWebhook(...Object.values(webhook({ ...baseTransfer, transferAmount: 209000 })) as [Buffer, any]);
+      expect(e.review).toEqual({
+        reason: "AMOUNT_MISMATCH", receivedAmount: 209000, expectedAmount: 299000,
+        transferCode: CODE, paymentId: PAYMENT_ID, orderId: "order-1",
+      });
+
+      findFirst.mockResolvedValue(null);
+      e = await provider.verifyWebhook(...Object.values(webhook(baseTransfer)) as [Buffer, any]);
+      expect(e.review).toEqual({ reason: "UNKNOWN_TRANSFER_CODE", receivedAmount: 299000, transferCode: CODE });
+
+      e = await provider.verifyWebhook(...Object.values(webhook({ ...baseTransfer, content: "chuyen tien an trua" })) as [Buffer, any]);
+      expect(e.review).toEqual({ reason: "NO_TRANSFER_CODE", receivedAmount: 299000 });
+
+      // Noise that is not ours never creates a case.
+      for (const body of [
+        { ...baseTransfer, transferType: "out" },
+        { ...baseTransfer, accountNumber: "9999999999" },
+        { ...baseTransfer, transferAmount: -5 },
+      ]) {
+        e = await provider.verifyWebhook(...Object.values(webhook(body)) as [Buffer, any]);
+        expect(e.eventType).toBe("ignored");
+        expect(e.review).toBeUndefined();
+      }
+    });
+
+    it("keeps a large legitimate transfer reviewable but refuses amounts a Number cannot hold exactly", async () => {
+      findFirst.mockResolvedValue(null);
+      const provider = new SepayPaymentProvider();
+      let e = await provider.verifyWebhook(...Object.values(webhook({ ...baseTransfer, transferAmount: 3_500_000_000 })) as [Buffer, any]);
+      expect(e.review?.receivedAmount).toBe(3_500_000_000);
+      e = await provider.verifyWebhook(...Object.values(webhook({ ...baseTransfer, transferAmount: 1e300 })) as [Buffer, any]);
+      expect(e.review).toBeUndefined();
+    });
+
+    it("rejects transaction ids that could break the unique key instead of failing later in the database", async () => {
+      const provider = new SepayPaymentProvider();
+      for (const id of ["x".repeat(65), "a b", "id/with/slash", "💥"]) {
+        const { raw, headers } = webhook({ ...baseTransfer, id });
+        await expect(provider.verifyWebhook(raw, headers)).rejects.toBeInstanceOf(BadRequestException);
+      }
+      const ok = webhook({ ...baseTransfer, id: "FT26-279_123" });
+      findFirst.mockResolvedValue({ id: PAYMENT_ID, orderId: "o", amount: 299000 });
+      expect((await provider.verifyWebhook(ok.raw, ok.headers)).externalEventId).toBe("sepay_FT26-279_123");
+    });
+
     it("rejects malformed JSON and missing transaction ids", async () => {
       const provider = new SepayPaymentProvider();
       await expect(

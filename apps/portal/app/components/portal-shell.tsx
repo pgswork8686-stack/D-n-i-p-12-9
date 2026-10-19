@@ -9,21 +9,22 @@ import { Badge, Button } from "@nexus/ui";
 type FeatureKey = "hosting" | "membership" | "affiliate" | "finance" | "services";
 
 const NAV_ITEMS: { label: string; href: string; icon: string; feature?: FeatureKey }[] = [
+  // Order and wording follow the Figma sidebar (PT01–PT14); gated modules stay hidden until /v1/features enables them.
   { label: "Tổng quan", href: "/", icon: "📊" },
-  { label: "Đơn hàng của tôi", href: "/orders", icon: "📦" },
   { label: "Sản phẩm của tôi", href: "/entitlements", icon: "✨" },
-  { label: "Tải xuống", href: "/downloads", icon: "⬇️" },
-  { label: "License nội bộ", href: "/licenses", icon: "🔑" },
-  { label: "License quản lý hộ", href: "/allocations", icon: "🌐" },
+  { label: "Trung tâm tải xuống", href: "/downloads", icon: "⬇️" },
+  { label: "License", href: "/licenses", icon: "🔑" },
+  { label: "Kích hoạt tên miền", href: "/allocations", icon: "🌐" },
+  { label: "Đơn hàng", href: "/orders", icon: "📦" },
+  { label: "Hỗ trợ", href: "/tickets", icon: "🎫" },
+  { label: "Thông báo", href: "/notifications", icon: "🔔" },
+  { label: "Thông tin cá nhân", href: "/account", icon: "👤" },
+  { label: "Bảo mật", href: "/account/security", icon: "🔒" },
   { label: "Dịch vụ Hosting", href: "/hosting", icon: "☁️", feature: "hosting" },
   { label: "Đối tác & cộng tác viên", href: "/affiliate", icon: "🤝", feature: "affiliate" },
   { label: "Gói thành viên", href: "/subscription", icon: "👑", feature: "membership" },
   { label: "Hóa đơn & thanh toán", href: "/invoices", icon: "🧾", feature: "finance" },
   { label: "Dự án dịch vụ", href: "/services", icon: "🧩", feature: "services" },
-  { label: "Yêu cầu hỗ trợ", href: "/tickets", icon: "🎫" },
-  { label: "Thông báo", href: "/notifications", icon: "🔔" },
-  { label: "Tài khoản", href: "/account", icon: "👤" },
-  { label: "Bảo mật tài khoản", href: "/account/security", icon: "🔒" },
 ];
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
@@ -58,7 +59,7 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
                 NEXUSTHEME
               </span>
               <span className="text-[11px] font-medium text-slate-400 block uppercase tracking-wider">
-                Cổng khách hàng
+                Tài khoản khách hàng
               </span>
             </div>
           </Link>
@@ -187,6 +188,27 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         )}
+
+        {/* Desktop top bar (Figma): back to the store, notifications, account */}
+        <div className="hidden md:flex items-center justify-end gap-5 border-b border-slate-200 bg-white px-8 py-3 text-sm">
+          <a href={WEB_URL} target="_blank" rel="noreferrer" className="font-medium text-slate-600 hover:text-[#0037b0]">
+            Về cửa hàng ↗
+          </a>
+          <Link href="/notifications" aria-label="Thông báo" className="rounded-lg p-2 text-slate-600 hover:bg-slate-100">
+            🔔
+          </Link>
+          {user && (
+            <Link href="/account" className="flex items-center gap-3">
+              <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-xs font-bold text-blue-800">
+                {(user.profile?.displayName || user.email || "?").slice(0, 2).toUpperCase()}
+              </span>
+              <span className="leading-tight">
+                <span className="block font-semibold text-slate-900">{user.profile?.displayName || user.email}</span>
+                <span className="block text-xs text-slate-500">{user.email}</span>
+              </span>
+            </Link>
+          )}
+        </div>
 
         {/* Content Body */}
         <main className="flex-1 p-6 md:p-8 max-w-6xl w-full mx-auto">

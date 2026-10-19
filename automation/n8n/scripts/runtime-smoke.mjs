@@ -14,20 +14,40 @@
  *  7. signed n8n→Nexus callback shape (HMAC verified by the mock)
  *
  * No real OpenAI / Resend network calls. Mock providers only.
+ *
+ * Replay-guard Redis (replay-redis.mjs): the test's own Redis on its own Docker network, never a host Redis such as
+ * :6379. N8N_REPLAY_REDIS_HOST/PORT (legacy names N8N_SMOKE_REDIS_HOST/PORT) select another Redis only if it is a
+ * labelled, marked NexusTheme test Redis. Cleanup removes only resources labelled com.nexustheme.test=n8n-smoke.
  */
 import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { isolatedN8nEnv } from "./replay-redis.mjs";
+
+// Repo-relative paths below (workflows, the temporary credential directory) must not depend on the caller's cwd.
+process.chdir(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
 
 const N8N_IMAGE = process.env.N8N_SMOKE_IMAGE || "n8nio/n8n:2.40.0";
 const N8N_PORT = Number(process.env.N8N_SMOKE_PORT || 5678);
 const MOCK_PORT = Number(process.env.N8N_SMOKE_MOCK_PORT || 4567);
 const N8N_NAME = "nexus-n8n-smoke";
+const N8N_VOLUME = "nexus-n8n-smoke-data";
 const SECRET = process.env.N8N_SMOKE_SECRET || "smoke-automation-secret-min-32-chars";
-const REDIS_HOST = process.env.N8N_SMOKE_REDIS_HOST || "host.docker.internal";
-const REDIS_PORT = Number(process.env.N8N_SMOKE_REDIS_PORT || 6379);
+const report = (ok, label, extra = "") => {
+  console.log(`${ok ? "PASS" : "FAIL"}: ${label}${extra ? " — " + extra : ""}`);
+  if (!ok) throw new Error("Check failed: " + label);
+};
+const testEnv = isolatedN8nEnv({
+  prefix: N8N_NAME, owner: "n8n-smoke", n8nName: N8N_NAME, volume: N8N_VOLUME, report,
+  env: {
+    ...process.env,
+    N8N_REPLAY_REDIS_HOST: process.env.N8N_REPLAY_REDIS_HOST || process.env.N8N_SMOKE_REDIS_HOST,
+    N8N_REPLAY_REDIS_PORT: process.env.N8N_REPLAY_REDIS_PORT || process.env.N8N_SMOKE_REDIS_PORT,
+  },
+});
 const HOST_TARGET = process.platform === "win32" ? "host.docker.internal" : "host.docker.internal";
 
 // Must match the credential REFERENCES committed in the workflow JSON
@@ -172,20 +192,18 @@ async function main() {
   await startMockServer();
   console.log(`Mock provider server listening on :${MOCK_PORT}`);
 
-  docker(["rm", "-f", N8N_NAME], { tolerateFailure: true });
-  docker(["volume", "rm", "nexus-n8n-smoke-data"], { tolerateFailure: true });
+  await testEnv.prepare();
+  report(await testEnv.reachableFromNetwork(`http://${HOST_TARGET}:${MOCK_PORT}/`, N8N_IMAGE), "the mock providers are reachable from the test network");
 
   // Phase A: idle container (server NOT running) — import workflows + credentials.
   // Running CLI imports while the n8n server is up races the SQLite migrations.
   docker([
     "run", "-d", "--name", N8N_NAME,
     "--entrypoint", "/bin/sh",
-    "--add-host", "host.docker.internal:host-gateway",
-    "-v", "nexus-n8n-smoke-data:/home/node/.n8n",
+    ...testEnv.runArgs,
     "-e", `NODE_FUNCTION_ALLOW_BUILTIN=crypto,net`,
     "-e", `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`,
-    "-e", `N8N_REPLAY_REDIS_HOST=${REDIS_HOST}`,
-    "-e", `N8N_REPLAY_REDIS_PORT=${REDIS_PORT}`,
+    ...testEnv.replayEnv,
     "-e", `AUTOMATION_SERVICE_SECRET=${SECRET}`,
     N8N_IMAGE,
     "-c", "sleep 600",
@@ -197,35 +215,40 @@ async function main() {
     // Write credential reference files on the host, then copy them in
     // (avoids fragile inline shell quoting inside the container).
     const credDir = "automation/n8n/scripts/.smoke-cred";
-    fs.mkdirSync(credDir, { recursive: true });
-    // n8n `import:credentials` requires an ARRAY of credential objects with an id.
-    // Values here are obviously-fake placeholders — never real provider keys.
-    // Ids/names match the credential references committed in the workflow JSON.
-    fs.writeFileSync(
-      path.join(credDir, "resend-cred.json"),
-      JSON.stringify([
-        {
-          id: NEXUS_CREDENTIAL_IDS.resend,
-          name: NEXUS_CREDENTIAL_NAMES.resend,
-          type: "httpHeaderAuth",
-          data: { name: "Authorization", value: "Bearer re-smoke-not-a-real-key" },
-        },
-      ]) + "\n",
-    );
-    fs.writeFileSync(
-      path.join(credDir, "openai-cred.json"),
-      JSON.stringify([
-        {
-          id: NEXUS_CREDENTIAL_IDS.openai,
-          name: NEXUS_CREDENTIAL_NAMES.openai,
-          type: "openAiApi",
-          data: { apiKey: "sk-smoke-not-a-real-key" },
-        },
-      ]) + "\n",
-    );
-    docker(["cp", credDir, `${N8N_NAME}:/files/`]);
-    for (const f of ["resend-cred.json", "openai-cred.json"]) {
-      docker(["exec", N8N_NAME, "n8n", "import:credentials", `--input=/files/.smoke-cred/${f}`]);
+    // Removed even when an import fails (the directory is git-ignored as well).
+    try {
+      fs.mkdirSync(credDir, { recursive: true });
+      // n8n `import:credentials` requires an ARRAY of credential objects with an id.
+      // Values here are obviously-fake placeholders — never real provider keys.
+      // Ids/names match the credential references committed in the workflow JSON.
+      fs.writeFileSync(
+        path.join(credDir, "resend-cred.json"),
+        JSON.stringify([
+          {
+            id: NEXUS_CREDENTIAL_IDS.resend,
+            name: NEXUS_CREDENTIAL_NAMES.resend,
+            type: "httpHeaderAuth",
+            data: { name: "Authorization", value: "Bearer re-smoke-not-a-real-key" },
+          },
+        ]) + "\n",
+      );
+      fs.writeFileSync(
+        path.join(credDir, "openai-cred.json"),
+        JSON.stringify([
+          {
+            id: NEXUS_CREDENTIAL_IDS.openai,
+            name: NEXUS_CREDENTIAL_NAMES.openai,
+            type: "openAiApi",
+            data: { apiKey: "sk-smoke-not-a-real-key" },
+          },
+        ]) + "\n",
+      );
+      docker(["cp", credDir, `${N8N_NAME}:/files/`]);
+      for (const f of ["resend-cred.json", "openai-cred.json"]) {
+        docker(["exec", N8N_NAME, "n8n", "import:credentials", `--input=/files/.smoke-cred/${f}`]);
+      }
+    } finally {
+      fs.rmSync(credDir, { recursive: true, force: true });
     }
     for (const f of ["cms-ai-draft.json", "order-paid-email.json", "license-provisioned-email.json"]) {
       docker(["exec", N8N_NAME, "n8n", "import:workflow", `--input=/files/${f}`]);
@@ -242,13 +265,11 @@ async function main() {
     // Phase B: real n8n server on the imported data volume.
     docker([
       "run", "-d", "--name", N8N_NAME,
-      "--add-host", "host.docker.internal:host-gateway",
-      "-v", "nexus-n8n-smoke-data:/home/node/.n8n",
+      ...testEnv.runArgs,
       "-p", `${N8N_PORT}:5678`,
       "-e", `NODE_FUNCTION_ALLOW_BUILTIN=crypto,net`,
       "-e", `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`,
-      "-e", `N8N_REPLAY_REDIS_HOST=${REDIS_HOST}`,
-      "-e", `N8N_REPLAY_REDIS_PORT=${REDIS_PORT}`,
+      ...testEnv.replayEnv,
       "-e", `AUTOMATION_SERVICE_SECRET=${SECRET}`,
       "-e", `NEXUS_API_BASE_URL=http://${HOST_TARGET}:${MOCK_PORT}`,
       "-e", `RESEND_API_BASE_URL=http://${HOST_TARGET}:${MOCK_PORT}`,
@@ -486,7 +507,7 @@ async function main() {
     console.error(logs.stdout, logs.stderr);
     exitCode = 1;
   } finally {
-    docker(["rm", "-f", N8N_NAME], { tolerateFailure: true });
+    testEnv.cleanup();
     mockServer?.close();
   }
   process.exit(exitCode);
@@ -494,6 +515,6 @@ async function main() {
 
 main().catch((e) => {
   console.error("❌ SMOKE FATAL:", e);
-  try { docker(["rm", "-f", N8N_NAME], { tolerateFailure: true }); } catch {}
+  try { testEnv.cleanup(); } catch {}
   process.exit(1);
 });

@@ -40,11 +40,11 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isProductionUnconfigured) {
-      setError("Authentication service is temporarily unavailable. Please try again later.");
+      setError("Dịch vụ đăng nhập tạm thời không khả dụng. Vui lòng thử lại sau.");
       return;
     }
     if (!email.trim() || !password) {
-      setError("Please enter both your email address and password.");
+      setError("Vui lòng nhập email và mật khẩu.");
       return;
     }
 
@@ -55,7 +55,7 @@ export default function LoginPage() {
     if (result.success) {
       router.push("/");
     } else {
-      setError(result.error || "Authentication failed. Please verify credentials.");
+      setError(result.error || "Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.");
       setLoading(false);
     }
   };
@@ -68,7 +68,7 @@ export default function LoginPage() {
     if (success) {
       router.push("/");
     } else {
-      setError("Dev authentication token rejected.");
+      setError("Token đăng nhập thử nghiệm bị từ chối.");
       setLoading(false);
     }
   };
@@ -83,17 +83,17 @@ export default function LoginPage() {
             N
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-            NEXUSTHEME Customer Portal
+            Tài khoản khách hàng NexusTheme
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            Sign in to access your licenses, downloads, and orders
+            Đăng nhập để xem license, bản tải xuống và đơn hàng của bạn
           </p>
         </div>
 
-        <Card title="Customer Sign In" subtitle="Enter your account credentials">
+        <Card title="Đăng nhập" subtitle="Nhập thông tin tài khoản của bạn">
           {isProductionUnconfigured && (
             <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 font-medium">
-              ⚠️ Authentication service is currently unavailable. Please check back later or contact customer support.
+              ⚠️ Dịch vụ đăng nhập hiện không khả dụng. Vui lòng quay lại sau hoặc liên hệ hỗ trợ.
             </div>
           )}
 
@@ -103,7 +103,7 @@ export default function LoginPage() {
                 htmlFor="email"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
               >
-                Email Address
+                Email
               </label>
               <input
                 id="email"
@@ -112,7 +112,7 @@ export default function LoginPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="customer@example.com"
+                placeholder="ban@example.com"
                 required
                 disabled={loading || isProductionUnconfigured}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0037b0] focus:bg-white transition disabled:opacity-60"
@@ -124,7 +124,7 @@ export default function LoginPage() {
                 htmlFor="password"
                 className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
               >
-                Password
+                Mật khẩu
               </label>
               <input
                 id="password"
@@ -143,7 +143,7 @@ export default function LoginPage() {
             {showDevTools && (
               <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
                 <span className="text-[11px] font-bold text-blue-900 block uppercase tracking-wider">
-                  Development Presets (Local / Test Only):
+                  Đăng nhập nhanh (chỉ môi trường thử nghiệm):
                 </span>
                 <div className="flex gap-2">
                   <button
@@ -177,7 +177,7 @@ export default function LoginPage() {
               className="w-full justify-center"
               disabled={loading || isProductionUnconfigured}
             >
-              {loading ? "Authenticating..." : "Sign In to Portal →"}
+              {loading ? "Đang đăng nhập…" : "Đăng nhập →"}
             </Button>
           </form>
         </Card>

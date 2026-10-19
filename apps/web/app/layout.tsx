@@ -6,6 +6,8 @@ import { SiteHeader } from "./components/site-header";
 import { SiteFooter } from "./components/site-footer";
 import { listCategories } from "./lib/server-api";
 import { navCategories } from "./lib/home-catalog";
+import { POLICY_PAGES, policyHref } from "./lib/policy-pages";
+import { fetchPublishedPolicySlugs } from "./lib/storefront-fetch";
 
 const sans = Be_Vietnam_Pro({
   subsets: ["vietnamese", "latin"],
@@ -33,6 +35,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Nav groups come from the catalog (Admin → Danh mục), cached for 5 minutes
   // so pages that are otherwise static are not forced to render dynamically.
   const categories = navCategories(await listCategories({ revalidate: 300 }));
+  // Policy links appear only for CMS pages that are published (no approved text = no link).
+  const publishedPolicies = new Set(await fetchPublishedPolicySlugs(POLICY_PAGES.map((p) => p.slug)));
+  const policyLinks = POLICY_PAGES.filter((p) => publishedPolicies.has(p.slug)).map((p) => ({
+    href: policyHref(p.slug),
+    label: p.title,
+  }));
   return (
     <html lang="vi" className={sans.variable}>
       <body className="flex min-h-screen flex-col antialiased">
@@ -47,7 +55,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <main id="main" className="flex-1">
             {children}
           </main>
-          <SiteFooter categories={categories} />
+          <SiteFooter categories={categories} policies={policyLinks} />
         </Providers>
       </body>
     </html>

@@ -1,5 +1,6 @@
 "use client";
 
+import { postStatusLabel } from "../lib/catalog-labels";
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
@@ -31,7 +32,7 @@ export default function AdminContentPage() {
   const fetchPosts = useCallback(async () => {
     if (!token) {
       if (!authLoading) {
-        setError("Access Denied (401 Unauthorized): Please sign in with an authenticated admin account.");
+        setError("Không có quyền truy cập (401). Vui lòng đăng nhập bằng tài khoản quản trị.");
         setLoading(false);
         setPosts([]);
       }
@@ -53,7 +54,7 @@ export default function AdminContentPage() {
       setTotalItems(res.total || 0);
       setError(null);
     } catch (err: any) {
-      setError(err.message || "Failed to load content posts.");
+      setError(err.message || "Không tải được danh sách bài viết.");
       setPosts([]);
     } finally {
       setLoading(false);
@@ -78,7 +79,7 @@ export default function AdminContentPage() {
     <main className="max-w-7xl mx-auto py-10 px-6 font-sans">
       {showDevTools && (
         <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
-          <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
+          <span className="font-semibold text-gray-700">Giả lập token (chỉ môi trường thử nghiệm):</span>
           <div className="flex gap-2">
             <button
               onClick={() => loginWithDevToken("dev-admin-token")}
@@ -86,7 +87,7 @@ export default function AdminContentPage() {
                 token === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"
               }`}
             >
-              Admin Token (Pass)
+              Token quản trị (hợp lệ)
             </button>
             <button
               onClick={() => loginWithDevToken("dev-customer-token")}
@@ -94,7 +95,7 @@ export default function AdminContentPage() {
                 token === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"
               }`}
             >
-              Customer Token (403)
+              Token khách hàng (403)
             </button>
           </div>
         </div>
@@ -103,11 +104,11 @@ export default function AdminContentPage() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-gray-900">CMS & Publishing System</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Nội dung & xuất bản</h1>
             <Badge variant="info">{totalItems} Posts</Badge>
           </div>
           <p className="text-sm text-gray-500 mt-1">
-            Authoritative lifecycle transitions, SEO metadata, and scheduled release management.
+            Quản lý vòng đời bài viết, SEO và lịch xuất bản.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -128,7 +129,7 @@ export default function AdminContentPage() {
         <form onSubmit={handleSearchSubmit} className="flex gap-2 w-full md:w-auto">
           <input
             type="text"
-            placeholder="Search by title or slug..."
+            placeholder="Tìm theo tiêu đề hoặc slug…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0037b0] w-full md:w-72"
@@ -139,7 +140,7 @@ export default function AdminContentPage() {
         </form>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
-          <label className="text-xs font-semibold text-gray-600">Status:</label>
+          <label className="text-xs font-semibold text-gray-600">Trạng thái:</label>
           <select
             value={statusFilter}
             onChange={(e) => {
@@ -148,14 +149,14 @@ export default function AdminContentPage() {
             }}
             className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#0037b0]"
           >
-            <option value="">All Statuses</option>
-            <option value="IDEA">IDEA</option>
-            <option value="DRAFT">DRAFT</option>
-            <option value="AI_DRAFT">AI_DRAFT</option>
-            <option value="REVIEW">REVIEW</option>
-            <option value="SCHEDULED">SCHEDULED</option>
-            <option value="PUBLISHED">PUBLISHED</option>
-            <option value="ARCHIVED">ARCHIVED</option>
+            <option value="">Tất cả trạng thái</option>
+            <option value="IDEA">Ý tưởng</option>
+            <option value="DRAFT">Bản nháp</option>
+            <option value="AI_DRAFT">Nháp AI</option>
+            <option value="REVIEW">Chờ duyệt</option>
+            <option value="SCHEDULED">Đã lên lịch</option>
+            <option value="PUBLISHED">Đã xuất bản</option>
+            <option value="ARCHIVED">Đã lưu trữ</option>
           </select>
         </div>
       </div>
@@ -163,50 +164,50 @@ export default function AdminContentPage() {
       {error ? (
         <div className="p-8 bg-red-50 border border-red-200 rounded-xl text-center space-y-3 mb-6">
           <div className="text-2xl">⚠️</div>
-          <h3 className="text-sm font-bold text-red-800">Error Loading Content Posts</h3>
+          <h3 className="text-sm font-bold text-red-800">Không tải được bài viết</h3>
           <p className="text-xs text-red-600">{error}</p>
           {!token && (
             <div className="pt-2">
               <Link href="/login">
                 <Button variant="primary" size="sm">
-                  Sign In to Super Admin
+                  Đăng nhập quản trị
                 </Button>
               </Link>
             </div>
           )}
         </div>
       ) : loading || authLoading ? (
-        <div className="p-12 text-center text-gray-500 text-sm">Loading articles...</div>
+        <div className="p-12 text-center text-gray-500 text-sm">Đang tải bài viết…</div>
       ) : posts.length === 0 ? (
         <Card>
           <div className="p-12 text-center space-y-3">
             <div className="text-3xl">📝</div>
-            <h3 className="text-base font-semibold text-gray-800">No Content Posts Found</h3>
+            <h3 className="text-base font-semibold text-gray-800">Chưa có bài viết</h3>
             <p className="text-xs text-gray-500">
               {statusFilter
-                ? `There are no posts with status '${statusFilter}'.`
-                : "Create your first article or page to get started."}
+                ? `Không có bài viết ở trạng thái “${postStatusLabel(statusFilter)}”.`
+                : "Hãy tạo bài viết hoặc trang đầu tiên."}
             </p>
             <Link href="/content/new">
               <Button variant="primary" size="sm">
-                Create First Article
+                Tạo bài viết đầu tiên
               </Button>
             </Link>
           </div>
         </Card>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-600 uppercase tracking-wider">
                 <tr>
-                  <th className="px-4 py-3">Title / Slug</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Category</th>
-                  <th className="px-4 py-3">Author</th>
-                  <th className="px-4 py-3">Date Info</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
+                  <th className="px-4 py-3">Tiêu đề / slug</th>
+                  <th className="px-4 py-3">Trạng thái</th>
+                  <th className="px-4 py-3">Loại</th>
+                  <th className="px-4 py-3">Danh mục</th>
+                  <th className="px-4 py-3">Tác giả</th>
+                  <th className="px-4 py-3">Ngày</th>
+                  <th className="px-4 py-3 text-right"><span className="sr-only">Thao tác</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -218,7 +219,7 @@ export default function AdminContentPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={STATUS_COLORS[post.status] || "info"}>
-                        {post.status}
+                        {postStatusLabel(post.status)}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-600">{post.contentType}</td>
@@ -226,25 +227,25 @@ export default function AdminContentPage() {
                       {post.category ? post.category.name : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-600">
-                      {post.author?.displayName || post.author?.email || <span className="text-gray-400">System</span>}
+                      {post.author?.displayName || post.author?.email || <span className="text-gray-400">Hệ thống</span>}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {post.status === "PUBLISHED" && post.publishedAt && (
-                        <div>Pub: {new Date(post.publishedAt).toLocaleDateString()}</div>
+                        <div>Xuất bản: {new Date(post.publishedAt).toLocaleDateString("vi-VN")}</div>
                       )}
                       {post.status === "SCHEDULED" && post.scheduledAt && (
                         <div className="text-amber-600 font-medium">
-                          Sched: {new Date(post.scheduledAt).toLocaleString()}
+                          Hẹn giờ: {new Date(post.scheduledAt).toLocaleString("vi-VN")}
                         </div>
                       )}
                       <div className="text-[10px] text-gray-400">
-                        {post.readingTimeMinutes ? `${post.readingTimeMinutes} min read` : ""}
+                        {post.readingTimeMinutes ? `${post.readingTimeMinutes} phút đọc` : ""}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Link href={`/content/${post.id}`}>
                         <Button variant="outline" size="sm">
-                          Edit / Manage
+                          Sửa / quản lý
                         </Button>
                       </Link>
                     </td>
@@ -257,7 +258,7 @@ export default function AdminContentPage() {
           {totalPages > 1 && (
             <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
               <div>
-                Page {page} of {totalPages}
+                Trang {page} / {totalPages}
               </div>
               <div className="flex gap-2">
                 <Button
@@ -266,7 +267,7 @@ export default function AdminContentPage() {
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                 >
-                  Previous
+                  Trước
                 </Button>
                 <Button
                   variant="outline"
@@ -274,7 +275,7 @@ export default function AdminContentPage() {
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 >
-                  Next
+                  Sau
                 </Button>
               </div>
             </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { fulfillmentLabel, productTypeLabel } from "../../../lib/catalog-labels";
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -66,7 +67,7 @@ export default function NewProductPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authToken) {
-      setError("Access Denied (401 Unauthorized): Please provide an authenticated admin token or login via Supabase session.");
+      setError("Không có quyền truy cập (401). Vui lòng đăng nhập bằng tài khoản quản trị.");
       return;
     }
     setSubmitting(true);
@@ -85,7 +86,7 @@ export default function NewProductPage() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || `Failed to create product (${res.status})`);
+        throw new Error(body.message || `Không tạo được sản phẩm (${res.status})`);
       }
 
       const created = await res.json();
@@ -101,44 +102,44 @@ export default function NewProductPage() {
     <main className="max-w-3xl mx-auto py-10 px-6 font-sans">
       {isDevAuthToolsEnabled && (
         <div className="mb-6 bg-white p-3 rounded-lg border border-gray-200 flex items-center justify-between text-xs">
-          <span className="font-semibold text-gray-700">Simulate Token (Dev Only):</span>
+          <span className="font-semibold text-gray-700">Giả lập token (chỉ môi trường thử nghiệm):</span>
           <div className="flex gap-2">
             <button
               onClick={() => setDevToken("dev-admin-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-admin-token" ? "bg-[#0037b0] text-white" : "bg-white text-gray-700"}`}
             >
-              Admin Token
+              Token quản trị
             </button>
             <button
               onClick={() => setDevToken("dev-customer-token")}
               className={`px-2.5 py-1 rounded border font-medium ${authToken === "dev-customer-token" ? "bg-amber-600 text-white" : "bg-white text-gray-700"}`}
             >
-              Customer Token (403)
+              Token khách hàng (403)
             </button>
             <button
               onClick={() => setDevToken("")}
               className={`px-2.5 py-1 rounded border font-medium ${!authToken ? "bg-red-600 text-white" : "bg-white text-gray-700"}`}
             >
-              No Token (401)
+              Không token (401)
             </button>
           </div>
         </div>
       )}
       <div className="pb-6 border-b border-gray-200 mb-8">
         <Link href="/admin/products" className="text-sm text-gray-500 hover:text-gray-700">
-          ← Back to Products
+          ← Sản phẩm
         </Link>
         <h1 className="text-3xl font-extrabold text-[#0037b0] mt-2">
-          Create New Product
+          Thêm sản phẩm
         </h1>
         <p className="text-gray-500 text-sm mt-1">
-          Configure product metadata, fulfillment strategy, and catalog defaults
+          Nhập thông tin sản phẩm, hình thức bàn giao và trạng thái ban đầu
         </p>
       </div>
 
       {error && (
         <div className="bg-red-50 text-red-700 p-4 rounded-lg mb-6 border border-red-200 text-sm">
-          <strong>Validation Error:</strong> {error}
+          <strong>Dữ liệu chưa hợp lệ:</strong> {error}
         </div>
       )}
 
@@ -146,10 +147,10 @@ export default function NewProductPage() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Product Name *
+              <label htmlFor="np-1" className="block text-xs font-semibold text-gray-700 mb-1">
+                Tên sản phẩm *
               </label>
-              <input
+              <input id="np-1"
                 type="text"
                 required
                 value={formData.name}
@@ -160,14 +161,14 @@ export default function NewProductPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Slug (URL-safe) *
+              <label htmlFor="np-2" className="block text-xs font-semibold text-gray-700 mb-1">
+                Đường dẫn (slug) *
               </label>
-              <input
+              <input id="np-2"
                 type="text"
                 required
                 pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                title="Must be lowercase alphanumeric with hyphens"
+                title="Chỉ gồm chữ thường, số và dấu gạch ngang"
                 value={formData.slug}
                 onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
                 placeholder="e.g. nexus-pro-plugin"
@@ -178,60 +179,60 @@ export default function NewProductPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Product Type *
+              <label htmlFor="np-3" className="block text-xs font-semibold text-gray-700 mb-1">
+                Loại sản phẩm *
               </label>
-              <select
+              <select id="np-3"
                 value={formData.productType}
                 onChange={(e) => setFormData({ ...formData, productType: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {PRODUCT_TYPES.map((t) => (
                   <option key={t} value={t}>
-                    {t}
+                    {productTypeLabel(t)}
                   </option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Fulfillment Type *
+              <label htmlFor="np-4" className="block text-xs font-semibold text-gray-700 mb-1">
+                Hình thức bàn giao *
               </label>
-              <select
+              <select id="np-4"
                 value={formData.fulfillmentType}
                 onChange={(e) => setFormData({ ...formData, fulfillmentType: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {FULFILLMENT_TYPES.map((f) => (
                   <option key={f} value={f}>
-                    {f}
+                    {fulfillmentLabel(f)}
                   </option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Initial Status *
+              <label htmlFor="np-5" className="block text-xs font-semibold text-gray-700 mb-1">
+                Trạng thái ban đầu *
               </label>
-              <select
+              <select id="np-5"
                 value={formData.status}
                 onChange={(e) => setFormData({ ...formData, status: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="DRAFT">DRAFT (Hidden)</option>
-                <option value="ACTIVE">ACTIVE (Published)</option>
-                <option value="ARCHIVED">ARCHIVED</option>
+                <option value="DRAFT">Bản nháp (ẩn)</option>
+                <option value="ACTIVE">Đang bán (công khai)</option>
+                <option value="ARCHIVED">Đã lưu trữ</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              Brand / Vendor Name
+            <label htmlFor="np-6" className="block text-xs font-semibold text-gray-700 mb-1">
+              Thương hiệu / nhà cung cấp
             </label>
-            <input
+            <input id="np-6"
               type="text"
               value={formData.brand}
               onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
@@ -241,27 +242,27 @@ export default function NewProductPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              Short Description
+            <label htmlFor="np-7" className="block text-xs font-semibold text-gray-700 mb-1">
+              Mô tả ngắn
             </label>
-            <input
+            <input id="np-7"
               type="text"
               value={formData.shortDescription}
               onChange={(e) => setFormData({ ...formData, shortDescription: e.target.value })}
-              placeholder="Brief summary for listings..."
+              placeholder="Tóm tắt ngắn hiển thị ở danh sách…"
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
-              Full Description
+            <label htmlFor="np-8" className="block text-xs font-semibold text-gray-700 mb-1">
+              Mô tả đầy đủ
             </label>
-            <textarea
+            <textarea id="np-8"
               rows={4}
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Detailed product information, features, compatibility..."
+              placeholder="Thông tin chi tiết, tính năng, khả năng tương thích…"
               className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -269,11 +270,11 @@ export default function NewProductPage() {
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
             <Link href="/admin/products">
               <Button variant="outline" type="button">
-                Cancel
+                Hủy
               </Button>
             </Link>
-            <Button variant="primary" type="submit" disabled={submitting}>
-              {submitting ? "Saving..." : "Create Product"}
+            <Button variant="primary" type="submit" disabled={submitting || authLoading}>
+              {submitting ? "Đang lưu…" : "Tạo sản phẩm"}
             </Button>
           </div>
         </form>

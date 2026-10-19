@@ -1,5 +1,6 @@
 "use client";
 
+import { postStatusLabel } from "../../lib/catalog-labels";
 import React, { useEffect, useState, use, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
@@ -16,32 +17,32 @@ const STATUS_TRANSITIONS: Record<
   string,
   { label: string; target: ContentStatus; variant: "primary" | "secondary" | "outline" | "danger" }[]
 > = {
-  IDEA: [{ label: "Start Draft", target: ContentStatus.DRAFT, variant: "primary" }],
+  IDEA: [{ label: "Bắt đầu soạn thảo", target: ContentStatus.DRAFT, variant: "primary" }],
   DRAFT: [
-    { label: "Submit for Review", target: ContentStatus.REVIEW, variant: "primary" },
+    { label: "Gửi duyệt", target: ContentStatus.REVIEW, variant: "primary" },
     { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   AI_DRAFT: [
-    { label: "Submit for Review", target: ContentStatus.REVIEW, variant: "primary" },
-    { label: "Convert to Manual Draft", target: ContentStatus.DRAFT, variant: "secondary" },
+    { label: "Gửi duyệt", target: ContentStatus.REVIEW, variant: "primary" },
+    { label: "Chuyển thành bản nháp thủ công", target: ContentStatus.DRAFT, variant: "secondary" },
     { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   REVIEW: [
     { label: "🚀 Publish Now", target: ContentStatus.PUBLISHED, variant: "primary" },
     { label: "📅 Schedule Publication", target: ContentStatus.SCHEDULED, variant: "secondary" },
-    { label: "Send Back to Draft", target: ContentStatus.DRAFT, variant: "outline" },
+    { label: "Trả về bản nháp", target: ContentStatus.DRAFT, variant: "outline" },
     { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   SCHEDULED: [
-    { label: "Publish Immediately", target: ContentStatus.PUBLISHED, variant: "primary" },
-    { label: "Revert to Draft", target: ContentStatus.DRAFT, variant: "outline" },
+    { label: "Xuất bản ngay", target: ContentStatus.PUBLISHED, variant: "primary" },
+    { label: "Chuyển về bản nháp", target: ContentStatus.DRAFT, variant: "outline" },
     { label: "Archive", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   PUBLISHED: [
-    { label: "Archive Post", target: ContentStatus.ARCHIVED, variant: "danger" },
+    { label: "Lưu trữ bài viết", target: ContentStatus.ARCHIVED, variant: "danger" },
   ],
   ARCHIVED: [
-    { label: "Restore to Draft", target: ContentStatus.DRAFT, variant: "secondary" },
+    { label: "Khôi phục về bản nháp", target: ContentStatus.DRAFT, variant: "secondary" },
   ],
 };
 
@@ -95,7 +96,7 @@ export default function EditContentPage({
   const fetchPostAndCategories = useCallback(async () => {
     if (!token) {
       if (!authLoading) {
-        setError("Unauthorized (401): Please sign in with an admin auth token.");
+        setError("Chưa đăng nhập (401): cần tài khoản quản trị.");
         setLoading(false);
       }
       return;
@@ -132,7 +133,7 @@ export default function EditContentPage({
       setOgImageUrl(postData.ogImageUrl || "");
       setError(null);
     } catch (err: any) {
-      setError(err.message || "Error loading post");
+      setError(err.message || "Không tải được bài viết");
     } finally {
       setLoading(false);
     }
@@ -171,9 +172,9 @@ export default function EditContentPage({
       const client = getApiClient(token);
       const updated = await client.updateContentPost(id, payload);
       setPost(updated);
-      setSuccessMsg("Content post updated successfully.");
+      setSuccessMsg("Đã cập nhật bài viết.");
     } catch (err: any) {
-      setError(err.message || "Failed to update post.");
+      setError(err.message || "Không cập nhật được bài viết.");
     } finally {
       setSaving(false);
     }
@@ -202,16 +203,16 @@ export default function EditContentPage({
       const updated = await client.transitionContentPost(id, payload);
       setPost(updated);
       setShowScheduleModal(false);
-      setSuccessMsg(`Status transitioned to '${targetStatus}' successfully.`);
+      setSuccessMsg(`Đã chuyển trạng thái sang “${postStatusLabel(targetStatus)}”.`);
     } catch (err: any) {
-      setError(err.message || "Status transition failed.");
+      setError(err.message || "Chuyển trạng thái thất bại.");
     } finally {
       setTransitioning(false);
     }
   };
 
   if (loading || authLoading) {
-    return <div className="max-w-4xl mx-auto py-12 px-6 text-sm text-gray-500">Loading post...</div>;
+    return <div className="max-w-4xl mx-auto py-12 px-6 text-sm text-gray-500">Đang tải bài viết…</div>;
   }
 
   return (
@@ -219,10 +220,10 @@ export default function EditContentPage({
       <div className="flex items-center justify-between mb-6 pb-4 border-b border-gray-200">
         <div>
           <Link href="/content" className="text-xs text-[#0037b0] hover:underline font-semibold">
-            ← Back to Content List
+            ← Danh sách nội dung
           </Link>
           <div className="flex items-center gap-3 mt-1">
-            <h1 className="text-2xl font-bold text-gray-900">{post?.title || "Edit Article"}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{post?.title || "Sửa bài viết"}</h1>
             {post && (
               <Badge variant={STATUS_COLORS[post.status] || "info"}>
                 {post.status}
@@ -251,10 +252,10 @@ export default function EditContentPage({
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <span className="text-xs font-bold uppercase tracking-wider text-blue-900">
-              Workflow Lifecycle Action
+              Thao tác theo quy trình
             </span>
             <p className="text-xs text-blue-700 mt-0.5">
-              Current state is <strong>{post.status}</strong>. Choose an authoritative state transition:
+              Trạng thái hiện tại: <strong>{postStatusLabel(post.status)}</strong>. Chọn bước chuyển tiếp:
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -284,15 +285,15 @@ export default function EditContentPage({
       {showScheduleModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <h3 className="text-lg font-bold text-gray-900">Schedule Post Publication</h3>
+            <h3 className="text-lg font-bold text-gray-900">Hẹn giờ xuất bản</h3>
             <p className="text-xs text-gray-600">
-              Select a future release timestamp. The background worker will automatically publish this article when the scheduled time is reached.
+              Chọn thời điểm trong tương lai. Hệ thống sẽ tự xuất bản bài viết khi đến giờ.
             </p>
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Release Date & Time (Future)
+              <label htmlFor="ce-1" className="block text-xs font-semibold text-gray-700 mb-1">
+                Ngày giờ xuất bản (tương lai)
               </label>
-              <input
+              <input id="ce-1"
                 type="datetime-local"
                 value={scheduleTargetTime}
                 onChange={(e) => setScheduleTargetTime(e.target.value)}
@@ -305,7 +306,7 @@ export default function EditContentPage({
                 size="sm"
                 onClick={() => setShowScheduleModal(false)}
               >
-                Cancel
+                Hủy
               </Button>
               <Button
                 variant="primary"
@@ -313,7 +314,7 @@ export default function EditContentPage({
                 disabled={!scheduleTargetTime}
                 onClick={() => handleTransition(ContentStatus.SCHEDULED, scheduleTargetTime)}
               >
-                Confirm Schedule
+                Xác nhận hẹn giờ
               </Button>
             </div>
           </div>
@@ -322,7 +323,7 @@ export default function EditContentPage({
 
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs mb-6">
-          <strong>Error:</strong> {error}
+          <strong>Lỗi:</strong> {error}
         </div>
       )}
       {successMsg && (
@@ -332,13 +333,13 @@ export default function EditContentPage({
       )}
 
       <form onSubmit={handleUpdate} className="space-y-6">
-        <Card title="Article Content">
+        <Card title="Nội dung bài viết">
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Title <span className="text-red-500">*</span>
+              <label htmlFor="ce-2" className="block text-xs font-semibold text-gray-700 mb-1">
+                Tiêu đề <span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="ce-2"
                 type="text"
                 required
                 value={title}
@@ -349,10 +350,10 @@ export default function EditContentPage({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="ce-3" className="block text-xs font-semibold text-gray-700 mb-1">
                   URL Slug
                 </label>
-                <input
+                <input id="ce-3"
                   type="text"
                   required
                   value={slug}
@@ -362,15 +363,15 @@ export default function EditContentPage({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="ce-4" className="block text-xs font-semibold text-gray-700 mb-1">
                   Category
                 </label>
-                <select
+                <select id="ce-4"
                   value={categoryId}
                   onChange={(e) => setCategoryId(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value="">-- No Category --</option>
+                  <option value="">-- Không có danh mục --</option>
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -382,25 +383,25 @@ export default function EditContentPage({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Content Type
+                <label htmlFor="ce-5" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Loại nội dung
                 </label>
-                <select
+                <select id="ce-5"
                   value={contentType}
                   onChange={(e) => setContentType(e.target.value as ContentType)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value={ContentType.ARTICLE}>ARTICLE</option>
-                  <option value={ContentType.PAGE}>PAGE</option>
+                  <option value={ContentType.ARTICLE}>Bài viết</option>
+                  <option value={ContentType.PAGE}>Trang</option>
                 </select>
               </div>
 
               {post?.status === "SCHEDULED" && (
                 <div>
-                  <label className="block text-xs font-semibold text-amber-700 mb-1">
-                    Scheduled At (Worker auto-publishes)
+                  <label htmlFor="ce-6" className="block text-xs font-semibold text-amber-700 mb-1">
+                    Hẹn giờ lúc (tự động xuất bản)
                   </label>
-                  <input
+                  <input id="ce-6"
                     type="datetime-local"
                     value={scheduledAt}
                     onChange={(e) => setScheduledAt(e.target.value)}
@@ -411,10 +412,10 @@ export default function EditContentPage({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
+              <label htmlFor="ce-7" className="block text-xs font-semibold text-gray-700 mb-1">
                 Excerpt
               </label>
-              <textarea
+              <textarea id="ce-7"
                 rows={2}
                 value={excerpt}
                 onChange={(e) => setExcerpt(e.target.value)}
@@ -423,10 +424,10 @@ export default function EditContentPage({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Content Body (HTML or Markdown) <span className="text-red-500">*</span>
+              <label htmlFor="ce-8" className="block text-xs font-semibold text-gray-700 mb-1">
+                Nội dung (HTML hoặc Markdown) <span className="text-red-500">*</span>
               </label>
-              <textarea
+              <textarea id="ce-8"
                 rows={14}
                 required
                 value={content}
@@ -437,14 +438,14 @@ export default function EditContentPage({
           </div>
         </Card>
 
-        <Card title="SEO & Canonical Configuration">
+        <Card title="SEO & URL chuẩn (canonical)">
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Custom SEO Title
+                <label htmlFor="ce-9" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Tiêu đề SEO tùy chỉnh
                 </label>
-                <input
+                <input id="ce-9"
                   type="text"
                   value={seoTitle}
                   onChange={(e) => setSeoTitle(e.target.value)}
@@ -453,10 +454,10 @@ export default function EditContentPage({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Canonical URL
+                <label htmlFor="ce-10" className="block text-xs font-semibold text-gray-700 mb-1">
+                  URL chuẩn (canonical)
                 </label>
-                <input
+                <input id="ce-10"
                   type="url"
                   value={canonicalUrl}
                   onChange={(e) => setCanonicalUrl(e.target.value)}
@@ -467,10 +468,10 @@ export default function EditContentPage({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Meta Description
+              <label htmlFor="ce-11" className="block text-xs font-semibold text-gray-700 mb-1">
+                Mô tả meta
               </label>
-              <textarea
+              <textarea id="ce-11"
                 rows={2}
                 value={seoDescription}
                 onChange={(e) => setSeoDescription(e.target.value)}
@@ -480,10 +481,10 @@ export default function EditContentPage({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Featured Image URL
+                <label htmlFor="ce-12" className="block text-xs font-semibold text-gray-700 mb-1">
+                  URL ảnh đại diện
                 </label>
-                <input
+                <input id="ce-12"
                   type="url"
                   value={featuredImageUrl}
                   onChange={(e) => setFeaturedImageUrl(e.target.value)}
@@ -492,10 +493,10 @@ export default function EditContentPage({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Featured Image Alt Text
+                <label htmlFor="ce-13" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Văn bản thay thế của ảnh đại diện
                 </label>
-                <input
+                <input id="ce-13"
                   type="text"
                   value={featuredImageAlt}
                   onChange={(e) => setFeaturedImageAlt(e.target.value)}
@@ -505,10 +506,10 @@ export default function EditContentPage({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
+              <label htmlFor="ce-14" className="block text-xs font-semibold text-gray-700 mb-1">
                 OpenGraph Image URL
               </label>
-              <input
+              <input id="ce-14"
                 type="url"
                 value={ogImageUrl}
                 onChange={(e) => setOgImageUrl(e.target.value)}
@@ -525,7 +526,7 @@ export default function EditContentPage({
             </Button>
           </Link>
           <Button type="submit" variant="primary" disabled={saving || authLoading}>
-            {saving ? "Saving Changes..." : "Save Changes"}
+            {saving ? "Đang lưu…" : "Lưu thay đổi"}
           </Button>
         </div>
       </form>
