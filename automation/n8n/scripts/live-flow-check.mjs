@@ -11,19 +11,30 @@
  *  - the license email carries a MASKED key and never the plaintext key
  *  - n8n's signed callback is accepted by the real API and the jobs end SUCCEEDED (not FAILED/stuck)
  *
- * Prerequisites (this script starts n8n and the sink itself):
+ * Prerequisites (this script starts n8n, its replay-guard Redis and the sink itself):
  *  - API running with ENABLE_TEST_PAYMENT_PROVIDER=true, TEST_PAYMENT_WEBHOOK_SECRET and AUTOMATION_SERVICE_SECRET
  *  - worker running with the SAME AUTOMATION_SERVICE_SECRET and N8N_WEBHOOK_BASE_URL=http://localhost:5678
- *  - Redis on localhost:6379 (n8n replay guard), Docker, image n8nio/n8n:2.40.0
+ *  - Docker, images n8nio/n8n:2.40.0 and redis:7-alpine
+ *
+ * Replay-guard Redis isolation (see replay-redis.mjs): by default the script starts its OWN Redis on its OWN Docker
+ * network (no host port) and never falls back to a host Redis such as :6379. N8N_REPLAY_REDIS_HOST/PORT select another
+ * Redis only if it is marked as a NexusTheme test Redis. Cleanup removes only resources labelled
+ * com.nexustheme.test=n8n-live (never a global prune).
  *
  * Env: API_URL (http://localhost:4000), N8N_LIVE_SECRET (AUTOMATION_SERVICE_SECRET value), N8N_LIVE_PRODUCT_SLUG (klinmart),
- *      TEST_PAYMENT_WEBHOOK_SECRET, N8N_SMOKE_IMAGE, N8N_LIVE_PORT (5678), N8N_LIVE_SINK_PORT (4567)
+ *      TEST_PAYMENT_WEBHOOK_SECRET, N8N_SMOKE_IMAGE, N8N_LIVE_PORT (5678), N8N_LIVE_SINK_PORT (4567),
+ *      N8N_REPLAY_REDIS_HOST / N8N_REPLAY_REDIS_PORT / N8N_REPLAY_REDIS_PASSWORD (optional), N8N_TEST_REDIS_IMAGE (redis:7-alpine)
  */
 import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { isolatedN8nEnv } from "./replay-redis.mjs";
+
+// Repo-relative paths below (workflows, the temporary credential directory) must not depend on the caller's cwd.
+process.chdir(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.."));
 
 const API = (process.env.API_URL || "http://localhost:4000").replace(/\/+$/, "");
 const IMAGE = process.env.N8N_SMOKE_IMAGE || "n8nio/n8n:2.40.0";
@@ -100,29 +111,37 @@ function startSink() {
   });
 }
 
+const testEnv = isolatedN8nEnv({ prefix: NAME, owner: "n8n-live", n8nName: NAME, volume: VOLUME, report: check });
+
 async function startN8n() {
-  docker(["rm", "-f", NAME], { tolerate: true });
-  docker(["volume", "rm", VOLUME], { tolerate: true });
-  docker(["run", "-d", "--name", NAME, "--entrypoint", "/bin/sh", "--add-host", `${HOST}:host-gateway`, "-v", `${VOLUME}:/home/node/.n8n`,
+  await testEnv.prepare();
+  // n8n calls the API and the sink from inside the test network; prove both are reachable before buying anything.
+  const apiFromN8n = `http://${HOST}:${new URL(API).port || 4000}`;
+  check(testEnv.reachableFromNetwork(apiFromN8n, IMAGE), "the real API is reachable from the test network", apiFromN8n);
+  check(testEnv.reachableFromNetwork(`http://${HOST}:${SINK_PORT}/`, IMAGE), "the email sink is reachable from the test network");
+  docker(["run", "-d", "--name", NAME, ...testEnv.runArgs, "--entrypoint", "/bin/sh",
     "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto,net", "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false", IMAGE, "-c", "sleep 600"]);
   docker(["cp", "automation/n8n/workflows", `${NAME}:/files/`]);
+  // Synthetic credentials only; the directory is git-ignored and removed even when an import fails.
   const credDir = "automation/n8n/scripts/.live-cred";
-  fs.mkdirSync(credDir, { recursive: true });
-  fs.writeFileSync(path.join(credDir, "resend.json"), JSON.stringify([{ id: CRED.resend.id, name: CRED.resend.name, type: "httpHeaderAuth", data: { name: "Authorization", value: "Bearer re-live-not-a-real-key" } }]));
-  fs.writeFileSync(path.join(credDir, "openai.json"), JSON.stringify([{ id: CRED.openai.id, name: CRED.openai.name, type: "openAiApi", data: { apiKey: "sk-live-not-a-real-key" } }]));
-  docker(["cp", credDir, `${NAME}:/files/`]);
-  for (const f of ["resend.json", "openai.json"]) docker(["exec", NAME, "n8n", "import:credentials", `--input=/files/.live-cred/${f}`]);
+  try {
+    fs.mkdirSync(credDir, { recursive: true });
+    fs.writeFileSync(path.join(credDir, "resend.json"), JSON.stringify([{ id: CRED.resend.id, name: CRED.resend.name, type: "httpHeaderAuth", data: { name: "Authorization", value: "Bearer re-live-not-a-real-key" } }]));
+    fs.writeFileSync(path.join(credDir, "openai.json"), JSON.stringify([{ id: CRED.openai.id, name: CRED.openai.name, type: "openAiApi", data: { apiKey: "sk-live-not-a-real-key" } }]));
+    docker(["cp", credDir, `${NAME}:/files/`]);
+    for (const f of ["resend.json", "openai.json"]) docker(["exec", NAME, "n8n", "import:credentials", `--input=/files/.live-cred/${f}`]);
+  } finally {
+    fs.rmSync(credDir, { recursive: true, force: true });
+  }
   for (const f of ["cms-ai-draft", "order-paid-email", "license-provisioned-email"]) docker(["exec", NAME, "n8n", "import:workflow", `--input=/files/${f}.json`]);
   for (const id of ["nexustheme-cms-ai-draft", "nexustheme-order-paid-email", "nexustheme-license-provisioned-email"]) docker(["exec", NAME, "n8n", "publish:workflow", `--id=${id}`]);
   docker(["rm", "-f", NAME]);
-  fs.rmSync(credDir, { recursive: true, force: true });
 
-  docker(["run", "-d", "--name", NAME, "--add-host", `${HOST}:host-gateway`, "-v", `${VOLUME}:/home/node/.n8n`, "-p", `${N8N_PORT}:5678`,
-    "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto,net", "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false",
-    "-e", `N8N_REPLAY_REDIS_HOST=${HOST}`, "-e", "N8N_REPLAY_REDIS_PORT=6379",
+  docker(["run", "-d", "--name", NAME, ...testEnv.runArgs, "-p", `${N8N_PORT}:5678`,
+    "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto,net", "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false", ...testEnv.replayEnv,
     "-e", `AUTOMATION_SERVICE_SECRET=${SECRET}`,
     // The REAL API receives n8n's signed callbacks; only the email provider is the local sink.
-    "-e", `NEXUS_API_BASE_URL=http://${HOST}:${new URL(API).port || 4000}`,
+    "-e", `NEXUS_API_BASE_URL=${apiFromN8n}`,
     "-e", `RESEND_API_BASE_URL=http://${HOST}:${SINK_PORT}`, "-e", `OPENAI_API_BASE_URL=http://${HOST}:${SINK_PORT}`,
     "-e", "TRANSACTIONAL_FROM_EMAIL=orders@nexustheme.test", "-e", "N8N_DIAGNOSTICS_ENABLED=false", "-e", "N8N_SECURE_COOKIE=false", IMAGE]);
   await until(async () => { try { return (await fetch(`http://localhost:${N8N_PORT}/healthz`)).ok; } catch { return false; } }, 120000, "n8n health");
@@ -194,8 +213,7 @@ async function main() {
     check(final.every((j) => j.status === "SUCCEEDED"), "n8n's signed callbacks were accepted by the real API: both jobs are SUCCEEDED", final.map((j) => `${j.type}:${j.status}`).join(", "));
     console.log(`\n=== LIVE NOTIFICATION FLOW: ${results.length}/${results.length} CHECKS PASSED ===`);
   } finally {
-    docker(["rm", "-f", NAME], { tolerate: true });
-    docker(["volume", "rm", VOLUME], { tolerate: true });
+    testEnv.cleanup();
     sink?.close();
   }
 }
