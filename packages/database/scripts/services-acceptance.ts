@@ -208,7 +208,8 @@ async function run() {
     const inqA = await prisma.serviceInquiry.findUnique({ where: { inquiryNumber: withFile.body.inquiryNumber }, include: { attachments: true } });
     const att = inqA?.attachments[0];
     gate("Attachment type is sniffed (application/pdf), name sanitized, key server-generated", !!att && att.mimeType === "application/pdf" && att.fileName === "Yêu cầu.pdf" && att.storageKey.startsWith(`services/inquiries/${inqA!.id}/`) && att.sha256.length === 64, att);
-    gate("A disguised executable is rejected (400)", (await call("POST", "/v1/service-inquiries", { token: CUSTOMER_A, form: inquiryForm(validFields(), [{ name: "invoice.pdf", data: EXE, type: "application/pdf" }]) })).status === 400);
+    const disguised = await call("POST", "/v1/service-inquiries", { token: CUSTOMER_A, form: inquiryForm(validFields(), [{ name: "invoice.pdf", data: EXE, type: "application/pdf" }]) });
+    gate("A disguised executable is rejected (400)", disguised.status === 400, disguised);
 
     const rlIp = `172.16.${crypto.randomInt(0, 255)}.${crypto.randomInt(1, 254)}`;
     const statuses: number[] = [];
