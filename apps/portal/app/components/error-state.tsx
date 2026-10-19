@@ -8,7 +8,7 @@ interface ErrorStateProps {
 }
 
 export function ErrorState({
-  title = "Something went wrong",
+  title = "Có lỗi xảy ra",
   message,
   onRetry,
 }: ErrorStateProps) {
@@ -35,7 +35,7 @@ export function ErrorState({
           <p className="text-sm text-red-700 mb-4">{message}</p>
           {onRetry && (
             <Button variant="outline" size="sm" onClick={onRetry}>
-              Try Again
+              Thử lại
             </Button>
           )}
         </div>
