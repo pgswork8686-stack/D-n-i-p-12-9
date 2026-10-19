@@ -5,6 +5,10 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+# Only the Storefront + API specs run here; the rest needs the full stack (infra/scripts/e2e-fullstack-ci.sh).
+# shellcheck source=infra/scripts/e2e-suites.sh
+source infra/scripts/e2e-suites.sh
+e2e_check_st01_specs "$ROOT"
 TMP="$(mktemp -d)"
 API_PID=0
 WEB_PID=0
@@ -95,7 +99,7 @@ pnpm --filter @nexus/e2e exec playwright install --with-deps chromium
 E2E_CONSULT_MODE=cta \
 E2E_BASE_URL=http://localhost:3000 \
 E2E_API_URL=http://localhost:4000 \
-  pnpm --filter @nexus/e2e test:e2e
+  pnpm --filter @nexus/e2e exec playwright test "${ST01_SPECS[@]}"
 echo "::endgroup::"
 
 # ---------------------------------------------------------------------------
@@ -127,7 +131,7 @@ echo "::group::ST01 Playwright real form / 1440 768 390 / axe WCAG"
 E2E_CONSULT_MODE=form \
 E2E_BASE_URL=http://localhost:3000 \
 E2E_API_URL=http://localhost:4000 \
-  pnpm --filter @nexus/e2e test:e2e
+  pnpm --filter @nexus/e2e exec playwright test "${ST01_SPECS[@]}"
 echo "::endgroup::"
 
 echo "::group::Verify the stored inquiry, outbox, worker and staff notification"

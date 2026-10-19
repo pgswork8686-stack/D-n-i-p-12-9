@@ -1,7 +1,7 @@
 name: CI
 
 # Single required check for every PR into main (replaces phase9..phase18-ci.yml).
-# Branch protection: require "CI / verify" and "CI / docker" to pass before merge.
+# Branch protection: require "CI / verify", "CI / e2e-fullstack" and "CI / docker" to pass before merge.
 
 on:
   push:
@@ -185,6 +185,125 @@ jobs:
         run: |
           bash -n infra/scripts/st01-playwright-ci.sh
           bash infra/scripts/st01-playwright-ci.sh
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose ps || true
+          docker compose logs --tail=200 postgres redis || true
+          docker logs nexustheme-minio || true
+
+  # Portal, Admin, purchase flow and AD10 reconciliation in a real browser against the API, worker,
+  # PostgreSQL, Redis and MinIO of this throwaway runner (fresh database, synthetic credentials, local SePay
+  # mock). Storefront/Portal/Admin run under `next dev` because dev-token login does not exist in production
+  # builds. Separate from `verify` so its servers and data never meet the ST01 run.
+  e2e-fullstack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marketplace
+      REDIS_URL: redis://localhost:6379
+      STORAGE_PROVIDER: minio
+      STORAGE_ENDPOINT: http://localhost:9000
+      STORAGE_BUCKET: marketplace-dev
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
+      STORAGE_REGION: auto
+      WEB_URL: http://localhost:3000
+      PORTAL_URL: http://localhost:3001
+      ADMIN_URL: http://localhost:3002
+      API_URL: http://localhost:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      PAYMENT_RETURN_BASE_URL: http://localhost:3001
+      STRIPE_MOCK_CLIENT: "true"
+      STRIPE_SECRET_KEY: sk_test_placeholder_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci_test_secret
+      STRIPE_WEBHOOK_TOLERANCE_SECONDS: "300"
+      ENABLE_TEST_PAYMENT_PROVIDER: "true"
+      TEST_PAYMENT_WEBHOOK_SECRET: ci-test-payment-secret
+      LICENSE_KEY_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      HOSTING_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      SEED_DEV_USERS: "true"
+      AUTOMATION_SERVICE_SECRET: test-automation-secret-minimum-32-chars-long
+      N8N_WEBHOOK_BASE_URL: http://localhost:5678
+      INTERNAL_HMAC_MAX_SKEW_SECONDS: "300"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start PostgreSQL and Redis
+        run: |
+          docker compose up -d postgres redis
+          for i in {1..40}; do
+            if docker exec nexustheme-postgres pg_isready -U postgres -d marketplace >/dev/null 2>&1 && \
+               docker exec nexustheme-redis redis-cli ping | grep -q PONG; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          exit 1
+
+      - name: Start private MinIO
+        run: |
+          docker run -d --name nexustheme-minio \
+            -p 9000:9000 -p 9001:9001 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            cgr.dev/chainguard/minio:latest server /data --console-address ':9001'
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs nexustheme-minio
+          exit 1
+
+      - name: Create private MinIO bucket
+        run: |
+          docker run --rm --network host \
+            -e AWS_ACCESS_KEY_ID=minioadmin -e AWS_SECRET_ACCESS_KEY=minioadmin -e AWS_DEFAULT_REGION=us-east-1 \
+            amazon/aws-cli:latest --endpoint-url http://127.0.0.1:9000 s3 mb s3://marketplace-dev
+
+      - name: Setup test database
+        run: |
+          pnpm db:generate
+          pnpm db:migrate
+          pnpm db:seed:local
+
+      # API, worker and the shared packages only: the three Next.js apps run under `next dev`.
+      - name: Build API and worker
+        run: pnpm turbo build --concurrency=2 --filter='!@nexus/web' --filter='!@nexus/portal' --filter='!@nexus/admin'
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter @nexus/e2e exec playwright install --with-deps chromium
+
+      - name: Full-stack Playwright acceptance (Portal, Admin, purchase flow, AD10)
+        run: |
+          bash -n infra/scripts/e2e-fullstack-ci.sh
+          bash infra/scripts/e2e-fullstack-ci.sh
+
+      - name: Upload Playwright traces and server logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-fullstack-results
+          path: apps/e2e/results
+          retention-days: 7
 
       - name: Diagnostics
         if: failure()
