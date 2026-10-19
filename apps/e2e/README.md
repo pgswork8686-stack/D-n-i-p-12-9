@@ -26,4 +26,6 @@ Trên máy Windows có Application Control chặn binary Chromium, chạy trong 
 |---|---|---|
 | `tests/st01-home.spec.ts` | ST01 | thứ tự section, 1 `h1`, không cuộn ngang, console/ảnh lỗi, tìm kiếm + lọc qua API, tab danh mục theo thứ tự admin, card → trang chi tiết, card mobile đủ ảnh/tên/giá/CTA, header đủ nhóm ở 1440, form tư vấn (lỗi, không gửi request), bàn phím, axe (WCAG A/AA) |
 
+| `tests/admin-ad05-ad16.spec.ts` | AD05, AD11–AD16 | chạy với API, DB và MinIO thật, đăng nhập bằng token dev (`dev-admin-token`, `dev-customer-token`; Admin phải chạy với `NEXT_PUBLIC_DEV_AUTH_ENABLED=true`). Đặt `E2E_ADMIN_URL` (mặc định `http://localhost:3002`). Test ghi dữ liệu (ticket, phiên bản) chỉ chạy ở project desktop. Kiểm tra: danh sách thật, thu hồi phải có lý do, key license luôn bị che, ghi chú nội bộ ticket không lộ cho khách, tạo phiên bản → tải `.zip` → phát hành, không cuộn ngang ở 1440/768/390, bảng thành thẻ có nhãn trên điện thoại |
+
 Trạng thái rỗng/lỗi của trang chủ được test ở tầng render (`apps/web/app/__tests__/home-page-states.spec.tsx`) vì E2E không điều khiển được dữ liệu phía server.

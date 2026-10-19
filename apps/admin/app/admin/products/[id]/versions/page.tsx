@@ -196,7 +196,7 @@ export default function AdminProductVersionsPage() {
                     </div>
                   )}
 
-                  <div className="mt-4 overflow-x-auto rounded-2xl border">
+                  <div className="mt-4 relative overflow-x-auto rounded-2xl border">
                     <table className="w-full min-w-[620px] text-left text-sm">
                       <thead className="border-b bg-slate-50 text-slate-600">
                         <tr>

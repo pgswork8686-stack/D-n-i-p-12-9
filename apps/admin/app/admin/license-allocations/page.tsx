@@ -156,7 +156,7 @@ export default function AdminLicenseAllocationsPage() {
         ) : rows.length === 0 ? (
           <p className="mt-4 text-sm text-slate-500">Không có yêu cầu nào đang chờ.</p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 relative overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="border-b text-slate-600">
                 <tr>

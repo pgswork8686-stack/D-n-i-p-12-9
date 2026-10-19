@@ -100,7 +100,7 @@ export default function AdminTicketsPage() {
             <p className="mt-2 text-sm text-slate-500">Thử chọn trạng thái khác.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-2xl border bg-white">
+          <div className="relative overflow-x-auto rounded-2xl border bg-white">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="border-b bg-slate-50 text-slate-600">
                 <tr>

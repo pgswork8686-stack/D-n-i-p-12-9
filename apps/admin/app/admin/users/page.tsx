@@ -70,7 +70,7 @@ export default function AdminUsersPage() {
           </div>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-            <div className="overflow-x-auto rounded-2xl border bg-white">
+            <div className="relative overflow-x-auto rounded-2xl border bg-white">
               <table className="w-full min-w-[520px] text-left text-sm">
                 <thead className="border-b bg-slate-50 text-slate-600">
                   <tr>

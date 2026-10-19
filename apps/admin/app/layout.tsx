@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Be_Vietnam_Pro } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./context/auth-context";
+import { ResponsiveTables } from "./components/responsive-tables";
 
 const sans = Be_Vietnam_Pro({
   subsets: ["vietnamese", "latin"],
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           Bỏ qua tới nội dung
         </a>
         <AuthProvider>{children}</AuthProvider>
+        <ResponsiveTables />
       </body>
     </html>
   );
