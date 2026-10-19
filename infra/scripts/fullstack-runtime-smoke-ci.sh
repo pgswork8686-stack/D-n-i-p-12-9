@@ -11,7 +11,11 @@ cleanup() {
   if [[ "$code" -ne 0 ]]; then
     for file in "$TMP"/*.log; do [[ -f "$file" ]] && { echo "--- $file"; tail -80 "$file"; }; done
   fi
-  for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
+  # Next.js is launched through pnpm. Killing only the pnpm parent can leave
+  # next-server listening on its old port and corrupt the following E2E job.
+  # Each start() runs in an isolated process group: stop its entire tree.
+  for pid in "${PIDS[@]}"; do kill -- "-$pid" 2>/dev/null || true; done
+  for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
   rm -rf "$TMP"
   exit "$code"
 }
@@ -19,7 +23,8 @@ trap cleanup EXIT
 
 start() {
   label="$1"; shift
-  "$@" > "$TMP/$label.log" 2>&1 &
+  # Isolate the entire service tree (including pnpm -> next start).
+  setsid "$@" > "$TMP/$label.log" 2>&1 &
   PIDS+=("$!")
 }
 
