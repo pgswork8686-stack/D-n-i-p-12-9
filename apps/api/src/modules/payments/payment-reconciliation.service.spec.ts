@@ -46,19 +46,18 @@ describe("PaymentReconciliationService", () => {
     };
 
     it("opens a case and audits it", async () => {
-      mockCase.findUnique.mockResolvedValue(null);
       mockCase.create.mockResolvedValue({ id: "c1" });
       await service.recordFromWebhook("sepay", event);
       expect(mockCase.create).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({ reason: "AMOUNT_MISMATCH", receivedAmount: 800000, expectedAmount: 890000 }),
       }));
-      expect(audit.logAction).toHaveBeenCalledWith(expect.objectContaining({ action: "PAYMENT_RECONCILIATION_CASE_OPENED" }));
+      expect(audit.logActionWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "PAYMENT_RECONCILIATION_CASE_OPENED" }));
     });
 
-    it("is idempotent for a retried webhook", async () => {
+    it("is idempotent for a retried webhook (unique key already stored)", async () => {
+      mockCase.create.mockRejectedValue(Object.assign(new Error("unique"), { code: "P2002" }));
       mockCase.findUnique.mockResolvedValue({ id: "c1" });
-      await service.recordFromWebhook("sepay", event);
-      expect(mockCase.create).not.toHaveBeenCalled();
+      await expect(service.recordFromWebhook("sepay", event)).resolves.toBeUndefined();
     });
 
     it("ignores events without a review marker (noise such as outgoing transfers)", async () => {
@@ -66,9 +65,24 @@ describe("PaymentReconciliationService", () => {
       expect(mockCase.create).not.toHaveBeenCalled();
     });
 
-    it("never throws into the webhook path", async () => {
-      mockCase.findUnique.mockRejectedValue(new Error("db down"));
+    it("FAILS CLOSED: if the case cannot be stored the webhook must not be acknowledged", async () => {
+      mockCase.create.mockRejectedValue(new Error("db down"));
+      await expect(service.recordFromWebhook("sepay", event)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it("treats a unique-key race as already recorded, but still fails if nothing was actually stored", async () => {
+      const race = Object.assign(new Error("unique"), { code: "P2002" });
+      mockCase.create.mockRejectedValue(race);
+      mockCase.findUnique.mockResolvedValueOnce({ id: "c1" });
       await expect(service.recordFromWebhook("sepay", event)).resolves.toBeUndefined();
+      mockCase.findUnique.mockResolvedValueOnce(null);
+      await expect(service.recordFromWebhook("sepay", event)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
+
+    it("writes the case and its audit entry in one transaction", async () => {
+      mockCase.create.mockResolvedValue({ id: "c9" });
+      await service.recordFromWebhook("sepay", event);
+      expect(audit.logActionWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "PAYMENT_RECONCILIATION_CASE_OPENED", entityId: "c9" }));
     });
   });
 

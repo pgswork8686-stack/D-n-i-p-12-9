@@ -30,7 +30,7 @@ Phạm vi: chuẩn bị hạ tầng (P2). Mọi script đã được kiểm ch�
 - **RPO** hiện là chu kỳ sao lưu (mặc định 24 giờ, không phải 15 phút như `staging-disaster-recovery.md` ghi). Muốn RPO nhỏ hơn: chạy timer mỗi giờ hoặc bổ sung WAL archiving (chưa làm).
 - **RTO**: lần diễn tập trên dữ liệu giả (1.450 dòng) mất ~9 giây — con số này **không** đại diện cho dữ liệu thật. Hãy lấy số đo từ lần diễn tập đầu tiên trên staging.
 - Mới sao lưu **PostgreSQL**. Chưa sao lưu: tệp trong object storage (MinIO/R2 — bản phát hành sản phẩm), Redis, workflow/credential của n8n, `.env.production`. Cần quyết định riêng cho từng loại (R2 bucket versioning/replication; n8n export).
-- Mã hóa dùng AES-256-CBC (không tự xác thực); tính toàn vẹn dựa vào SHA-256 của tệp mã hóa + kiểm tra khi diễn tập. Nếu cần mã hóa xác thực, chuyển sang `age`/`gpg` (cần cài thêm trên máy chủ).
+- Mã hóa dùng AES-256-CBC (openssl enc, không tự xác thực) nên mỗi bản sao lưu có thêm thẻ **HMAC-SHA256** (khóa dẫn xuất riêng từ tệp khóa) bao trùm hash của bản dump **và** manifest đã mã hóa. Kiểm tra thẻ này được thực hiện **trước khi giải mã/khôi phục** (estore-db.sh, estore-drill.sh, erify-backup.sh); thiếu hoặc sai thẻ, thiếu manifest, đổi khóa, sửa dump/manifest/checksum, hoặc có tệp .sql.gz không mã hóa ở nơi lưu ngoài đều làm thao tác thất bại. Không còn biến môi trường nào cho phép gửi bản không mã hóa ra ngoài (đã xóa BACKUP_ALLOW_UNENCRYPTED_OFFSITE); manifest chỉ được gửi dưới dạng mã hóa. Bản sao lưu cục bộ không mã hóa chỉ tồn tại khi không có tệp khóa và không có nơi lưu ngoài (dùng cho dev).
 - Giám sát chạy trên chính máy chủ: nếu cả máy chủ chết, **không ai gửi cảnh báo**. Cần thêm một bộ theo dõi bên ngoài (UptimeRobot, Better Stack, healthchecks.io…) để theo dõi từ ngoài vào, và ping `healthchecks.io` từ job sao lưu. Chưa cấu hình vì cần tài khoản dịch vụ ngoài.
 - Chưa có giám sát số liệu (CPU/RAM/độ trễ/tỷ lệ lỗi, Prometheus/Grafana/Sentry). Hiện chỉ có kiểm tra sống/chết, độ mới sao lưu, đĩa, TLS.
 
@@ -39,7 +39,7 @@ Phạm vi: chuẩn bị hạ tầng (P2). Mọi script đã được kiểm ch�
 `bash infra/scripts/backup-selftest.sh` (cần Docker): tạo CSDL giả 250 khách + 1.200 đơn (có tiếng Việt, dấu nháy, xuống dòng) rồi xác nhận:
 - sao lưu → mã hóa → sao chép ra thư mục ngoài; **không còn bản không mã hóa** trên đĩa hay ở bản sao ngoài; tên bảng không đọc được trong tệp `.enc`;
 - diễn tập khôi phục: PASS, số dòng từng bảng khớp manifest;
-- **sai khóa → diễn tập thất bại**; **tệp bị sửa 1 byte → thất bại**; **sao chép ngoài mà không mã hóa → bị từ chối**.
+- bị từ chối: sai khóa; dump bị sửa 1 byte; manifest bị sửa; thiếu manifest; thiếu thẻ HMAC; kẻ tấn công thay dump bằng bản mã hóa bằng khóa khác và tính lại checksum; tệp .sql.gz không mã hóa ở nơi lưu ngoài; gửi ra ngoài khi không có khóa (kể cả đặt biến override cũ); giữ bản không mã hóa cùng nơi lưu ngoài; estore-db.sh với bản đã bị sửa. Khôi phục bản đúng bằng estore-db.sh đưa đủ dữ liệu về.
 
 `bash infra/monitoring/selftest.sh`: webhook giả nhận đúng 1 cảnh báo FIRING khi ứng dụng sập (không lặp), 1 RESOLVED khi hồi phục, và cảnh báo khi dấu thời gian sao lưu quá cũ hoặc thiếu bản sao ngoài.
 

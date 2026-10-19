@@ -75,50 +75,59 @@ export class PaymentReconciliationService {
     private readonly sepay: SepayPaymentProvider,
   ) {}
 
-  /** Called by the webhook path for "ignored" events that need a human. Never throws into the webhook. */
+  /**
+   * Called by the webhook path for "ignored" events that need a human.
+   *
+   * FAIL-CLOSED: if the case (and its audit entry) cannot be stored this THROWS, so the webhook is NOT
+   * acknowledged and the provider retries instead of the transfer silently disappearing. The case and its
+   * audit log are written in one transaction. A retry of an already-recorded event is a no-op success.
+   */
   async recordFromWebhook(provider: string, event: NormalizedPaymentEvent): Promise<void> {
     const review = event.review;
     if (!review) return;
     try {
-      const existing = await prisma.paymentReconciliationCase.findUnique({
-        where: { provider_externalEventId: { provider, externalEventId: event.externalEventId } },
-      });
-      if (existing) return;
-      const created = await prisma.paymentReconciliationCase.create({
-        data: {
-          provider,
-          externalEventId: event.externalEventId,
-          reason: review.reason,
-          paymentId: review.paymentId ?? null,
-          orderId: review.orderId ?? null,
-          transferCode: review.transferCode ?? null,
-          expectedAmount: review.expectedAmount ?? null,
-          receivedAmount: review.receivedAmount,
-          rawPayloadHash: event.rawPayloadHash ?? null,
-          sanitizedPayload: event.sanitizedPayload as Prisma.InputJsonValue,
-        },
-      });
-      await this.audit.logAction({
-        action: "PAYMENT_RECONCILIATION_CASE_OPENED",
-        entity: "PaymentReconciliationCase",
-        entityId: created.id,
-        details: {
-          provider,
-          reason: review.reason,
-          receivedAmount: review.receivedAmount,
-          expectedAmount: review.expectedAmount ?? null,
-          orderId: review.orderId ?? null,
-        },
+      await prisma.$transaction(async (tx) => {
+        const created = await tx.paymentReconciliationCase.create({
+          data: {
+            provider,
+            externalEventId: event.externalEventId,
+            reason: review.reason,
+            paymentId: review.paymentId ?? null,
+            orderId: review.orderId ?? null,
+            transferCode: review.transferCode ?? null,
+            expectedAmount: review.expectedAmount ?? null,
+            receivedAmount: review.receivedAmount,
+            rawPayloadHash: event.rawPayloadHash ?? null,
+            sanitizedPayload: event.sanitizedPayload as Prisma.InputJsonValue,
+          },
+        });
+        await this.audit.logActionWithClient(tx, {
+          action: "PAYMENT_RECONCILIATION_CASE_OPENED",
+          entity: "PaymentReconciliationCase",
+          entityId: created.id,
+          details: {
+            provider,
+            reason: review.reason,
+            receivedAmount: review.receivedAmount,
+            expectedAmount: review.expectedAmount ?? null,
+            orderId: review.orderId ?? null,
+          },
+        });
       });
     } catch (err: any) {
-      // A concurrent retry that lost the unique race is fine; anything else must not break the webhook ack.
-      if (err?.code !== "P2002") {
-        // eslint-disable-next-line no-console
-        console.error(JSON.stringify({ event: "reconciliation_case_record_failed", message: String(err?.message).slice(0, 200) }));
+      if (err?.code === "P2002") {
+        // Unique (provider, externalEventId): a retry or a concurrent delivery already stored this case.
+        const stored = await prisma.paymentReconciliationCase.findUnique({
+          where: { provider_externalEventId: { provider, externalEventId: event.externalEventId } },
+          select: { id: true },
+        });
+        if (stored) return;
       }
+      // eslint-disable-next-line no-console
+      console.error(JSON.stringify({ event: "reconciliation_case_record_failed", externalEventId: event.externalEventId, message: String(err?.message).slice(0, 200) }));
+      throw new ServiceUnavailableException("Không lưu được giao dịch cần đối soát; vui lòng gửi lại webhook");
     }
   }
-
   async list(query: ReconciliationQuery): Promise<ReconciliationList> {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
