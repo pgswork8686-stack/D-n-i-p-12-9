@@ -1,8 +1,10 @@
-export type AdminNavItem = { href: string; label: string; permission: string };
+/** `permission` is required; `alsoAllowedBy` lists other permissions that grant the same view. */
+export type AdminNavItem = { href: string; label: string; permission: string; alsoAllowedBy?: string[] };
 
 export const ADMIN_NAVIGATION: AdminNavItem[] = [
   { href: "/admin/products", label: "Sản phẩm", permission: "product.read" },
   { href: "/admin/orders", label: "Đơn hàng", permission: "order.read" },
+  { href: "/admin/payments/reconciliation", label: "Đối soát thanh toán", permission: "finance.read", alsoAllowedBy: ["payment.read", "payment.manage"] },
   { href: "/admin/entitlements", label: "Quyền sử dụng", permission: "entitlement.read" },
   { href: "/admin/internal-licenses", label: "License nội bộ", permission: "license.read" },
   { href: "/admin/license-allocations", label: "License quản lý hộ", permission: "license.read" },
@@ -19,5 +21,7 @@ export function visibleAdminNavigation(
 ): AdminNavItem[] {
   if (roles.includes("super_admin")) return ADMIN_NAVIGATION;
   const allowed = new Set(permissions);
-  return ADMIN_NAVIGATION.filter(item => allowed.has(item.permission));
+  return ADMIN_NAVIGATION.filter(
+    item => allowed.has(item.permission) || (item.alsoAllowedBy ?? []).some(p => allowed.has(p)),
+  );
 }
