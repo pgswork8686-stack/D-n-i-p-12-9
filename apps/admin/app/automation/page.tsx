@@ -1,5 +1,6 @@
 "use client";
 
+import { jobStatusLabel, jobTypeLabel } from "../lib/catalog-labels";
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Badge, Button, Card } from "@nexus/ui";
@@ -41,7 +42,7 @@ export default function AutomationJobsPage() {
   const fetchJobs = useCallback(async () => {
     if (!token) {
       if (!authLoading) {
-        setError("Access Denied (401 Unauthorized): Please sign in with an authenticated admin account.");
+        setError("Không có quyền truy cập (401). Vui lòng đăng nhập bằng tài khoản quản trị.");
         setLoading(false);
         setJobs([]);
       }
@@ -63,7 +64,7 @@ export default function AutomationJobsPage() {
       setTotalItems(res.total || 0);
       setError(null);
     } catch (err: any) {
-      setError(err.message || "Failed to load automation jobs.");
+      setError(err.message || "Không tải được danh sách tác vụ tự động.");
       setJobs([]);
     } finally {
       setLoading(false);
@@ -81,7 +82,7 @@ export default function AutomationJobsPage() {
       await client.retryAutomationJob(id);
       fetchJobs();
     } catch (err: any) {
-      alert(`Retry failed: ${err.message}`);
+      alert(`Thử lại thất bại: ${err.message}`);
     }
   };
 
@@ -97,7 +98,7 @@ export default function AutomationJobsPage() {
         brief: aiBrief.trim(),
         language: aiLanguage,
       });
-      setAiSuccessMsg(`AI draft job queued: ${job.id}. The worker and n8n will process it.`);
+      setAiSuccessMsg(`Đã xếp hàng tác vụ tạo bản nháp AI: ${job.id}. Worker và n8n sẽ xử lý.`);
       setAiTopic("");
       setAiBrief("");
       setTimeout(() => {
@@ -106,7 +107,7 @@ export default function AutomationJobsPage() {
         fetchJobs();
       }, 2000);
     } catch (err: any) {
-      alert(`Failed to queue AI draft: ${err.message}`);
+      alert(`Không xếp hàng được bản nháp AI: ${err.message}`);
     } finally {
       setAiSubmitting(false);
     }
@@ -117,9 +118,9 @@ export default function AutomationJobsPage() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Automation & AI Engine</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Tự động hóa & AI</h1>
           <p className="text-sm text-slate-500">
-            Outbox jobs, AI draft orchestration, and transactional notifications
+            Tác vụ nền, bản nháp AI và email/thông báo giao dịch
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -137,7 +138,7 @@ export default function AutomationJobsPage() {
       <Card className="p-4 bg-white border border-slate-200">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Status:</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Trạng thái:</span>
             <select
               value={statusFilter}
               onChange={(e) => {
@@ -146,17 +147,17 @@ export default function AutomationJobsPage() {
               }}
               className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#0037b0]"
             >
-              <option value="">All Statuses</option>
-              <option value="PENDING">PENDING</option>
-              <option value="RUNNING">RUNNING</option>
-              <option value="SUCCEEDED">SUCCEEDED</option>
-              <option value="FAILED">FAILED</option>
-              <option value="CANCELLED">CANCELLED</option>
+              <option value="">Tất cả trạng thái</option>
+              <option value="PENDING">Đang chờ</option>
+              <option value="RUNNING">Đang chạy</option>
+              <option value="SUCCEEDED">Thành công</option>
+              <option value="FAILED">Thất bại</option>
+              <option value="CANCELLED">Đã hủy</option>
             </select>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Type:</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Loại:</span>
             <select
               value={typeFilter}
               onChange={(e) => {
@@ -165,10 +166,10 @@ export default function AutomationJobsPage() {
               }}
               className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#0037b0]"
             >
-              <option value="">All Types</option>
-              <option value="CMS_AI_DRAFT">CMS AI Draft</option>
-              <option value="ORDER_PAID_EMAIL">Order Paid Email</option>
-              <option value="LICENSE_PROVISIONED_EMAIL">License Provisioned Email</option>
+              <option value="">Tất cả loại</option>
+              <option value="CMS_AI_DRAFT">Bản nháp AI cho nội dung</option>
+              <option value="ORDER_PAID_EMAIL">Email xác nhận thanh toán</option>
+              <option value="LICENSE_PROVISIONED_EMAIL">Email giao license</option>
             </select>
           </div>
 
@@ -187,29 +188,29 @@ export default function AutomationJobsPage() {
 
       {/* Table */}
       <Card className="overflow-hidden border border-slate-200 bg-white">
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Job ID / Type</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Attempts</th>
-                <th className="py-3 px-4">Source</th>
-                <th className="py-3 px-4">Timestamps</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3 px-4">Mã tác vụ / loại</th>
+                <th className="py-3 px-4">Trạng thái</th>
+                <th className="py-3 px-4">Số lần chạy</th>
+                <th className="py-3 px-4">Nguồn</th>
+                <th className="py-3 px-4">Thời gian</th>
+                <th className="py-3 px-4 text-right"><span className="sr-only">Thao tác</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
               {loading ? (
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-slate-400">
-                    Loading automation jobs...
+                    Đang tải tác vụ…
                   </td>
                 </tr>
               ) : jobs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-slate-400">
-                    No automation jobs found.
+                    Chưa có tác vụ nào.
                   </td>
                 </tr>
               ) : (
@@ -220,7 +221,7 @@ export default function AutomationJobsPage() {
                         href={`/automation/${job.id}`}
                         className="font-medium text-slate-900 hover:text-[#0037b0] block"
                       >
-                        {job.type}
+                        {jobTypeLabel(job.type)}
                       </Link>
                       <span className="text-xs text-slate-400 font-mono">
                         {job.id.substring(0, 8)}...
@@ -228,7 +229,7 @@ export default function AutomationJobsPage() {
                     </td>
                     <td className="py-3 px-4">
                       <Badge variant={STATUS_COLORS[job.status] || "info"}>
-                        {job.status}
+                        {jobStatusLabel(job.status)}
                       </Badge>
                     </td>
                     <td className="py-3 px-4 text-slate-600">
@@ -238,9 +239,9 @@ export default function AutomationJobsPage() {
                       {job.sourceType ? `${job.sourceType}: ${job.sourceId?.substring(0, 8)}...` : "—"}
                     </td>
                     <td className="py-3 px-4 text-xs text-slate-500 space-y-0.5">
-                      <div>Created: {new Date(job.createdAt).toLocaleString()}</div>
+                      <div>Tạo lúc: {new Date(job.createdAt).toLocaleString("vi-VN")}</div>
                       {job.completedAt && (
-                        <div>Done: {new Date(job.completedAt).toLocaleString()}</div>
+                        <div>Xong lúc: {new Date(job.completedAt).toLocaleString("vi-VN")}</div>
                       )}
                     </td>
                     <td className="py-3 px-4 text-right space-x-2">
@@ -248,14 +249,14 @@ export default function AutomationJobsPage() {
                         href={`/automation/${job.id}`}
                         className="text-xs text-[#0037b0] hover:underline font-medium"
                       >
-                        View
+                        Xem
                       </Link>
                       {job.status === "FAILED" && (
                         <button
                           onClick={() => handleRetry(job.id)}
                           className="text-xs text-amber-600 hover:text-amber-800 font-medium"
                         >
-                          Retry
+                          Thử lại
                         </button>
                       )}
                     </td>
@@ -270,7 +271,7 @@ export default function AutomationJobsPage() {
         {totalPages > 1 && (
           <div className="p-4 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
             <span>
-              Page {page} of {totalPages}
+              Trang {page} / {totalPages}
             </span>
             <div className="flex gap-2">
               <Button
@@ -279,7 +280,7 @@ export default function AutomationJobsPage() {
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
               >
-                Previous
+                Trước
               </Button>
               <Button
                 variant="outline"
@@ -287,7 +288,7 @@ export default function AutomationJobsPage() {
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               >
-                Next
+                Sau
               </Button>
             </div>
           </div>
@@ -299,7 +300,7 @@ export default function AutomationJobsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-slate-900">✨ Request CMS AI Draft</h2>
+              <h2 className="text-lg font-bold text-slate-900">✨ Yêu cầu bản nháp AI</h2>
               <button
                 onClick={() => setShowAiModal(false)}
                 className="text-slate-400 hover:text-slate-600 text-lg"
@@ -315,10 +316,10 @@ export default function AutomationJobsPage() {
             ) : (
               <form onSubmit={handleCreateAiDraft} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                    Topic / Title Idea *
+                  <label htmlFor="au-1" className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                    Chủ đề / ý tưởng tiêu đề *
                   </label>
-                  <input
+                  <input id="au-1"
                     type="text"
                     required
                     value={aiTopic}
@@ -329,35 +330,35 @@ export default function AutomationJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                    Editorial Brief / Key Points *
+                  <label htmlFor="au-2" className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                    Dàn ý / các ý chính *
                   </label>
-                  <textarea
+                  <textarea id="au-2"
                     rows={4}
                     required
                     value={aiBrief}
                     onChange={(e) => setAiBrief(e.target.value)}
-                    placeholder="Provide outline, target audience, tone, or key product highlights..."
+                    placeholder="Nhập dàn ý, đối tượng, giọng văn hoặc điểm nổi bật của sản phẩm…"
                     className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                    Language
+                  <label htmlFor="au-3" className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                    Ngôn ngữ
                   </label>
-                  <select
+                  <select id="au-3"
                     value={aiLanguage}
                     onChange={(e) => setAiLanguage(e.target.value)}
                     className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                   >
                     <option value="vi">Tiếng Việt (vi)</option>
-                    <option value="en">English (en)</option>
+                    <option value="en">Tiếng Anh (en)</option>
                   </select>
                 </div>
 
                 <div className="p-3 bg-amber-50 rounded-lg text-xs text-amber-800">
-                  ⚠️ AI output will be saved strictly in <strong>AI_DRAFT</strong> status. Human editor review and approval are mandatory before publication.
+                  ⚠️ Kết quả AI chỉ được lưu ở trạng thái <strong>AI_DRAFT</strong>. Biên tập viên bắt buộc phải duyệt trước khi xuất bản.
                 </div>
 
                 <div className="flex justify-end gap-3 pt-2">
@@ -368,7 +369,7 @@ export default function AutomationJobsPage() {
                     onClick={() => setShowAiModal(false)}
                     disabled={aiSubmitting}
                   >
-                    Cancel
+                    Hủy
                   </Button>
                   <Button
                     type="submit"
@@ -376,7 +377,7 @@ export default function AutomationJobsPage() {
                     size="md"
                     disabled={aiSubmitting}
                   >
-                    {aiSubmitting ? "Queueing..." : "Submit AI Request"}
+                    {aiSubmitting ? "Đang gửi…" : "Gửi yêu cầu AI"}
                   </Button>
                 </div>
               </form>

@@ -46,12 +46,12 @@ export default function NewContentPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) {
-      setError("Unauthorized. Please sign in with an authenticated admin account.");
+      setError("Chưa đăng nhập. Vui lòng dùng tài khoản quản trị.");
       return;
     }
 
     if (!title.trim() || !content.trim()) {
-      setError("Title and content are required.");
+      setError("Cần nhập tiêu đề và nội dung.");
       return;
     }
 
@@ -79,7 +79,7 @@ export default function NewContentPage() {
       const created = await client.createContentPost(payload);
       router.push(`/content/${created.id}`);
     } catch (err: any) {
-      setError(err.message || "Failed to create content post.");
+      setError(err.message || "Không tạo được bài viết.");
       setSaving(false);
     }
   };
@@ -89,26 +89,26 @@ export default function NewContentPage() {
       <div className="flex items-center justify-between mb-8 pb-4 border-b border-gray-200">
         <div>
           <Link href="/content" className="text-xs text-[#0037b0] hover:underline font-semibold">
-            ← Back to Content List
+            ← Danh sách nội dung
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-1">Create New Content Post</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mt-1">Tạo bài viết mới</h1>
         </div>
       </div>
 
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs mb-6">
-          <strong>Error:</strong> {error}
+          <strong>Lỗi:</strong> {error}
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <Card title="Article Essentials">
+        <Card title="Thông tin chính">
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Title <span className="text-red-500">*</span>
+              <label htmlFor="cn-1" className="block text-xs font-semibold text-gray-700 mb-1">
+                Tiêu đề <span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="cn-1"
                 type="text"
                 required
                 value={title}
@@ -120,10 +120,10 @@ export default function NewContentPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Custom Slug (optional, auto-generated if blank)
+                <label htmlFor="cn-2" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Slug tùy chỉnh (không bắt buộc, tự tạo nếu để trống)
                 </label>
-                <input
+                <input id="cn-2"
                   type="text"
                   value={slug}
                   onChange={(e) => setSlug(e.target.value)}
@@ -133,15 +133,15 @@ export default function NewContentPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="cn-3" className="block text-xs font-semibold text-gray-700 mb-1">
                   Category
                 </label>
-                <select
+                <select id="cn-3"
                   value={categoryId}
                   onChange={(e) => setCategoryId(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value="">-- No Category --</option>
+                  <option value="">-- Không có danh mục --</option>
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
@@ -153,89 +153,89 @@ export default function NewContentPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Content Type
+                <label htmlFor="cn-4" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Loại nội dung
                 </label>
-                <select
+                <select id="cn-4"
                   value={contentType}
                   onChange={(e) => setContentType(e.target.value as ContentType)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value={ContentType.ARTICLE}>ARTICLE</option>
-                  <option value={ContentType.PAGE}>PAGE</option>
+                  <option value={ContentType.ARTICLE}>Bài viết</option>
+                  <option value={ContentType.PAGE}>Trang</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Initial Status
+                <label htmlFor="cn-5" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Trạng thái ban đầu
                 </label>
-                <select
+                <select id="cn-5"
                   value={status}
                   onChange={(e) =>
                     setStatus(e.target.value as ContentStatus.DRAFT | ContentStatus.IDEA)
                   }
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none bg-white"
                 >
-                  <option value={ContentStatus.DRAFT}>DRAFT</option>
-                  <option value={ContentStatus.IDEA}>IDEA</option>
+                  <option value={ContentStatus.DRAFT}>Bản nháp</option>
+                  <option value={ContentStatus.IDEA}>Ý tưởng</option>
                 </select>
                 <p className="text-[11px] text-gray-500 mt-1">
-                  New posts start as DRAFT or IDEA. Progress through REVIEW to SCHEDULE or PUBLISH.
+                  Bài mới bắt đầu ở trạng thái nháp hoặc ý tưởng, sau đó chuyển qua duyệt để hẹn giờ hoặc xuất bản.
                 </p>
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Excerpt / Summary
+              <label htmlFor="cn-6" className="block text-xs font-semibold text-gray-700 mb-1">
+                Tóm tắt
               </label>
-              <textarea
+              <textarea id="cn-6"
                 rows={2}
                 value={excerpt}
                 onChange={(e) => setExcerpt(e.target.value)}
-                placeholder="Brief summary for listings and search engines..."
+                placeholder="Tóm tắt ngắn cho danh sách và công cụ tìm kiếm…"
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Content Body (HTML or Markdown) <span className="text-red-500">*</span>
+              <label htmlFor="cn-7" className="block text-xs font-semibold text-gray-700 mb-1">
+                Nội dung (HTML hoặc Markdown) <span className="text-red-500">*</span>
               </label>
-              <textarea
+              <textarea id="cn-7"
                 rows={12}
                 required
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="Write your article content here..."
+                placeholder="Viết nội dung bài viết tại đây…"
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none font-mono text-xs"
               />
             </div>
           </div>
         </Card>
 
-        <Card title="SEO & OpenGraph Metadata">
+        <Card title="SEO & OpenGraph">
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Custom SEO Title
+                <label htmlFor="cn-8" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Tiêu đề SEO tùy chỉnh
                 </label>
-                <input
+                <input id="cn-8"
                   type="text"
                   value={seoTitle}
                   onChange={(e) => setSeoTitle(e.target.value)}
-                  placeholder="Defaults to post title if blank"
+                  placeholder="Mặc định lấy tiêu đề bài viết"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Canonical URL
+                <label htmlFor="cn-9" className="block text-xs font-semibold text-gray-700 mb-1">
+                  URL chuẩn (canonical)
                 </label>
-                <input
+                <input id="cn-9"
                   type="url"
                   value={canonicalUrl}
                   onChange={(e) => setCanonicalUrl(e.target.value)}
@@ -246,24 +246,24 @@ export default function NewContentPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Meta Description
+              <label htmlFor="cn-10" className="block text-xs font-semibold text-gray-700 mb-1">
+                Mô tả meta
               </label>
-              <textarea
+              <textarea id="cn-10"
                 rows={2}
                 value={seoDescription}
                 onChange={(e) => setSeoDescription(e.target.value)}
-                placeholder="Recommended 120-160 characters for search engine snippets"
+                placeholder="Nên dài 120–160 ký tự cho đoạn trích tìm kiếm"
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
               />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Featured Image URL
+                <label htmlFor="cn-11" className="block text-xs font-semibold text-gray-700 mb-1">
+                  URL ảnh đại diện
                 </label>
-                <input
+                <input id="cn-11"
                   type="url"
                   value={featuredImageUrl}
                   onChange={(e) => setFeaturedImageUrl(e.target.value)}
@@ -273,24 +273,24 @@ export default function NewContentPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Featured Image Alt Text
+                <label htmlFor="cn-12" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Văn bản thay thế của ảnh đại diện
                 </label>
-                <input
+                <input id="cn-12"
                   type="text"
                   value={featuredImageAlt}
                   onChange={(e) => setFeaturedImageAlt(e.target.value)}
-                  placeholder="Descriptive alt text for accessibility & SEO"
+                  placeholder="Mô tả ảnh cho trình đọc màn hình và SEO"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
+              <label htmlFor="cn-13" className="block text-xs font-semibold text-gray-700 mb-1">
                 OpenGraph Image URL
               </label>
-              <input
+              <input id="cn-13"
                 type="url"
                 value={ogImageUrl}
                 onChange={(e) => setOgImageUrl(e.target.value)}
@@ -304,11 +304,11 @@ export default function NewContentPage() {
         <div className="flex justify-end gap-3">
           <Link href="/content">
             <Button type="button" variant="outline">
-              Cancel
+              Hủy
             </Button>
           </Link>
           <Button type="submit" variant="primary" disabled={saving || authLoading}>
-            {saving ? "Saving..." : "Create Post"}
+            {saving ? "Đang lưu…" : "Tạo bài viết"}
           </Button>
         </div>
       </form>

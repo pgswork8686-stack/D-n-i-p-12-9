@@ -28,7 +28,7 @@ export default function AdminContentCategoriesPage() {
   const fetchCategories = useCallback(async () => {
     if (!token) {
       if (!authLoading) {
-        setError("Unauthorized (401): Admin token required.");
+        setError("Chưa đăng nhập (401): cần tài khoản quản trị.");
         setLoading(false);
       }
       return;
@@ -41,7 +41,7 @@ export default function AdminContentCategoriesPage() {
       setCategories(Array.isArray(data) ? data : []);
       setError(null);
     } catch (err: any) {
-      setError(err.message || "Failed to load categories.");
+      setError(err.message || "Không tải được danh mục.");
     } finally {
       setLoading(false);
     }
@@ -76,10 +76,10 @@ export default function AdminContentCategoriesPage() {
       setDescription("");
       setSeoTitle("");
       setSeoDescription("");
-      setSuccessMsg("Category created successfully!");
+      setSuccessMsg("Đã tạo danh mục.");
       fetchCategories();
     } catch (err: any) {
-      setError(err.message || "Failed to create category.");
+      setError(err.message || "Không tạo được danh mục.");
     } finally {
       setCreating(false);
     }
@@ -103,10 +103,10 @@ export default function AdminContentCategoriesPage() {
       });
 
       setEditingCat(null);
-      setSuccessMsg("Category updated successfully!");
+      setSuccessMsg("Đã cập nhật danh mục.");
       fetchCategories();
     } catch (err: any) {
-      setError(err.message || "Failed to update category.");
+      setError(err.message || "Không cập nhật được danh mục.");
     }
   };
 
@@ -115,21 +115,21 @@ export default function AdminContentCategoriesPage() {
       <div className="flex items-center justify-between mb-8 pb-4 border-b border-gray-200">
         <div>
           <Link href="/content" className="text-xs text-[#0037b0] hover:underline font-semibold">
-            ← Back to Content List
+            ← Danh sách nội dung
           </Link>
           <div className="flex items-center gap-3 mt-1">
-            <h1 className="text-2xl font-bold text-gray-900">Content Categories</h1>
-            <Badge variant="info">{categories.length} Categories</Badge>
+            <h1 className="text-2xl font-bold text-gray-900">Danh mục nội dung</h1>
+            <Badge variant="info">{categories.length} danh mục</Badge>
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Taxonomy and topic clusters for articles and documentation.
+            Phân loại và nhóm chủ đề cho bài viết và tài liệu.
           </p>
         </div>
       </div>
 
       {error && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs mb-6">
-          <strong>Error:</strong> {error}
+          <strong>Lỗi:</strong> {error}
         </div>
       )}
       {successMsg && (
@@ -141,13 +141,13 @@ export default function AdminContentCategoriesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Create Category Form */}
         <div className="lg:col-span-1">
-          <Card title="Add New Category">
+          <Card title="Thêm danh mục">
             <form onSubmit={handleCreateCategory} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Name <span className="text-red-500">*</span>
+                <label htmlFor="cc-1" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Tên <span className="text-red-500">*</span>
                 </label>
-                <input
+                <input id="cc-1"
                   type="text"
                   required
                   value={name}
@@ -158,10 +158,10 @@ export default function AdminContentCategoriesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Slug (optional)
+                <label htmlFor="cc-2" className="block text-xs font-semibold text-gray-700 mb-1">
+                  Đường dẫn (slug, không bắt buộc)
                 </label>
-                <input
+                <input id="cc-2"
                   type="text"
                   value={slug}
                   onChange={(e) => setSlug(e.target.value)}
@@ -171,46 +171,46 @@ export default function AdminContentCategoriesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="cc-3" className="block text-xs font-semibold text-gray-700 mb-1">
                   Description
                 </label>
-                <textarea
+                <textarea id="cc-3"
                   rows={3}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Brief category description..."
+                  placeholder="Mô tả ngắn về danh mục…"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="cc-4" className="block text-xs font-semibold text-gray-700 mb-1">
                   SEO Title
                 </label>
-                <input
+                <input id="cc-4"
                   type="text"
                   value={seoTitle}
                   onChange={(e) => setSeoTitle(e.target.value)}
-                  placeholder="SEO Title override"
+                  placeholder="Tiêu đề SEO (tùy chọn)"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label htmlFor="cc-5" className="block text-xs font-semibold text-gray-700 mb-1">
                   SEO Description
                 </label>
-                <textarea
+                <textarea id="cc-5"
                   rows={2}
                   value={seoDescription}
                   onChange={(e) => setSeoDescription(e.target.value)}
-                  placeholder="Meta description for category archive..."
+                  placeholder="Mô tả meta cho trang danh mục…"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0037b0] focus:outline-none"
                 />
               </div>
 
               <Button type="submit" variant="primary" disabled={creating || authLoading} className="w-full">
-                {creating ? "Creating..." : "+ Create Category"}
+                {creating ? "Đang tạo…" : "+ Tạo danh mục"}
               </Button>
             </form>
           </Card>
@@ -218,11 +218,11 @@ export default function AdminContentCategoriesPage() {
 
         {/* Categories List */}
         <div className="lg:col-span-2">
-          <Card title="Existing Categories">
+          <Card title="Danh mục hiện có">
             {loading || authLoading ? (
-              <div className="p-8 text-center text-sm text-gray-500">Loading categories...</div>
+              <div className="p-8 text-center text-sm text-gray-500">Đang tải danh mục…</div>
             ) : categories.length === 0 ? (
-              <div className="p-8 text-center text-sm text-gray-500">No categories found. Create one on the left.</div>
+              <div className="p-8 text-center text-sm text-gray-500">Chưa có danh mục. Hãy tạo ở khung bên trái.</div>
             ) : (
               <div className="divide-y divide-gray-100">
                 {categories.map((cat) => (
@@ -243,7 +243,7 @@ export default function AdminContentCategoriesPage() {
                       onClick={() => setEditingCat({ ...cat })}
                       className="text-xs font-semibold text-[#0037b0] hover:underline px-2 py-1"
                     >
-                      Edit
+                      Sửa
                     </button>
                   </div>
                 ))}
@@ -253,15 +253,15 @@ export default function AdminContentCategoriesPage() {
         </div>
       </div>
 
-      {/* Edit Category Modal */}
+      {/* Sửa danh mục Modal */}
       {editingCat && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <h3 className="text-lg font-bold text-gray-900">Edit Category</h3>
+            <h3 className="text-lg font-bold text-gray-900">Sửa danh mục</h3>
             <form onSubmit={handleUpdateCategory} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Name</label>
-                <input
+                <label htmlFor="cc-6" className="block text-xs font-semibold text-gray-700 mb-1">Tên</label>
+                <input id="cc-6"
                   type="text"
                   required
                   value={editingCat.name}
@@ -270,8 +270,8 @@ export default function AdminContentCategoriesPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Slug</label>
-                <input
+                <label htmlFor="cc-7" className="block text-xs font-semibold text-gray-700 mb-1">Đường dẫn (slug)</label>
+                <input id="cc-7"
                   type="text"
                   required
                   value={editingCat.slug}
@@ -280,8 +280,8 @@ export default function AdminContentCategoriesPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Description</label>
-                <textarea
+                <label htmlFor="cc-8" className="block text-xs font-semibold text-gray-700 mb-1">Mô tả</label>
+                <textarea id="cc-8"
                   rows={2}
                   value={editingCat.description || ""}
                   onChange={(e) => setEditingCat({ ...editingCat, description: e.target.value })}
@@ -289,8 +289,8 @@ export default function AdminContentCategoriesPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">SEO Title</label>
-                <input
+                <label htmlFor="cc-9" className="block text-xs font-semibold text-gray-700 mb-1">Tiêu đề SEO</label>
+                <input id="cc-9"
                   type="text"
                   value={editingCat.seoTitle || ""}
                   onChange={(e) => setEditingCat({ ...editingCat, seoTitle: e.target.value })}
@@ -298,8 +298,8 @@ export default function AdminContentCategoriesPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">SEO Description</label>
-                <textarea
+                <label htmlFor="cc-10" className="block text-xs font-semibold text-gray-700 mb-1">Mô tả SEO</label>
+                <textarea id="cc-10"
                   rows={2}
                   value={editingCat.seoDescription || ""}
                   onChange={(e) => setEditingCat({ ...editingCat, seoDescription: e.target.value })}
@@ -308,10 +308,10 @@ export default function AdminContentCategoriesPage() {
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => setEditingCat(null)}>
-                  Cancel
+                  Hủy
                 </Button>
                 <Button type="submit" variant="primary" size="sm">
-                  Save Category
+                  Lưu danh mục
                 </Button>
               </div>
             </form>
