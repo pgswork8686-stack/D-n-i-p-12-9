@@ -398,4 +398,55 @@ describe("ContentService", () => {
       ).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe("Public PAGE access (ST13 foundation)", () => {
+    it("only queries PUBLISHED records with contentType PAGE", async () => {
+      (prisma.contentPost.findFirst as jest.Mock).mockResolvedValue({
+        id: "page_1",
+        slug: "privacy-policy",
+        title: "Privacy Policy",
+        excerpt: null,
+        content: "<p>Approved content</p>",
+        contentType: ContentType.PAGE,
+        seoTitle: null,
+        seoDescription: null,
+        canonicalUrl: null,
+        featuredImageUrl: null,
+        featuredImageAlt: null,
+        ogImageUrl: null,
+        publishedAt: new Date("2026-10-01T00:00:00Z"),
+        updatedAt: new Date("2026-10-01T00:00:00Z"),
+        readingTimeMinutes: 1,
+        category: null,
+      });
+
+      const page = await service.getPublicPageBySlug("privacy-policy");
+      expect(page.contentType).toBe(ContentType.PAGE);
+      expect(page.content).toBe("<p>Approved content</p>");
+      expect(prisma.contentPost.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            slug: "privacy-policy",
+            status: ContentStatus.PUBLISHED,
+            contentType: ContentType.PAGE,
+          },
+        }),
+      );
+    });
+
+    it("does not reveal a draft, unpublished or ARTICLE slug via PAGE endpoint", async () => {
+      (prisma.contentPost.findFirst as jest.Mock).mockResolvedValue(null);
+      await expect(service.getPublicPageBySlug("draft-or-article")).rejects.toThrow(NotFoundException);
+      expect(prisma.contentPost.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            slug: "draft-or-article",
+            status: ContentStatus.PUBLISHED,
+            contentType: ContentType.PAGE,
+          },
+        }),
+      );
+    });
+  });
+
 });
