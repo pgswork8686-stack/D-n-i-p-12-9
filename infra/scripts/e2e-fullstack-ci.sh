@@ -59,6 +59,8 @@ mapfile -t SPECS < <(e2e_fullstack_specs "$ROOT")
 REST=()
 for spec in "${SPECS[@]}"; do [[ "$spec" == tests/purchase-flow.spec.ts ]] || REST+=("$spec"); done
 if [[ "${#REST[@]}" -eq "${#SPECS[@]}" ]]; then echo "tests/purchase-flow.spec.ts is missing from the full-stack suite" >&2; exit 1; fi
+# `playwright test` without file arguments would run every spec, ST01 included.
+if [[ "${#REST[@]}" -eq 0 ]]; then echo "no full-stack spec besides purchase-flow" >&2; exit 1; fi
 echo "Full-stack specs: ${SPECS[*]}"
 
 # A stale server on one of these ports would answer the readiness checks instead of the one started here.
@@ -81,11 +83,12 @@ echo "::group::Start API and worker"
 start api env NODE_ENV=test PORT=4000 ENABLE_TEST_PAYMENT_PROVIDER=true node apps/api/dist/main.js
 wait_http api http://localhost:4000/health/readiness
 # purchase-flow and AD10 buy the demo product; seed it only when the database does not have it yet.
-if [[ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/products/klinmart)" == "404" ]]; then
+if [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 http://localhost:4000/products/klinmart)" == "404" ]]; then
   E2E_API_URL=http://localhost:4000 pnpm --filter @nexus/e2e seed:demo
 fi
 curl -fsS --max-time 10 http://localhost:4000/products/klinmart -o /dev/null
 start worker env NODE_ENV=test node apps/worker/dist/index.js
+WORKER_PID="${PIDS[-1]}"
 echo "::endgroup::"
 
 echo "::group::Start Storefront, Portal and Admin (next dev, dev-token login)"
@@ -101,7 +104,7 @@ start admin "${NEXT_DEV[@]}" NEXT_PUBLIC_DEV_AUTH_ENABLED=true pnpm --filter @ne
 wait_http admin http://localhost:3002/login
 wait_http admin http://localhost:3002/admin/orders
 # The worker must still be alive: purchase-flow waits for it to grant the entitlement and license.
-kill -0 "${PIDS[1]}" || { echo "the worker exited" >&2; exit 1; }
+kill -0 "$WORKER_PID" || { echo "the worker exited" >&2; exit 1; }
 echo "::endgroup::"
 
 E2E=(env E2E_BASE_URL=http://localhost:3000 E2E_WEB_URL=http://localhost:3000 E2E_PORTAL_URL=http://localhost:3001

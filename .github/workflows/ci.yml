@@ -179,8 +179,9 @@ jobs:
       - name: Acceptance suite (Services Foundation)
         run: pnpm test:acceptance:services
 
-      # ST01 tests exercise real API + DB + browser and axe at 1440/768/390
-      # with the Services-off CTA. Form mode remains a separate staging gate.
+      # ST01 tests (infra/scripts/e2e-suites.sh) exercise real API + DB + browser and axe at
+      # 1440/768/390, first with the Services-off CTA, then with the real consultation form.
+      # The Portal/Admin/purchase/AD10 specs run in the e2e-fullstack job.
       - name: ST01 Playwright browser acceptance (CTA)
         run: |
           bash -n infra/scripts/st01-playwright-ci.sh

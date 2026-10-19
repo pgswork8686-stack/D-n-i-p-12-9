@@ -7,7 +7,12 @@
 // Usage: node infra/scripts/e2e-skip-audit.mjs <report.json> [<report.json> ...]
 import * as fs from "node:fs";
 
-const ALLOWED = [/dự án desktop/i, /viewport điện thoại/i];
+// A viewport skip is only legitimate on the OTHER viewports: "once on desktop" must not skip desktop itself,
+// "phone only" must not skip the phone. Anything else (including a data condition) is not allowed.
+const ALLOWED = [
+  { reason: /dự án desktop/i, notOn: "desktop-1440" },
+  { reason: /viewport điện thoại/i, notOn: "mobile-390" },
+];
 
 const offending = [];
 let total = 0;
@@ -21,7 +26,8 @@ function walk(suite, file) {
       if (!isSkipped) continue;
       skipped += 1;
       const reasons = (t.annotations ?? []).filter((a) => a.type === "skip").map((a) => a.description ?? "");
-      if (reasons.length === 0 || !reasons.every((r) => ALLOWED.some((re) => re.test(r)))) {
+      const allowed = (r) => ALLOWED.some((a) => a.reason.test(r) && t.projectName !== a.notOn);
+      if (reasons.length === 0 || !reasons.every(allowed)) {
         offending.push(`${file} › ${spec.title} [${t.projectName}] — ${reasons.join("; ") || "no reason given"}`);
       }
     }
