@@ -43,7 +43,12 @@ test.describe("AD11 Quyền sử dụng", () => {
   test("lists entitlements and requires a reason before revoking", async ({ page }) => {
     await page.goto("/admin/entitlements");
     await expect(page.getByRole("heading", { name: /Quyền sử dụng/, level: 1 })).toBeVisible();
+    // The filter refetches the list while the summary line still shows the previous data: wait for the
+    // ACTIVE response and for the list to leave its loading state before looking for a row action.
+    const activeLoaded = page.waitForResponse((r) => r.url().includes("/admin/entitlements?") && r.url().includes("status=ACTIVE"));
     await page.getByLabel("Trạng thái").selectOption("ACTIVE");
+    await activeLoaded;
+    await expect(page.getByText("Đang tải quyền sử dụng…")).toHaveCount(0);
     await expect(page.getByRole("status").filter({ hasText: /Có \d+ quyền sử dụng/ })).toBeVisible();
     const revoke = page.getByRole("button", { name: "Thu hồi" }).first();
     test.skip((await revoke.count()) === 0, "Không có quyền sử dụng đang hoạt động trong dữ liệu thử");

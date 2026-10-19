@@ -105,6 +105,8 @@ test.describe("PT05–PT06 License", () => {
     await page.goto("/licenses");
     await expect(page.getByRole("heading", { level: 1, name: "License của tôi" })).toBeVisible();
     const view = page.getByRole("link", { name: "Xem chi tiết" }).first();
+    // The heading renders before the list loads: decide only once a license or the empty state is shown.
+    await expect(view.or(page.getByText("Bạn chưa có license nào"))).toBeVisible();
     test.skip((await view.count()) === 0, "Khách thử không có license");
     expect(await page.locator("main").innerText()).not.toMatch(/NXS-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/);
     await view.click();
