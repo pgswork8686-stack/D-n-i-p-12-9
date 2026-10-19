@@ -64,7 +64,7 @@ Quyền mới được gán: `support_agent` (inquiry.read/manage, project.read)
 - **Form công khai**: DTO whitelist + giới hạn độ dài; honeypot `website`; rate limit Redis sliding window theo IP (5/giờ) và email (3/giờ), fail-closed 503 khi Redis lỗi; `submissionKey` chống gửi trùng; token sai bị 401 (không hạ cấp thành ẩn danh).
 - **File**: MIME xác định bằng magic bytes (không tin client), whitelist PDF/PNG/JPEG/WebP/TXT/DOCX/XLSX/PPTX, ≤ 10 MB, tên file được làm sạch (kể cả khôi phục UTF-8 bị multipart decode sai), storage key do server sinh, object private + signed URL 120 giây. Upload lỗi giữa chừng sẽ dọn object mồ côi. Khách ẩn danh không được đính kèm file.
 - **Toàn vẹn**: cập nhật trạng thái dùng compare-and-set (`updateMany where status = cũ`) → 409 khi xung đột; chuyển yêu cầu thành dự án trong một transaction, idempotent nhờ `inquiry_id` unique; audit log ghi trong cùng transaction với thay đổi.
-- **Rate limit cho khách đã đăng nhập**: 30 tin nhắn/giờ, 20 lần tải tài liệu/giờ mỗi tài khoản.
+- **Rate limit cho khách đã đăng nhập**: 30 tin nhắn/giờ mỗi tài khoản. Upload được giới hạn **trước khi** đọc body multipart (`UploadQuotaGuard`): 10 request multipart/giờ cho form yêu cầu, 20/giờ cho tài liệu dự án. Hạn mức cấu hình qua `SERVICE_INQUIRY_UPLOAD_LIMIT_PER_USER`, `SERVICE_PROJECT_UPLOAD_LIMIT_PER_USER`. File part từ người ẩn danh bị từ chối ngay tại Multer.
 
 ## Tương thích với PR #23 (AI Marketing OS)
 
@@ -88,3 +88,16 @@ Không xóa module Hosting hay migration cũ. Đề xuất:
 - Bật module: `FEATURE_SERVICES=true` (API). Storefront/Portal tự hiện menu qua `GET /v1/features`.
 - Seed danh mục: `pnpm db:seed:services` (chỉ tạo nếu chưa có slug; production tạo ở trạng thái `DRAFT` để staff duyệt trước khi bật `ACTIVE`).
 - Kiểm thử: `pnpm --filter @nexus/api test -- services`, `pnpm test:acceptance:services` (cần API đã build, Postgres, Redis, S3).
+
+### Điều kiện trước khi bật `FEATURE_SERVICES` ở production
+
+Merge PR không làm thay đổi production vì flag tắt mặc định. Trước khi bật:
+
+1. **IP thật của khách:** API chỉ nhận request qua Caddy (`production-compose.yml` chỉ mở cổng 80/443 của Caddy). Express dùng `trust proxy = 1` (có từ trước, `apps/api/src/main.ts`), nên `req.ip` là IP mà Caddy nhìn thấy.
+   - Cloudflare để **DNS only** (khuyến nghị trong `docs/runbooks/go-live-checklist.md`): `req.ip` là IP khách, rate limit theo IP hoạt động đúng.
+   - Cloudflare **proxy** (mây cam) cho `API_DOMAIN`: `req.ip` là IP edge của Cloudflare, nhiều khách dùng chung một hạn mức. Cần cấu hình `trusted_proxies` (dải IP Cloudflare) và header IP khách trong Caddy trước khi bật.
+2. Đặt `SERVICE_INQUIRY_IP_SALT` (chuỗi ngẫu nhiên ≥ 32 ký tự). Thiếu thì API dừng khởi động khi flag bật ở production.
+3. Quyết định có lưu đồng ý xử lý dữ liệu cá nhân (consent) trên form hay không, và kênh thông báo khi có yêu cầu mới (hiện chưa có).
+4. Giữ giới hạn body ở Caddy (`request_body max_size 60MB` đã có cho `API_DOMAIN`). Cân nhắc giới hạn nhỏ hơn cho riêng các route upload.
+5. Staff duyệt nội dung và chuyển các dịch vụ seed từ `DRAFT` sang `ACTIVE`.
+6. Chạy `pnpm test:acceptance:services` trên staging (Supabase thật, R2 thật) trước khi bật ở production.

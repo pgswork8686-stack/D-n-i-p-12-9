@@ -64,6 +64,8 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL` | API | OPTIONAL | PUBLIC | `3` | `.env.production` | Số yêu cầu tối đa mỗi email trong một cửa sổ |
 | `SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS` | API | OPTIONAL | PUBLIC | `3600` | `.env.production` | Độ dài cửa sổ rate limit (giây) |
 | `SERVICE_INQUIRY_IP_SALT` | API | REQUIRED (production, khi bật FEATURE_SERVICES) | SECRET | Chuỗi ngẫu nhiên ≥ 32 ký tự | `.env.production` | Salt khi băm IP người gửi; thiếu thì API dừng khởi động |
+| `SERVICE_INQUIRY_UPLOAD_LIMIT_PER_USER` | API | OPTIONAL | PUBLIC | `10` | `.env.production` | Số request multipart (có thể kèm file) mỗi tài khoản mỗi giờ ở form yêu cầu; áp trước khi đọc body |
+| `SERVICE_PROJECT_UPLOAD_LIMIT_PER_USER` | API | OPTIONAL | PUBLIC | `20` | `.env.production` | Số lần khách tải tài liệu dự án mỗi giờ; áp trước khi đọc body |
 | `ENABLE_TEST_PAYMENT_PROVIDER` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Bị cấm bởi `NODE_ENV === "production"` |
 | `STRIPE_MOCK_CLIENT` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Ném lỗi crash nếu bật trong production |
 | `SEED_DEV_USERS` | DB seed | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Không tạo user mock |
