@@ -1,0 +1,1 @@
+[{"id":"nexustheme-resend","name":"NEXUSTHEME Resend (Header Auth: Authorization = Bearer <key>)","type":"httpHeaderAuth","data":{"name":"Authorization","value":"Bearer re-live-not-a-real-key"}}]

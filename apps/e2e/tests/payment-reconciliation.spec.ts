@@ -113,6 +113,17 @@ test.describe("AD10 Đối soát thanh toán", () => {
     expect(list.items.some((c) => c.reason === "NO_TRANSFER_CODE")).toBe(true);
   });
 
+  test("khoản chuyển rất lớn (> 2,1 tỷ) vẫn được lưu chính xác; id giao dịch bất thường bị từ chối 400, không phải lỗi 5xx", async () => {
+    const big = 3_500_000_000;
+    const res = await sepayWebhook({ id: `${stamp}6`, transferAmount: big, content: "CK NXS111111111111" });
+    expect(res.ok, "webhook chỉ được xác nhận khi ca đã lưu được").toBe(true);
+    const list = await api<{ items: (Case & { receivedAmount: number })[] }>("/admin/payments/reconciliation?status=OPEN&limit=100", ADMIN);
+    expect(list.items.find((c) => c.transferCode === "NXS111111111111")?.receivedAmount).toBe(big);
+
+    const bad = await sepayWebhook({ id: "x".repeat(200), transferAmount: 10_000, content: "CK NXS111111111111" });
+    expect(bad.status).toBe(400);
+  });
+
   test("quyền: khách hàng không xem được; chỉ người có payment.manage mới thao tác", async () => {
     const denied = await fetch(`${API_URL}/admin/payments/reconciliation`, { headers: { Authorization: `Bearer ${CUSTOMER}` } });
     expect(denied.status).toBe(403);

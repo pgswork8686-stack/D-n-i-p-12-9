@@ -561,8 +561,9 @@ model PaymentReconciliationCase {
   paymentId        String?   @map("payment_id")
   orderId          String?   @map("order_id")
   transferCode     String?   @map("transfer_code")
-  expectedAmount   Int?      @map("expected_amount")
-  receivedAmount   Int       @map("received_amount")
+  /// BigInt: a large legitimate transfer must be storable; if it were not, the webhook could never be acknowledged.
+  expectedAmount   BigInt?   @map("expected_amount")
+  receivedAmount   BigInt    @map("received_amount")
   currency         String    @default("VND")
   rawPayloadHash   String?   @map("raw_payload_hash")
   sanitizedPayload Json      @map("sanitized_payload")

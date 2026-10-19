@@ -95,8 +95,8 @@ export class PaymentReconciliationService {
             paymentId: review.paymentId ?? null,
             orderId: review.orderId ?? null,
             transferCode: review.transferCode ?? null,
-            expectedAmount: review.expectedAmount ?? null,
-            receivedAmount: review.receivedAmount,
+            expectedAmount: review.expectedAmount === undefined ? null : BigInt(review.expectedAmount),
+            receivedAmount: BigInt(review.receivedAmount),
             rawPayloadHash: event.rawPayloadHash ?? null,
             sanitizedPayload: event.sanitizedPayload as Prisma.InputJsonValue,
           },
@@ -185,7 +185,7 @@ export class PaymentReconciliationService {
       checkedAt: new Date().toISOString(),
       transfers,
       totalReceived: transfers.reduce((sum, t) => sum + t.amount, 0),
-      matchesExpected: found.expectedAmount != null && transfers.length === 1 && transfers[0].amount === found.expectedAmount,
+      matchesExpected: found.expectedAmount != null && transfers.length === 1 && transfers[0].amount === Number(found.expectedAmount),
     };
     const updated = await prisma.paymentReconciliationCase.update({
       where: { id },
@@ -231,7 +231,7 @@ export class PaymentReconciliationService {
   }
 
   private view(c: Prisma.PaymentReconciliationCaseGetPayload<object>): ReconciliationCaseView {
-    const difference = c.expectedAmount != null ? c.receivedAmount - c.expectedAmount : null;
+    const difference = c.expectedAmount != null ? Number(c.receivedAmount) - Number(c.expectedAmount) : null;
     return {
       id: c.id,
       provider: c.provider,
@@ -241,8 +241,8 @@ export class PaymentReconciliationService {
       paymentId: c.paymentId,
       orderId: c.orderId,
       transferCode: c.transferCode,
-      expectedAmount: c.expectedAmount,
-      receivedAmount: c.receivedAmount,
+      expectedAmount: c.expectedAmount === null ? null : Number(c.expectedAmount),
+      receivedAmount: Number(c.receivedAmount),
       /** > 0: khách chuyển thừa, < 0: chuyển thiếu, null: không xác định được đơn. */
       difference,
       currency: c.currency,

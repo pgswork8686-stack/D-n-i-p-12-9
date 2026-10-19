@@ -80,7 +80,14 @@ export async function fetchPublishedPolicySlugs(
   /** The footer tolerates a 5-minute cache; the policy index page must always be current. */
   options: { noStore?: boolean } = {},
 ): Promise<string[]> {
-  const apiUrl = serverApiUrl();
+  // serverApiUrl() THROWS for an unsafe API origin (http/loopback in a production build). This runs in the root
+  // layout for every page, so an unusable origin must mean "no policy links", never a failed prerender.
+  let apiUrl: string;
+  try {
+    apiUrl = serverApiUrl();
+  } catch {
+    return [];
+  }
   const results = await Promise.all(
     slugs.map(async (slug) => {
       try {

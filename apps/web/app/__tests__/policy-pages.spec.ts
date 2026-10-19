@@ -38,4 +38,25 @@ describe("ST13 policy pages", () => {
     const slugs = await fetchPublishedPolicySlugs(POLICY_PAGES.map((p) => p.slug), fetchFn as unknown as typeof fetch);
     expect(slugs).toEqual(["chinh-sach-doi-tra"]);
   });
+
+  // Regression for the CI build failure: `next build` inlines NODE_ENV="production", where resolveApiUrl()
+  // rejects http/loopback API URLs by THROWING. The root layout calls this helper for every page, so it must
+  // swallow that and simply return "no policy links" instead of failing the whole prerender.
+  it("never throws when the API URL is rejected as unsafe (production validation of http/loopback)", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const saved = { NODE_ENV: env.NODE_ENV, NEXT_PUBLIC_API_URL: env.NEXT_PUBLIC_API_URL, INTERNAL_API_URL: env.INTERNAL_API_URL };
+    env.NODE_ENV = "production";
+    env.NEXT_PUBLIC_API_URL = "http://localhost:4000";
+    delete env.INTERNAL_API_URL;
+    try {
+      const fetchFn = jest.fn();
+      await expect(fetchPublishedPolicySlugs(POLICY_PAGES.map((p) => p.slug), fetchFn as unknown as typeof fetch)).resolves.toEqual([]);
+      expect(fetchFn).not.toHaveBeenCalled();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete env[key];
+        else env[key] = value;
+      }
+    }
+  });
 });

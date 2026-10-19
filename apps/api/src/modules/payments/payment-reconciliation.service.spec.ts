@@ -49,9 +49,18 @@ describe("PaymentReconciliationService", () => {
       mockCase.create.mockResolvedValue({ id: "c1" });
       await service.recordFromWebhook("sepay", event);
       expect(mockCase.create).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ reason: "AMOUNT_MISMATCH", receivedAmount: 800000, expectedAmount: 890000 }),
+        // Stored as BigInt so a transfer above INT4 can never make the case (and therefore the webhook) fail.
+        data: expect.objectContaining({ reason: "AMOUNT_MISMATCH", receivedAmount: 800000n, expectedAmount: 890000n }),
       }));
       expect(audit.logActionWithClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: "PAYMENT_RECONCILIATION_CASE_OPENED" }));
+    });
+
+    it("stores a transfer larger than INT4 exactly (no overflow, no clamping)", async () => {
+      mockCase.create.mockResolvedValue({ id: "c2" });
+      await service.recordFromWebhook("sepay", { ...event, review: { reason: "UNKNOWN_TRANSFER_CODE", receivedAmount: 3_500_000_000 } });
+      expect(mockCase.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ receivedAmount: 3_500_000_000n, expectedAmount: null }),
+      }));
     });
 
     it("is idempotent for a retried webhook (unique key already stored)", async () => {

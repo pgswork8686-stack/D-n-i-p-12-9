@@ -248,6 +248,11 @@ export class SepayPaymentProvider implements PaymentProviderAdapter {
     if (payload?.id === undefined || payload?.id === null || payload.id === "") {
       throw new BadRequestException("SePay webhook is missing transaction id");
     }
+    // The id becomes part of a unique key (sepay_<id>); an absurd value must be a clean 400, not a database error
+    // that would leave the webhook unacknowledged forever.
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(payload.id))) {
+      throw new BadRequestException("Invalid SePay transaction id");
+    }
 
     const rawPayloadHash = crypto.createHash("sha256").update(rawBody).digest("hex");
     const externalEventId = `sepay_${payload.id}`;
@@ -287,7 +292,8 @@ export class SepayPaymentProvider implements PaymentProviderAdapter {
       return ignored("account_mismatch");
     }
     const amount = Number(payload.transferAmount);
-    if (!Number.isInteger(amount) || amount <= 0) return ignored("invalid_amount");
+    // isSafeInteger: beyond 2^53 a Number can no longer represent the amount exactly, so it is never trusted.
+    if (!Number.isSafeInteger(amount) || amount <= 0) return ignored("invalid_amount");
 
     const code = this.extractTransferCode(payload, config.codePrefix);
     if (!code) {
