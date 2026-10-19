@@ -31,6 +31,14 @@ export class ContentController {
     return this.contentService.getPublicPostBySlug(slug);
   }
 
+  // ST13 foundation: unpublished PAGE records must never be exposed.
+  @Get("pages/:slug")
+  async getPublicPageBySlug(
+    @Param("slug") slug: string,
+  ): Promise<PublicContentPostDto> {
+    return this.contentService.getPublicPageBySlug(slug);
+  }
+
   @Get("categories")
   async listPublicCategories(): Promise<ContentCategoryDto[]> {
     return this.contentService.listPublicCategories();
