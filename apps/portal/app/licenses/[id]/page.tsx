@@ -19,12 +19,14 @@ import {
   executeDomainDeactivation,
   executeLicenseReveal,
 } from "../../lib/portal-actions";
+import { buildProductLabels, formatViDateOrNull, productLabel } from "../../lib/product-names";
 
 export default function LicenseDetailPage() {
   const params = useParams();
   const licenseId = params?.id as string;
   const { token } = useAuth();
   const [license, setLicense] = useState<CustomerLicenseDto | null>(null);
+  const [labels, setLabels] = useState(() => buildProductLabels([]));
   const [activations, setActivations] = useState<CustomerLicenseActivationDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,9 +51,10 @@ export default function LicenseDetailPage() {
         client.listLicenseActivations(licenseId),
       ]);
       setLicense(lic);
+      try { setLabels(buildProductLabels((await client.listOrders({ limit: 50 })).items || [])); } catch { /* names are optional */ }
       setActivations(acts || []);
     } catch (err: any) {
-      setError(err.message || "Failed to load license details");
+      setError(err.message || "Không tải được chi tiết license.");
     } finally {
       setLoading(false);
     }
@@ -73,7 +76,7 @@ export default function LicenseDetailPage() {
       const plaintextKey = await executeLicenseReveal(client, licenseId);
       setRevealedKey(plaintextKey);
     } catch (err: any) {
-      setError(err.message || "Failed to reveal license key");
+      setError(err.message || "Không hiện được license key.");
     } finally {
       setRevealing(false);
     }
@@ -102,7 +105,7 @@ export default function LicenseDetailPage() {
       // Refresh activations and license without touching plaintext key
       await fetchLicenseData();
     } catch (err: any) {
-      setDeactivateError(err.message || "Deactivation failed.");
+      setDeactivateError(err.message || "Hủy kích hoạt thất bại.");
     } finally {
       setDeactivatingDomain(null);
     }
@@ -118,13 +121,13 @@ export default function LicenseDetailPage() {
                 href="/licenses"
                 className="text-xs font-bold text-[#0037b0] hover:underline mb-1 inline-block"
               >
-                ← Back to All Licenses
+                ← License của tôi
               </Link>
               <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-                License #{licenseId ? licenseId.slice(0, 8) : "..."}
+                {license ? productLabel(labels, license.productId, license.variantId).name : "Chi tiết license"}
               </h1>
             </div>
-            {license && <StatusBadge status={license.status} />}
+            {license && <StatusBadge status={license.status} kind="license" />}
           </div>
 
           {error && <ErrorState message={error} onRetry={fetchLicenseData} />}
@@ -141,16 +144,16 @@ export default function LicenseDetailPage() {
             </div>
           ) : !license ? (
             <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
-              License not found or belongs to another user.
+              Không tìm thấy license này trong tài khoản của bạn.
             </div>
           ) : (
             <>
               {/* License Key Card with Secure Reveal */}
-              <Card title="License Credentials" subtitle="Masked for security. Reveal to activate on your WordPress site.">
+              <Card title="License key" subtitle="Được che để bảo mật. Chọn “Hiện license key” khi cần kích hoạt trên website WordPress.">
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-4">
                   <div>
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                      Product License Key
+                      License key sản phẩm
                     </span>
                     <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                       <div className="font-mono text-base font-black text-slate-900 bg-white px-4 py-2.5 rounded-xl border border-slate-200 flex-1 truncate">
@@ -164,15 +167,15 @@ export default function LicenseDetailPage() {
                             onClick={handleReveal}
                             disabled={revealing}
                           >
-                            {revealing ? "Revealing..." : "Reveal Key 👁️"}
+                            {revealing ? "Đang hiện…" : "Hiện license key"}
                           </Button>
                         ) : (
                           <>
                             <Button variant="secondary" size="sm" onClick={handleCopy}>
-                              {copied ? "Copied! ✓" : "Copy Key 📋"}
+                              {copied ? "Đã sao chép ✓" : "Sao chép"}
                             </Button>
                             <Button variant="outline" size="sm" onClick={handleHideKey}>
-                              Hide Key 🔒
+                              Ẩn license key
                             </Button>
                           </>
                         )}
@@ -182,29 +185,29 @@ export default function LicenseDetailPage() {
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-3 border-t border-slate-200/60 text-xs">
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Status:</span>
-                      <StatusBadge status={license.status} />
+                      <span className="text-slate-400 block mb-0.5">Trạng thái:</span>
+                      <StatusBadge status={license.status} kind="license" />
                     </div>
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Active Seats:</span>
+                      <span className="text-slate-400 block mb-0.5">Tên miền đã dùng:</span>
                       <span className="font-bold text-slate-800">
-                        {license.activeActivations} / {license.maxActivations ?? "Unlimited"}
+                        {license.activeActivations} / {license.maxActivations ?? "Không giới hạn"}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Updates Window:</span>
+                      <span className="text-slate-400 block mb-0.5">Cập nhật đến:</span>
                       <span className="font-medium text-slate-700">
                         {license.updatesUntil
-                          ? new Date(license.updatesUntil).toLocaleDateString()
+                          ? new Date(license.updatesUntil).toLocaleDateString("vi-VN")
                           : "Lifetime"}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block mb-0.5">Support Window:</span>
+                      <span className="text-slate-400 block mb-0.5">Hỗ trợ đến:</span>
                       <span className="font-medium text-slate-700">
                         {license.supportUntil
-                          ? new Date(license.supportUntil).toLocaleDateString()
-                          : "Standard"}
+                          ? new Date(license.supportUntil).toLocaleDateString("vi-VN")
+                          : "Cơ bản"}
                       </span>
                     </div>
                   </div>
@@ -213,22 +216,22 @@ export default function LicenseDetailPage() {
 
               {/* Active Activations Card */}
               <Card
-                title="Active Domain Activations"
-                subtitle="WordPress installations registered to this license key"
+                title="Tên miền đã kích hoạt"
+                subtitle="Các website WordPress đã đăng ký với license này"
               >
                 {activations.length === 0 ? (
                   <p className="text-xs text-slate-500 py-4">
-                    No domains are currently active for this license. Activate this key in your WordPress site settings.
+                    Chưa có tên miền nào đang hoạt động. Hãy nhập license key trong phần cài đặt của website WordPress.
                   </p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse text-sm">
                       <thead>
                         <tr className="border-b border-slate-200 text-slate-400 text-xs uppercase tracking-wider font-semibold">
-                          <th className="py-3 px-4">Domain</th>
-                          <th className="py-3 px-4">Activated At</th>
-                          <th className="py-3 px-4">Status</th>
-                          <th className="py-3 px-4 text-right">Actions</th>
+                          <th className="py-3 px-4">Tên miền</th>
+                          <th className="py-3 px-4">Kích hoạt lúc</th>
+                          <th className="py-3 px-4">Trạng thái</th>
+                          <th className="py-3 px-4 text-right"><span className="sr-only">Thao tác</span></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -238,10 +241,10 @@ export default function LicenseDetailPage() {
                               🌐 {act.domain}
                             </td>
                             <td className="py-3.5 px-4 text-xs text-slate-500">
-                              {new Date(act.activatedAt).toLocaleString()}
+                              {new Date(act.activatedAt).toLocaleString("vi-VN")}
                             </td>
                             <td className="py-3.5 px-4">
-                              <StatusBadge status={act.status} />
+                              <StatusBadge status={act.status} kind="allocation" />
                             </td>
                             <td className="py-3.5 px-4 text-right">
                               {act.status === "ACTIVE" && (
@@ -253,8 +256,8 @@ export default function LicenseDetailPage() {
                                   className="text-red-600 hover:bg-red-50 text-xs"
                                 >
                                   {deactivatingDomain === act.domain
-                                    ? "Deactivating..."
-                                    : "Deactivate Domain"}
+                                    ? "Đang hủy…"
+                                    : "Hủy kích hoạt"}
                                 </Button>
                               )}
                             </td>

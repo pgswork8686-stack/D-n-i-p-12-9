@@ -4,3 +4,19 @@
 
 /* Tokens, base styles and shared component classes come from
    @nexus/config/tailwind-preset. */
+/* Figma responsive rule: data tables become stacked cards below 768px.
+   Cell labels come from <ResponsiveTables /> (data-label = column header). */
+@media (max-width: 767px) {
+  main table { min-width: 0 !important; }
+  main table thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  main table, main table tbody, main table tr, main table td { display: block; width: 100%; }
+  main table tr { padding: 0.75rem 1rem; border-bottom: 1px solid rgb(226 232 240); }
+  main table tr:last-child { border-bottom: 0; }
+  main table td { padding: 0.25rem 0 !important; text-align: left !important; }
+  main table td[data-label]:not([data-label=""])::before {
+    content: attr(data-label) ": "; color: rgb(100 116 139); font-size: 0.75rem; font-weight: 600;
+  }
+  main table td[colspan] { padding: 1rem 0 !important; }
+}

@@ -15,6 +15,7 @@ import {
   CustomerProductVersionDto,
   CustomerProductVersionFileDto,
 } from "@nexus/contracts";
+import { buildProductLabels, formatViDateOrNull, productLabel } from "../lib/product-names";
 
 interface EntitlementWithVersions {
   entitlement: EntitlementDto;
@@ -23,6 +24,7 @@ interface EntitlementWithVersions {
 
 export default function DownloadsPage() {
   const { token } = useAuth();
+  const [labels, setLabels] = useState(() => buildProductLabels([]));
   const [items, setItems] = useState<EntitlementWithVersions[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +38,7 @@ export default function DownloadsPage() {
     try {
       const client = getApiClient(token);
       const entitlementsRes = await client.listEntitlements({ limit: 50 });
+      try { setLabels(buildProductLabels((await client.listOrders({ limit: 50 })).items || [])); } catch { /* names are optional */ }
       const activeEntitlements = (entitlementsRes.items || []).filter(
         (e) => e.status === "ACTIVE",
       );
@@ -59,7 +62,7 @@ export default function DownloadsPage() {
 
       setItems(itemsWithVersions);
     } catch (err: any) {
-      setError(err.message || "Failed to load downloads hub");
+      setError(err.message || "Không tải được Trung tâm tải xuống.");
     } finally {
       setLoading(false);
     }
@@ -95,10 +98,10 @@ export default function DownloadsPage() {
         link.click();
         document.body.removeChild(link);
       } else {
-        throw new Error("Signed download URL was not generated.");
+        throw new Error("Không tạo được liên kết tải xuống.");
       }
     } catch (err: any) {
-      setDownloadError(err.message || "Download failed. Please try again.");
+      setDownloadError(err.message || "Tải xuống thất bại. Vui lòng thử lại.");
     } finally {
       setDownloadingFileId(null);
     }
@@ -116,22 +119,21 @@ export default function DownloadsPage() {
         <div className="space-y-6 max-w-5xl">
           <div>
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-              Downloads Hub
+              Trung tâm tải xuống
             </h1>
             <p className="text-slate-500 text-sm mt-1">
-              Secure, backend-signed download links for your purchased themes and plugins.
+              Tải bản cài đặt mới nhất của các sản phẩm bạn đã mua, trong thời hạn cập nhật.
             </p>
           </div>
 
           {/* Security Guarantee Notice */}
           <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-100 text-xs text-indigo-900 space-y-1">
             <div className="font-bold flex items-center gap-1.5">
-              <span>🔒</span>
-              <span>Secure Ephemeral Download Authority</span>
+              <span aria-hidden="true">🔒</span>
+              <span>Liên kết tải xuống an toàn</span>
             </div>
             <p className="text-indigo-700 leading-relaxed">
-              Downloads are streamed using short-lived signed URLs. No permanent public storage links
-              or cloud storage credentials are ever exposed to the client.
+              Mỗi lượt tải dùng một liên kết có chữ ký, hết hạn sau ít phút. Chúng tôi không công khai đường dẫn lưu trữ cố định.
             </p>
           </div>
 
@@ -149,9 +151,9 @@ export default function DownloadsPage() {
             </div>
           ) : items.length === 0 ? (
             <EmptyState
-              title="No Downloads Available"
-              description="You do not have any active product entitlements eligible for download. Purchased products will appear here."
-              actionText="Shop Marketplace"
+              title="Chưa có bản tải xuống"
+              description="Bạn chưa có sản phẩm nào đủ điều kiện tải xuống. Sản phẩm đã mua sẽ xuất hiện tại đây."
+              actionText="Khám phá cửa hàng"
               actionHref={process.env.NEXT_PUBLIC_WEB_URL || "http://localhost:3000"}
             />
           ) : (
@@ -159,17 +161,13 @@ export default function DownloadsPage() {
               {items.map(({ entitlement, versions }) => (
                 <Card
                   key={entitlement.id}
-                  title={`Product #${entitlement.productId.slice(0, 8)}`}
-                  subtitle={`Entitlement: ${entitlement.id.slice(0, 8)} • Updates: ${
-                    entitlement.updatesUntil
-                      ? new Date(entitlement.updatesUntil).toLocaleDateString()
-                      : "Lifetime"
-                  }`}
-                  headerAction={<StatusBadge status={entitlement.status} />}
+                  title={productLabel(labels, entitlement.productId, entitlement.variantId).name}
+                  subtitle={`Cập nhật đến: ${formatViDateOrNull(entitlement.updatesUntil, "Trọn đời")}`}
+                  headerAction={<StatusBadge status={entitlement.status} kind="entitlement" />}
                 >
                   {versions.length === 0 ? (
                     <p className="text-xs text-slate-500 py-3">
-                      No published packages are currently available under this entitlement.
+                      Chưa có gói phát hành nào cho sản phẩm này.
                     </p>
                   ) : (
                     <div className="space-y-4 pt-2">
@@ -181,13 +179,9 @@ export default function DownloadsPage() {
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                             <div>
                               <div className="font-extrabold text-sm text-slate-900 flex items-center gap-2">
-                                <span>Version {ver.version}</span>
+                                <span>Phiên bản {ver.version}</span>
                                 <span className="text-[11px] font-medium text-slate-400">
-                                  (Released{" "}
-                                  {ver.releasedAt
-                                    ? new Date(ver.releasedAt).toLocaleDateString()
-                                    : "N/A"}
-                                  )
+                                  (Phát hành {formatViDateOrNull(ver.releasedAt)})
                                 </span>
                               </div>
                               {ver.releaseNotes && (
@@ -210,13 +204,13 @@ export default function DownloadsPage() {
                                     <span>📄 {file.fileName}</span>
                                     {file.isPrimary && (
                                       <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded">
-                                        Primary
+                                        Bản chính
                                       </span>
                                     )}
                                   </div>
                                   <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
-                                    Size: {formatFileSize(file.sizeBytes)} • SHA-256:{" "}
-                                    {file.sha256 ? `${file.sha256.slice(0, 16)}...` : "N/A"}
+                                    Dung lượng: {formatFileSize(file.sizeBytes)} • SHA-256:{" "}
+                                    {file.sha256 ? `${file.sha256.slice(0, 16)}…` : "—"}
                                   </div>
                                 </div>
 
@@ -230,9 +224,9 @@ export default function DownloadsPage() {
                                   className="shrink-0"
                                 >
                                   {downloadingFileId === file.id ? (
-                                    "Presigning..."
+                                    "Đang tạo liên kết…"
                                   ) : (
-                                    <span>Download File ⬇️</span>
+                                    <span>Tải xuống</span>
                                   )}
                                 </Button>
                               </div>

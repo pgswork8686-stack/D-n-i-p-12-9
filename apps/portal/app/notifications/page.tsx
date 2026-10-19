@@ -36,7 +36,7 @@ export default function NotificationsPage() {
       setNotifications(list);
       setUnreadCount(countRes.count);
     } catch (err: any) {
-      setError(err?.message || "Failed to load notifications");
+      setError(err?.message || "Không tải được thông báo.");
     } finally {
       setLoading(false);
     }
@@ -101,16 +101,16 @@ export default function NotificationsPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                  Notification Center
+                  Thông báo
                 </h1>
                 {unreadCount > 0 && (
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white">
-                    {unreadCount} new
+                    {unreadCount} mới
                   </span>
                 )}
               </div>
               <p className="text-sm text-slate-500 mt-1">
-                Stay informed with ticket updates, license reminders, and account alerts.
+                Cập nhật về yêu cầu hỗ trợ, đơn hàng, license và tài khoản.
               </p>
             </div>
 
@@ -121,7 +121,7 @@ export default function NotificationsPage() {
                 disabled={actionLoading}
                 className="text-xs"
               >
-                {actionLoading ? "Updating..." : "Mark All as Read"}
+                {actionLoading ? "Đang cập nhật…" : "Đánh dấu đã đọc tất cả"}
               </Button>
             )}
           </div>
@@ -136,7 +136,7 @@ export default function NotificationsPage() {
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
-              All Notifications
+              Tất cả
             </button>
             <button
               onClick={() => setFilter("UNREAD")}
@@ -146,7 +146,7 @@ export default function NotificationsPage() {
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
-              Unread Only ({unreadCount})
+              Chưa đọc ({unreadCount})
             </button>
           </div>
 
@@ -159,18 +159,18 @@ export default function NotificationsPage() {
             </div>
           ) : error ? (
             <ErrorState
-              title="Error Loading Notifications"
+              title="Không tải được thông báo"
               message={error}
               onRetry={fetchNotifications}
             />
           ) : notifications.length === 0 ? (
             <EmptyState
               icon="🔔"
-              title="No Notifications"
+              title="Chưa có thông báo"
               description={
                 filter === "UNREAD"
-                  ? "You have caught up with all your notifications!"
-                  : "You have no notifications in your history."
+                  ? "Bạn đã đọc hết thông báo."
+                  : "Bạn chưa có thông báo nào."
               }
             />
           ) : (
@@ -199,13 +199,13 @@ export default function NotificationsPage() {
                         {n.message}
                       </p>
                       <div className="flex items-center gap-3 pt-1 text-[11px] text-slate-400">
-                        <span>{new Date(n.createdAt).toLocaleString()}</span>
+                        <span>{new Date(n.createdAt).toLocaleString("vi-VN")}</span>
                         {n.actionUrl && (
                           <Link
                             href={n.actionUrl}
                             className="font-medium text-[#0037b0] hover:underline"
                           >
-                            View Details →
+                            Xem chi tiết →
                           </Link>
                         )}
                       </div>
@@ -216,9 +216,9 @@ export default function NotificationsPage() {
                     <button
                       onClick={() => handleMarkAsRead(n.id)}
                       className="text-xs text-slate-400 hover:text-slate-700 font-medium whitespace-nowrap p-1 rounded hover:bg-slate-100 transition"
-                      title="Mark as read"
+                      title="Đánh dấu đã đọc"
                     >
-                      ✓ Mark read
+                      ✓ Đã đọc
                     </button>
                   )}
                 </div>
