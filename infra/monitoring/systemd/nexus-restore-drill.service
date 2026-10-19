@@ -1,0 +1,8 @@
+[Unit]
+Description=Monthly restore drill of the newest offsite backup into a throwaway database
+After=docker.service
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/nexustheme/backup.env
+ExecStart=/opt/nexustheme/infra/scripts/restore-drill.sh
+ExecStopPost=/bin/sh -c '[ "$$EXIT_STATUS" = "0" ] || /opt/nexustheme/infra/monitoring/alert.sh FIRING "restore drill failed" "The newest offsite backup could not be restored. Investigate before you need it."'

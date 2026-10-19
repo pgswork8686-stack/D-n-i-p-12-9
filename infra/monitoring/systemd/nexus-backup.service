@@ -1,0 +1,10 @@
+[Unit]
+Description=NexusTheme encrypted database backup + offsite copy
+After=docker.service
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nexustheme
+EnvironmentFile=/etc/nexustheme/backup.env
+ExecStart=/opt/nexustheme/infra/scripts/backup-db.sh /var/backups/nexustheme
+# A failed backup must be loud: the monitor also alerts when .last-success goes stale.
+ExecStopPost=/bin/sh -c '[ "$$EXIT_STATUS" = "0" ] || /opt/nexustheme/infra/monitoring/alert.sh FIRING "backup job failed" "backup-db.sh exited with $$EXIT_STATUS"'

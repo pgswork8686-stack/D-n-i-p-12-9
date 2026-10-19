@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily NexusTheme backup (02:30) — RPO target 24h; run hourly if the business needs a smaller RPO
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=300
+Persistent=true
+[Install]
+WantedBy=timers.target

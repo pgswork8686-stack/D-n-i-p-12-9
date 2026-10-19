@@ -1,0 +1,8 @@
+[Unit]
+Description=NexusTheme health and backup freshness checks
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/nexustheme/monitor.env
+ExecStart=/opt/nexustheme/infra/monitoring/healthcheck.sh
+# Exit 1 just means "something is failing"; alerts were already sent by the script.
+SuccessExitStatus=0 1
