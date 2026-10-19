@@ -3,6 +3,9 @@ export type AdminNavItem = { href: string; label: string; permission: string };
 export const ADMIN_NAVIGATION: AdminNavItem[] = [
   { href: "/admin/products", label: "Sản phẩm", permission: "product.read" },
   { href: "/admin/orders", label: "Đơn hàng", permission: "order.read" },
+  { href: "/admin/entitlements", label: "Quyền sử dụng", permission: "entitlement.read" },
+  { href: "/admin/internal-licenses", label: "License nội bộ", permission: "license.read" },
+  { href: "/admin/users", label: "Khách hàng", permission: "user.read" },
   { href: "/admin/tickets", label: "Ticket hỗ trợ", permission: "ticket.read" },
   { href: "/service-inquiries", label: "Yêu cầu tư vấn", permission: "inquiry.read" },
   { href: "/content", label: "Nội dung CMS", permission: "content.read" },
