@@ -13,7 +13,7 @@
  *      redis-cli -h <host> -p <port> SET nexustheme:test-env nexustheme-test-<name>
  *  - cleanup removes only resources that carry this test's owner label. Never a global prune.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 export const TEST_ENV_KEY = "nexustheme:test-env";
 const OWNER_KEY = "com.nexustheme.test";
@@ -128,11 +128,20 @@ export function isolatedN8nEnv({ prefix, owner, n8nName, volume, report, env = p
     await preflightRedis();
   }
 
-  /** True when `url` answers HTTP (any status) from inside the test network, i.e. where n8n will call it from. */
+  /**
+   * Resolves true when `url` answers HTTP (any status) from inside the test network, i.e. where n8n will call it from.
+   * Asynchronous on purpose: the URL may be served by the calling process itself (the mock provider / email sink),
+   * and a synchronous spawn would block that server's event loop until the probe times out.
+   */
   function reachableFromNetwork(url, image) {
     const probe = `fetch(${JSON.stringify(url)}, { signal: AbortSignal.timeout(5000) }).then(() => process.exit(0), () => process.exit(1))`;
-    return docker(["run", "--rm", "--label", label, "--network", network, "--add-host", GATEWAY, "--entrypoint", "node", image, "-e", probe],
-      { tolerate: true, timeout: 60000 }).status === 0;
+    return new Promise((resolve) => {
+      const child = spawn("docker", ["run", "--rm", "--label", label, "--network", network, "--add-host", GATEWAY,
+        "--entrypoint", "node", image, "-e", probe], { stdio: "ignore" });
+      const timer = setTimeout(() => { child.kill(); resolve(false); }, 60000);
+      child.on("error", () => { clearTimeout(timer); resolve(false); });
+      child.on("exit", (code) => { clearTimeout(timer); resolve(code === 0); });
+    });
   }
 
   return {

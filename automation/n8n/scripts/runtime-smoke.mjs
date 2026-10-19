@@ -193,7 +193,7 @@ async function main() {
   console.log(`Mock provider server listening on :${MOCK_PORT}`);
 
   await testEnv.prepare();
-  report(testEnv.reachableFromNetwork(`http://${HOST_TARGET}:${MOCK_PORT}/`, N8N_IMAGE), "the mock providers are reachable from the test network");
+  report(await testEnv.reachableFromNetwork(`http://${HOST_TARGET}:${MOCK_PORT}/`, N8N_IMAGE), "the mock providers are reachable from the test network");
 
   // Phase A: idle container (server NOT running) — import workflows + credentials.
   // Running CLI imports while the n8n server is up races the SQLite migrations.

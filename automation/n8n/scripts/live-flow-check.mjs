@@ -117,8 +117,8 @@ async function startN8n() {
   await testEnv.prepare();
   // n8n calls the API and the sink from inside the test network; prove both are reachable before buying anything.
   const apiFromN8n = `http://${HOST}:${new URL(API).port || 4000}`;
-  check(testEnv.reachableFromNetwork(apiFromN8n, IMAGE), "the real API is reachable from the test network", apiFromN8n);
-  check(testEnv.reachableFromNetwork(`http://${HOST}:${SINK_PORT}/`, IMAGE), "the email sink is reachable from the test network");
+  check(await testEnv.reachableFromNetwork(apiFromN8n, IMAGE), "the real API is reachable from the test network", apiFromN8n);
+  check(await testEnv.reachableFromNetwork(`http://${HOST}:${SINK_PORT}/`, IMAGE), "the email sink is reachable from the test network");
   docker(["run", "-d", "--name", NAME, ...testEnv.runArgs, "--entrypoint", "/bin/sh",
     "-e", "NODE_FUNCTION_ALLOW_BUILTIN=crypto,net", "-e", "N8N_BLOCK_ENV_ACCESS_IN_NODE=false", IMAGE, "-c", "sleep 600"]);
   docker(["cp", "automation/n8n/workflows", `${NAME}:/files/`]);
