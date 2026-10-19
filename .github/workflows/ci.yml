@@ -117,6 +117,19 @@ jobs:
           bash -n infra/scripts/production-preflight.sh
           bash -n infra/scripts/staging-smoke.sh
           bash -n infra/scripts/staging-preflight.sh
+          bash -n infra/scripts/backup-lib.sh
+          bash -n infra/scripts/restore-drill.sh
+          bash -n infra/scripts/backup-selftest.sh
+          bash -n infra/monitoring/alert.sh
+          bash -n infra/monitoring/healthcheck.sh
+          bash -n infra/monitoring/selftest.sh
+
+      # Encrypted, authenticated backups and the restore drill on synthetic data (throwaway containers).
+      - name: Backup encryption, authentication and restore drill self-test
+        run: bash infra/scripts/backup-selftest.sh
+
+      - name: Monitoring and alerting self-test
+        run: bash infra/monitoring/selftest.sh
 
       # Actual production Caddyfile syntax and HTTP request-size enforcement.
       # Tests use an isolated Docker network and a mock API that consumes request bodies.
