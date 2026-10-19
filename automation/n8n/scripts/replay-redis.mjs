@@ -5,11 +5,11 @@
  * never write those keys into a Redis that belongs to something else; on a dev machine host :6379 is often another
  * project's Redis. So:
  *  - default: the test starts its OWN Redis on its OWN Docker network, with no published host port;
- *  - override: N8N_REPLAY_REDIS_HOST + N8N_REPLAY_REDIS_PORT (both, as reached from the n8n container). Before any
- *    connection, Docker metadata must show the target is a container labelled com.nexustheme.test: either that
- *    container's name, or host.docker.internal plus a host port published by exactly one such container. Only then a
- *    read-only GET of "nexustheme:test-env" must return a value starting with "nexustheme-test". Nothing is written,
- *    deleted or flushed there by the check; mark a dedicated test Redis yourself:
+ *  - override: N8N_REPLAY_REDIS_HOST=host.docker.internal + N8N_REPLAY_REDIS_PORT=<host port>. Before any connection,
+ *    Docker metadata must show that exactly one running container publishes that HOST port and that it is labelled
+ *    com.nexustheme.test (other hosts are refused: the test network is created fresh, so outside container names do
+ *    not resolve on it). Only then a read-only GET of "nexustheme:test-env" must return a value starting with
+ *    "nexustheme-test". Nothing is written, deleted or flushed there by the check; mark a dedicated test Redis yourself:
  *      redis-cli -h <host> -p <port> SET nexustheme:test-env nexustheme-test-<name>
  *  - cleanup removes only resources that carry this test's owner label. Never a global prune.
  */
@@ -73,15 +73,21 @@ export function isolatedN8nEnv({ prefix, owner, n8nName, volume, report, env = p
 
   /** Decides from Docker metadata alone (no connection) whether an external Redis endpoint is a labelled test container. */
   function externalTarget() {
-    if (redisHost === "host.docker.internal") {
-      const rows = String(docker(["ps", "--filter", `publish=${redisPort}`, "--format", `{{.Names}}|{{.Label "${OWNER_KEY}"}}`]).stdout)
-        .split(/\r?\n/).filter(Boolean);
-      const labelled = rows.length === 1 && rows[0].split("|")[1] !== "";
-      return { ok: labelled, detail: rows.length ? rows.join(", ") : `no container publishes host port ${redisPort}` };
+    if (redisHost !== "host.docker.internal") {
+      return { ok: false, detail: `only host.docker.internal:<host port of a labelled container> is supported, got ${redisHost}` };
     }
-    const r = docker(["container", "inspect", "--format", `{{index .Config.Labels "${OWNER_KEY}"}}`, redisHost], { tolerate: true });
-    const value = String(r.stdout || "").trim();
-    return { ok: r.status === 0 && value !== "" && value !== "<no value>", detail: r.status === 0 ? `${redisHost} label=${value}` : `${redisHost} is not a container` };
+    // Match on the published HOST port explicitly (not `docker ps --filter publish`, whose host/container port
+    // semantics are not something to rely on here).
+    const ids = String(docker(["ps", "-q"]).stdout).split(/\r?\n/).filter(Boolean);
+    const rows = ids.length === 0 ? [] : String(docker(["inspect", "--format",
+      `{{.Name}}|{{index .Config.Labels "${OWNER_KEY}"}}|{{json .NetworkSettings.Ports}}`, ...ids]).stdout).split(/\r?\n/).filter(Boolean);
+    const matches = rows.map((row) => row.split("|")).filter(([, , ports]) =>
+      Object.values(JSON.parse(ports || "null") || {}).some((bindings) => (bindings || []).some((b) => b.HostPort === String(redisPort))));
+    const labelled = matches.length === 1 && !["", "<no value>"].includes(matches[0][1]);
+    return {
+      ok: labelled,
+      detail: matches.length ? matches.map(([name, value]) => `${name.replace(/^\//, "")} label=${value}`).join(", ") : `no running container publishes host port ${redisPort}`,
+    };
   }
 
   async function preflightRedis() {

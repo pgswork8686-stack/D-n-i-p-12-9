@@ -21,7 +21,8 @@
  * Redis only if it is marked as a NexusTheme test Redis. Cleanup removes only resources labelled
  * com.nexustheme.test=n8n-live (never a global prune).
  *
- * Env: API_URL (http://localhost:4000), N8N_LIVE_SECRET (AUTOMATION_SERVICE_SECRET value), N8N_LIVE_PRODUCT_SLUG (klinmart),
+ * Env: API_URL (http://localhost:4000), N8N_LIVE_SECRET (AUTOMATION_SERVICE_SECRET value),
+ *      N8N_LIVE_PRODUCT_SLUG (klinmart, from the e2e storefront seed; after only db:seed:local use nexus-plugin-pro),
  *      TEST_PAYMENT_WEBHOOK_SECRET, N8N_SMOKE_IMAGE, N8N_LIVE_PORT (5678), N8N_LIVE_SINK_PORT (4567),
  *      N8N_REPLAY_REDIS_HOST / N8N_REPLAY_REDIS_PORT / N8N_REPLAY_REDIS_PASSWORD (optional), N8N_TEST_REDIS_IMAGE (redis:7-alpine)
  */
