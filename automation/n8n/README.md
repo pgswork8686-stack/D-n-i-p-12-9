@@ -27,6 +27,7 @@ Backend Validation + PostgreSQL Transaction
 4. **Human-in-the-Loop CMS**: AI draft generation outputs create posts in `AI_DRAFT` status ONLY. Never `PUBLISHED` or `REVIEW`.
 5. **No Plaintext License Secrets**: License notifications send masked keys (`NXS-****-...-9999`) and secure Portal links. Never plaintext keys.
 6. **Zero Committed Secrets**: Workflow files must never contain hardcoded API keys, bearer tokens, passwords, or connection strings.
+7. **Fail-Closed Replay Guard**: every dispatch workflow claims `nexus:n8n:dispatch-replay:<requestId>` with `SET NX PX 600000` in Redis before any provider call. The n8n container must be given `N8N_REPLAY_REDIS_HOST` and `N8N_REPLAY_REDIS_PORT` (and `N8N_REPLAY_REDIS_PASSWORD` when the Redis requires one) pointing at a Redis dedicated to this n8n; there is no default endpoint, so a missing value rejects every dispatch instead of writing into whatever Redis listens on :6379. `pnpm n8n:validate` runs `scripts/check-replay-guard.mjs`, which executes the generated guard against a fake Redis (replay with and without a password, refused AUTH, closed connection, silence, missing endpoint).
 
 ## Directory Structure
 - `workflows/`: Committed n8n workflow JSON files.
