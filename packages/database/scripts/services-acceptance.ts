@@ -71,6 +71,8 @@ async function startApi(overrides: Record<string, string> = {}): Promise<ChildPr
       SERVICE_INQUIRY_RATE_LIMIT_PER_IP: "4",
       SERVICE_INQUIRY_RATE_LIMIT_PER_EMAIL: "50",
       SERVICE_INQUIRY_RATE_LIMIT_WINDOW_SECONDS: "3600",
+      // Customer A sends 2 multipart submissions in the main run; the hardening section exhausts customer B.
+      SERVICE_INQUIRY_UPLOAD_LIMIT_PER_USER: "3",
       ...overrides,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -143,6 +145,8 @@ async function run() {
   console.log("   SERVICES FOUNDATION ACCEPTANCE SUITE (HTTP)");
   console.log("================================================================================\n");
 
+  // Shared with the hardening section, which runs against a fresh API process.
+  const later: { projectId?: string; inquiryId?: string; attachmentId?: string; storageKey?: string } = {};
   const api = await startApi();
   try {
     // ---------------------------------------------------------------- catalog
@@ -217,6 +221,8 @@ async function run() {
     gate("Customer B cannot read A's inquiry by id (404)", (await call("GET", `/v1/me/service-inquiries/${inqA!.id}`, { token: CUSTOMER_B })).status === 404);
     gate("Customer B cannot read A's inquiry by number (404)", (await call("GET", `/v1/me/service-inquiries/${inqA!.inquiryNumber}`, { token: CUSTOMER_B })).status === 404);
     gate("Customer B cannot get a signed URL for A's attachment (404)", (await call("GET", `/v1/me/service-inquiries/${inqA!.id}/attachments/${att!.id}/url`, { token: CUSTOMER_B })).status === 404);
+    Object.assign(later, { inquiryId: inqA!.id, attachmentId: att!.id, storageKey: att!.storageKey });
+    Object.assign(later, { inquiryId: inqA!.id, attachmentId: att!.id, storageKey: att!.storageKey });
     const urlA = await call("GET", `/v1/me/service-inquiries/${inqA!.id}/attachments/${att!.id}/url`, { token: CUSTOMER_A });
     gate("Customer A gets a short-lived signed URL for their attachment", urlA.status === 200 && typeof urlA.body.url === "string" && urlA.body.expiresInSeconds <= 300, urlA.body);
     gate("Customers cannot list admin inquiries (403)", (await call("GET", "/v1/admin/service-inquiries", { token: CUSTOMER_A })).status === 403);
@@ -231,6 +237,7 @@ async function run() {
     const conv = await call("POST", `/v1/admin/service-inquiries/${inqA!.id}/convert`, { token: ADMIN, json: { title: "Chatbot cho Acceptance", startDate: "2026-11-01", targetDate: "2026-12-31" } });
     gate("Conversion creates a PLANNING project owned by the submitting customer", conv.status === 201 && conv.body.status === "PLANNING" && conv.body.customer.email === "customer@nexustheme.dev" && /^PRJ-/.test(conv.body.projectCode), conv);
     const projectId: string = conv.body.id;
+    later.projectId = projectId;
     const conv2 = await call("POST", `/v1/admin/service-inquiries/${inqA!.id}/convert`, { token: ADMIN, json: {} });
     gate("Converting again is idempotent (same project)", conv2.status === 201 && conv2.body.id === projectId, conv2.body?.id);
     gate("Exactly one project exists for the inquiry", (await prisma.serviceProject.count({ where: { inquiryId: inqA!.id } })) === 1);
@@ -338,6 +345,59 @@ async function run() {
     gate("Catalog reads do not depend on Redis", (await call("GET", "/v1/services")).status === 200);
   } finally {
     noRedis.kill();
+  }
+
+  // ---------------------------------------------------------------- hardening
+  console.log("\n--- Hardening: upload quota before parsing, staff-only writes, private storage ---");
+  const hard = await startApi();
+  try {
+    // Customer B's first three multipart submissions use the whole per-account quota (limit 3 in this run).
+    const quotaStatuses: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      quotaStatuses.push(
+        (await call("POST", "/v1/service-inquiries", { token: CUSTOMER_B, form: inquiryForm(validFields({ contactEmail: `quota-b${i}@example.com` })) }))
+          .status,
+      );
+    }
+    // The fourth carries a disguised executable. After parsing it would be a 400 (file rejected);
+    // a 429 proves the quota was enforced before Multer read the body.
+    const overQuota = await call("POST", "/v1/service-inquiries", {
+      token: CUSTOMER_B,
+      form: inquiryForm(validFields({ contactEmail: "quota-b9@example.com" }), [{ name: "x.pdf", data: EXE, type: "application/pdf" }]),
+    });
+    gate(
+      "Signed-in uploads are rate-limited per account before the multipart body is parsed (429, not 400)",
+      quotaStatuses.every((s) => s === 201) && overQuota.status === 429,
+      { quotaStatuses, overQuota: overQuota.status },
+    );
+    gate(
+      "JSON submissions (no upload) do not consume the upload quota",
+      (await call("POST", "/v1/service-inquiries", { token: CUSTOMER_B, json: validFields({ contactEmail: "quota-json@example.com" }) })).status === 201,
+    );
+
+    const pid = later.projectId!;
+    const customerWrites = {
+      patchProject: (await call("PATCH", `/v1/admin/service-projects/${pid}`, { token: CUSTOMER_A, json: { status: "CANCELLED" } })).status,
+      addMilestone: (await call("POST", `/v1/admin/service-projects/${pid}/milestones`, { token: CUSTOMER_A, json: { title: "x" } })).status,
+      staffMessage: (await call("POST", `/v1/admin/service-projects/${pid}/messages`, { token: CUSTOMER_A, json: { body: "x", isInternalNote: true } })).status,
+      assignMember: (await call("POST", `/v1/admin/service-projects/${pid}/members`, { token: CUSTOMER_A, json: { userId: "x" } })).status,
+    };
+    gate("Customers cannot change projects, milestones, staff messages or members (403)", Object.values(customerWrites).every((s) => s === 403), customerWrites);
+
+    const endpoint = (process.env.STORAGE_ENDPOINT || "http://localhost:9000").replace(/\/$/, "");
+    const bucket = process.env.STORAGE_BUCKET || "marketplace-dev";
+    const direct = await fetch(`${endpoint}/${bucket}/${later.storageKey}`);
+    gate("Stored attachments are not readable without a signature (private object)", direct.status === 403, direct.status);
+    const signed = await call("GET", `/v1/me/service-inquiries/${later.inquiryId}/attachments/${later.attachmentId}/url`, { token: CUSTOMER_A });
+    const download = await fetch(signed.body.url);
+    const bytes = Buffer.from(await download.arrayBuffer());
+    gate(
+      "The owner's short-lived signed URL downloads the original file",
+      download.status === 200 && bytes.subarray(0, 5).toString("latin1") === "%PDF-",
+      download.status,
+    );
+  } finally {
+    hard.kill();
   }
 
   const failed = results.filter((r) => !r.passed);
