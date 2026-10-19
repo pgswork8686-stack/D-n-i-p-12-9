@@ -7,6 +7,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
+import * as zlib from "zlib";
+import { spawnSync } from "child_process";
 import {
   redactSensitiveFields,
   getMemoryUsageStats,
@@ -227,22 +230,53 @@ async function runPhase18Acceptance() {
       backupScriptContent.includes('set -euo pipefail'),
   );
   assertGate(40, "Backup script generates SHA256 checksum file alongside backup", backupScriptContent.includes("sha256") || backupScriptContent.includes("shasum"));
-  assertGate(41, "Backup script enforces retention cleanup policy (mtime +30)", backupScriptContent.includes("-mtime +30"));
+  // Retention is configurable (BACKUP_RETENTION_DAYS) with a 30-day default; old local archives are deleted.
+  assertGate(
+    41,
+    "Backup script enforces retention cleanup policy (default 30 days, configurable)",
+    backupScriptContent.includes('RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"') &&
+      /find "\$BACKUP_DIR"[^\n]*-mtime "\+\$RETENTION_DAYS"[^\n]*-delete/.test(backupScriptContent),
+  );
 
   const restoreScriptPath = path.join(repoRoot, "infra/scripts/restore-db.sh");
   const restoreScriptExists = fs.existsSync(restoreScriptPath);
   assertGate(42, "Restore script infra/scripts/restore-db.sh exists on disk", restoreScriptExists);
 
   const restoreScriptContent = restoreScriptExists ? fs.readFileSync(restoreScriptPath, "utf-8") : "";
+  // Behavioural: run restore-db.sh against synthetic archives with psql pointed at a closed port.
+  // It must refuse with exit 3 and stop before it announces the target database, i.e. before
+  // anything is decompressed or sent to psql. (Encrypted-archive tampering is covered by
+  // infra/scripts/backup-selftest.sh in CI.)
+  const restoreRefusals = (() => {
+    if (!restoreScriptExists) return { ok: false, detail: "restore script missing" };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "restore-gate-"));
+    try {
+      const archive = path.join(dir, "nexustheme_marketplace_test.sql.gz");
+      fs.writeFileSync(archive, zlib.gzipSync(Buffer.from("SELECT 1;\n")));
+      const runRestore = () =>
+        spawnSync("bash", [restoreScriptPath, archive, "--force"], {
+          encoding: "utf-8",
+          env: { ...process.env, DB_ACCESS_MODE: "direct", POSTGRES_PASSWORD: "unused", POSTGRES_HOST: "127.0.0.1", POSTGRES_PORT: "1" },
+          timeout: 60000,
+        });
+      const missing = runRestore();
+      fs.writeFileSync(archive + ".sha256", "0".repeat(64) + "  " + path.basename(archive) + "\n");
+      const mismatch = runRestore();
+      const refused = (r: ReturnType<typeof runRestore>, reason: RegExp) =>
+        r.status === 3 && reason.test(r.stderr) && !/Target database/.test(r.stdout + r.stderr);
+      const ok = refused(missing, /Missing .*\.sha256; refusing/) && refused(mismatch, /checksum mismatch; refusing/);
+      return { ok, detail: JSON.stringify({ missing: [missing.status, missing.stderr.trim()], mismatch: [mismatch.status, mismatch.stderr.trim()] }) };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  })();
   assertGate(
     43,
-    "Production restore rejects missing or mismatched SHA256 checksum before running psql",
-    restoreScriptContent.includes('BACKUP_FILE.sha256') &&
-      restoreScriptContent.includes('EXPECTED=') &&
-      restoreScriptContent.includes('ACTUAL=') &&
-      restoreScriptContent.includes('"$EXPECTED" == "$ACTUAL"') &&
-      restoreScriptContent.includes('refusing production restore') &&
-      restoreScriptContent.indexOf('checksum mismatch') < restoreScriptContent.indexOf('gzip -dc "$BACKUP_FILE"'),
+    "Restore refuses a missing or mismatched SHA256 checksum before anything reaches psql (exit 3)",
+    restoreRefusals.ok &&
+      restoreScriptContent.includes("Refusing to restore a plaintext archive into the production compose database") &&
+      restoreScriptContent.indexOf("verify_backup_mac") < restoreScriptContent.indexOf("decrypt_stream \"$BACKUP_FILE\""),
+    restoreRefusals.detail,
   );
   assertGate(44, "Restore script executes restoration in a single atomic transaction (--single-transaction)", restoreScriptContent.includes("--single-transaction"));
 
