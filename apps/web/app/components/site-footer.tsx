@@ -10,7 +10,7 @@ interface FooterLink {
   external?: boolean;
 }
 
-// Policy pages are not linked yet: ST13 has no approved legal content.
+// Policy pages (ST13) are linked only when the CMS page is published, i.e. approved by PGS.
 const SUPPORT: FooterLink[] = [
   { href: "/blog", label: "Hướng dẫn & Blog" },
   { href: `${PORTAL_URL}/tickets`, label: "Gửi yêu cầu hỗ trợ", external: true },
@@ -46,7 +46,13 @@ function Column({ title, links }: { title: string; links: FooterLink[] }) {
   );
 }
 
-export function SiteFooter({ categories = [] }: { categories?: NavCategory[] }) {
+export function SiteFooter({
+  categories = [],
+  policies = [],
+}: {
+  categories?: NavCategory[];
+  policies?: FooterLink[];
+}) {
   const explore: FooterLink[] = [
     ...categories.map((c) => ({ href: `/products?category=${encodeURIComponent(c.slug)}`, label: c.name })),
     { href: "/products", label: "Tất cả sản phẩm" },
@@ -62,7 +68,7 @@ export function SiteFooter({ categories = [] }: { categories?: NavCategory[] }) 
           </p>
         </div>
         <Column title="Khám phá" links={explore} />
-        <Column title="Hỗ trợ" links={SUPPORT} />
+        <Column title="Hỗ trợ" links={[...SUPPORT, ...policies]} />
         <Column title="Tài khoản" links={ACCOUNT} />
       </div>
       <div className="border-t border-white/10">
