@@ -102,6 +102,15 @@ const scenarios = [
     name: "password refused", password: "wrong", expect: "reject",
     script: (s, c) => { if (c.at(-1) === "AUTH") s.write("-WRONGPASS invalid username-password pair\r\n"); if (c.at(-1) === "SET") s.write("-NOAUTH Authentication required.\r\n"); },
   },
+  // What a real Redis usually does with the pipelined AUTH + SET: both replies in one chunk.
+  { name: "password, first request, both replies in one chunk", password: "pw", expect: "claimed", script: (s, c) => c.at(-1) === "SET" && s.write("+OK\r\n+OK\r\n") },
+  { name: "password, replay, both replies in one chunk", password: "pw", expect: "duplicate", script: (s, c) => c.at(-1) === "SET" && s.write("+OK\r\n$-1\r\n") },
+  {
+    name: "password, replay, a reply split mid-line", password: "pw", expect: "duplicate",
+    script: (s, c) => { if (c.at(-1) === "SET") { s.write("+O"); later(30, () => s.write("K\r\n$-")); later(60, () => s.write("1\r\n")); } },
+  },
+  { name: "no password but Redis requires one (NOAUTH)", password: "", expect: "reject", script: (s, c) => c.at(-1) === "SET" && s.write("-NOAUTH Authentication required.\r\n") },
+  { name: "read-only replica (READONLY)", password: "", expect: "reject", script: (s, c) => c.at(-1) === "SET" && s.write("-READONLY You can't write against a read only replica.\r\n") },
   { name: "connection closed after AUTH +OK, no SET reply", password: "pw", expect: "reject", script: (s, c) => { if (c.at(-1) === "AUTH") { s.write("+OK\r\n"); later(50, () => s.end()); } } },
   { name: "Redis never answers", password: "", expect: "reject", script: () => {} },
 ];
@@ -126,7 +135,12 @@ for (const guard of guards) {
     const ok = sc.expect === "reject" ? String(got).startsWith("reject") : got === sc.expect;
     report(ok, `${guard.name}: ${sc.name} -> ${sc.expect}`, `got ${got}`);
   }
-  for (const [label, env] of [["host unset", { N8N_REPLAY_REDIS_PORT: "6379" }], ["port unset", { N8N_REPLAY_REDIS_HOST: "127.0.0.1" }]]) {
+  const endpoints = [
+    ["host unset", { N8N_REPLAY_REDIS_PORT: "6379" }],
+    ["port unset", { N8N_REPLAY_REDIS_HOST: "127.0.0.1" }],
+    ...["0", "abc", "70000", "63.79"].map((port) => [`port "${port}"`, { N8N_REPLAY_REDIS_HOST: "127.0.0.1", N8N_REPLAY_REDIS_PORT: port }]),
+  ];
+  for (const [label, env] of endpoints) {
     // Port 0 is never a real endpoint: any connection attempt is refused by netOnlyTo, not attempted.
     const got = await outcome(guard.run(env, netOnlyTo(0), `check-${Date.now()}`, require));
     const refusedByCheck = String(got).includes("check refused to connect");

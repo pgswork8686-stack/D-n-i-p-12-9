@@ -75,7 +75,7 @@ Bảng đối chiếu toàn bộ các biến môi trường thực tế được
 | `N8N_SERVICE_INQUIRY_NOTIFY_EMAIL_WEBHOOK_URL` | Worker | OPTIONAL | PUBLIC | URL webhook n8n | `.env.production` | Mặc định `${N8N_WEBHOOK_BASE_URL}/webhook/service-inquiry-notify-email`. Workflow: `automation/n8n/workflows/service-inquiry-notify-email.json` (cần import vào n8n) |
 | `N8N_REPLAY_REDIS_HOST` | n8n | REQUIRED_PRODUCTION | PUBLIC | Host Redis riêng cho n8n | Môi trường container n8n | Chống gửi lại (replay) cho mọi workflow dispatch. Không có giá trị mặc định: thiếu thì n8n từ chối mọi dispatch (fail-closed), không dùng Redis nào khác đang nghe ở :6379 |
 | `N8N_REPLAY_REDIS_PORT` | n8n | REQUIRED_PRODUCTION | PUBLIC | Cổng Redis đó | Môi trường container n8n | Như trên; phải là số 1–65535 |
-| `N8N_REPLAY_REDIS_PASSWORD` | n8n | OPTIONAL | SECRET | Mật khẩu Redis đó | Secret manager → container n8n | Bắt buộc nếu Redis có `requirepass`. Mọi reply (AUTH rồi SET) đều được chờ đủ trước khi quyết định |
+| `N8N_REPLAY_REDIS_PASSWORD` | n8n | OPTIONAL | SECRET | Mật khẩu Redis đó | Secret manager → container n8n | Chỉ đặt khi Redis có `requirepass` (đặt mật khẩu cho Redis không có mật khẩu cũng làm mọi dispatch bị từ chối). Chỉ TCP thường, AUTH một tham số (không ACL username). Webhook trả 200 khi nhận nên worker không thấy lỗi này: sau khi triển khai, kiểm tra danh sách execution của n8n |
 | `ENABLE_TEST_PAYMENT_PROVIDER` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Bị cấm bởi `NODE_ENV === "production"` |
 | `STRIPE_MOCK_CLIENT` | API | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Ném lỗi crash nếu bật trong production |
 | `SEED_DEV_USERS` | DB seed | DEV_ONLY | PUBLIC | `false` | Cấm bật ở production | Không tạo user mock |
