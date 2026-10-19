@@ -37,6 +37,7 @@ import {
   UploadProjectDocumentDto,
 } from "./dto/services.dto";
 import { OptionalAuthGuard } from "./optional-auth.guard";
+import { UploadQuota, UploadQuotaGuard } from "./upload-quota.guard";
 import { ActorContext, ServiceCatalogService } from "./service-catalog.service";
 import { ServiceInquiriesService } from "./service-inquiries.service";
 import { ServiceProjectsService } from "./service-projects.service";
@@ -104,6 +105,8 @@ export class PublicServiceInquiriesController {
   /** Anonymous or signed-in. Attachments (multipart `files`) require a signed-in user. */
   @Post()
   @HttpCode(201)
+  @UseGuards(UploadQuotaGuard)
+  @UploadQuota({ scope: "inquiry", limitEnv: "SERVICE_INQUIRY_UPLOAD_LIMIT_PER_USER", defaultLimit: 10 })
   @UseInterceptors(
     FilesInterceptor("files", SERVICE_INQUIRY_MAX_FILES, { limits: UPLOAD_LIMITS, fileFilter: signedInOnlyFileFilter }),
   )
@@ -168,6 +171,8 @@ export class MyServiceProjectsController {
   }
 
   @Post(":id/documents")
+  @UseGuards(UploadQuotaGuard)
+  @UploadQuota({ scope: "project-document", limitEnv: "SERVICE_PROJECT_UPLOAD_LIMIT_PER_USER", defaultLimit: 20 })
   @UseInterceptors(FileInterceptor("file", { limits: { ...UPLOAD_LIMITS, files: 1 } }))
   uploadDocument(@Req() req: Request, @Param("id") id: string, @UploadedFile() file: UploadedServiceFile) {
     return this.projects.customerUploadDocument(req.user!.id, id, file, {
