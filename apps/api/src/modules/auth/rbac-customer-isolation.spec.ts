@@ -26,11 +26,13 @@ interface Route {
   guards: unknown[];
 }
 
+/** Every non-test source file that declares a controller, whatever it is named. */
 function controllerFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return controllerFiles(full);
-    return /\.controllers?\.ts$/.test(entry.name) || entry.name === "feature-flags.ts" ? [full] : [];
+    if (!entry.name.endsWith(".ts") || entry.name.endsWith(".spec.ts")) return [];
+    return /@Controller\(/.test(fs.readFileSync(full, "utf8")) ? [full] : [];
   });
 }
 
@@ -83,9 +85,10 @@ describe("RBAC: the customer role can reach no staff route", () => {
     expect(reachable).toEqual([]);
   });
 
-  it("every admin route authenticates, checks permissions and declares which ones", () => {
+  it("every admin or permission-declaring route authenticates, checks permissions and admin routes declare which ones", () => {
+    // A @RequirePermissions without PermissionsGuard is never enforced, wherever the route lives.
     const unguarded = routes
-      .filter(isAdmin)
+      .filter((r) => isAdmin(r) || r.permissions.length > 0)
       .filter((r) => !r.guards.includes(AuthGuard) || !r.guards.includes(PermissionsGuard))
       .map((r) => r.id);
     const undeclared = routes
