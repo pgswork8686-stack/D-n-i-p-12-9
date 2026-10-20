@@ -6,13 +6,14 @@ Trạng thái lấy từ GitHub ngày 2026-10-20. Không merge PR nào khi chưa
 
 | PR | Phạm vi | Phụ thuộc / quan hệ | Migration | CI | Xung đột | Hành động đề xuất |
 |---|---|---|---|---|---|---|
+| #52 Sửa RBAC khách hàng (P0) | Seed vai trò `customer` + test bất biến RBAC | Độc lập; gộp sạch với #48 | Không (seed hệ thống tự thu hồi quyền khi triển khai) | Xem PR | Không | Review bảo mật → merge **đầu tiên** |
 | #49 F-13 upload quota | API Services (guard trước Multer), acceptance gate 94–98 | Độc lập | Không | PASS | Không | Review → merge **trước** (nhỏ, độc lập) |
 | #50 Replay guard n8n | `automation/n8n` + docs | Độc lập | Không | PASS | Không | Review bảo mật → merge; đặt `N8N_REPLAY_REDIS_*` khi triển khai n8n |
 | #48 Figma sync P0 | Admin AD05–AD16, Portal tiếng Việt, AD10 đối soát, ST13, CI e2e-fullstack, n8n test isolation | **Chứa PR #47**; migration đối soát | **2** (`20261019000000_…_payment_reconciliation_cases`, `20261019010000_…_bigint_amounts`) — additive | PASS 8/8 | Với #46 (`ci.yml`) | Review → merge sau #49/#50; đóng #47 sau khi #48 vào `main` |
 | #47 ST13 public pages API | API CMS PAGE publish-only | Đã nằm trong #48 | Không | PASS | — | Không merge riêng; đóng sau #48 |
 | #46 Runtime smoke 4 app | CI step + script | Chồng phạm vi một phần với job `e2e-fullstack` | Không | PASS | Với #48 (`ci.yml`) | Sau khi #48 vào `main`: rebase, cân nhắc gộp vào job e2e hoặc giữ như smoke `next start` (build production) |
 
-Thứ tự đề xuất: **#49 → #50 → #48 → rebase #46**. Sau mỗi merge: CI trên `main` phải xanh trước bước tiếp theo.
+Thứ tự đề xuất: **#52 → #49 → #50 → #48 → rebase #46**; tài liệu #51 bất kỳ lúc nào. Sau mỗi merge: CI trên `main` phải xanh trước bước tiếp theo.
 
 Migration của #48 (đọc từ SQL): migration thứ nhất chỉ tạo bảng mới `payment_reconciliation_cases` + 4 index, không khoá ngoại, không sửa bảng cũ;
 migration thứ hai chỉ đổi hai cột số tiền của chính bảng mới đó sang `BIGINT`. Vì vậy là additive. Chạy thử trên bản sao DB có dữ liệu: chưa làm

@@ -76,6 +76,7 @@ Theo nguyên tắc phát hành: Hosting, Membership, Affiliate, Finance giữ T�
 
 | Phát hiện | Mức | Trạng thái |
 |---|---|---|
+| Vai trò `customer` có `order.read`/`ticket.read`/`invoice.read` → khách đọc được mọi đơn hàng và ticket (kể cả ghi chú nội bộ) qua `/admin/*` (xác nhận bằng runtime) | **Bảo mật P0** | Đã sửa ở PR #52 (chưa merge) — [security-and-rbac-matrix.md](security-and-rbac-matrix.md) SEC-1 |
 | Replay guard n8n chấp nhận replay khi Redis có mật khẩu (7/200 trên Redis thật) | Bảo mật | Đã sửa ở PR #50 (CI PASS, chưa merge) |
 | Replay guard ngầm dùng `127.0.0.1:6379` khi thiếu cấu hình | Bảo mật/vận hành | Đã sửa ở PR #50 |
 | Bước ST01 trên CI chạy mọi spec nên PR #48 đỏ (94 lỗi do thiếu Portal/Admin) | CI | Đã sửa ở PR #48 (job `e2e-fullstack`) |

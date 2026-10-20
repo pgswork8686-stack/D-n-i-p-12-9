@@ -27,7 +27,8 @@ Cập nhật lần cuối: 2026-10-20, theo `main` = `fc9508c` và các nhánh P
 | [open-blockers.md](open-blockers.md) | Blocker và backlog P0/P1 | Có |
 | [figma-screen-inventory.md](figma-screen-inventory.md) | Inventory màn hình theo Figma mới nhất | **BLOCKED** (chưa đọc được Figma) |
 | [figma-code-gap.md](figma-code-gap.md) | Đối chiếu Figma ↔ code | **BLOCKED** |
-| security-and-rbac-matrix.md, qa-and-uat-evidence.md, staging-readiness.md, go-live-readiness.md, release-and-rollback-plan.md | | Chưa tạo (milestone sau) |
+| [security-and-rbac-matrix.md](security-and-rbac-matrix.md) | Guard/permission của mọi endpoint, IDOR, vai trò ↔ quyền, phát hiện bảo mật | Có |
+| qa-and-uat-evidence.md, staging-readiness.md, go-live-readiness.md, release-and-rollback-plan.md | | Chưa tạo (milestone sau) |
 
 ## Tài liệu cũ và quan hệ với thư mục này
 
