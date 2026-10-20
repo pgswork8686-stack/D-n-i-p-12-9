@@ -94,13 +94,13 @@ export const SEED_PERMISSIONS = [
 ];
 
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
+  // Customers reach their own orders, tickets and invoices through ownership-checked routes that need no
+  // permission. Staff read permissions (order.read, ticket.read, invoice.read) gate the /admin routes, so they must
+  // never be granted here; rbac-customer-isolation.spec.ts enforces it. Re-running the system seed revokes them.
   customer: [
     "profile.read",
     "profile.update",
-    "order.read",
-    "ticket.read",
     "notification.read",
-    "invoice.read",
   ],
   support_agent: [
     "profile.read",
